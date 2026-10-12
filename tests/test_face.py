@@ -76,8 +76,8 @@ def _face_doc(centres: list[tuple[float, float, float]]) -> dict:
 def test_crop_follows_only_large_moves():
     # 0..10 s at (0.45, 0.40), 10..12 s slightly off (+0.05), 12..14 s far off (+0.2)
     pts = [(t / 2, 0.45, 0.40) for t in range(20)]
-    pts += [(10 + t / 2, 0.50, 0.40) for t in range(4)]
-    pts += [(12 + t / 2, 0.65, 0.40) for t in range(4)]
+    pts += [(10 + t / 4, 0.50, 0.40) for t in range(8)]
+    pts += [(12 + t / 4, 0.65, 0.40) for t in range(8)]
     doc = _face_doc(pts)
     assert (doc["median"]["cx"], doc["median"]["cy"]) == (0.45, 0.40)
     assert face.segment_centre(doc, 0.0, 9.5) == (0.45, 0.40)
@@ -243,3 +243,35 @@ def test_render_and_verify_use_face_json(capsys, landscape_clip):
     assert f"crop={w.w}:{w.h}:{w.x}:{w.y}" in (job / "work" / "render_filter.txt").read_text()
     code, s, _ = run_tool(capsys, "verify", "--job", str(job))
     assert code == 0 and s["flagged"][0]["flags"][-1] == "blink_at_cut", s
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"blinks": [1]},
+        {"blinks": None},
+        {"blinks": [{"t0": 1.0}]},
+        {"median": 5},
+        {"median": {"cx": "a", "cy": 0.5, "box": [0, 0, 1, 1]}},
+        {"median": {"cx": float("nan"), "cy": 0.5, "box": [0, 0, 1, 1]}},
+        {"frames": [None]},
+        {"frames": [{"t": 0.0, "found": True, "cx": 0.5, "cy": 0.5, "box": None}]},
+    ],
+)
+def test_malformed_face_json_counts_as_missing(tmp_path, bad):
+    job = tmp_path / "job"
+    (job / "work").mkdir(parents=True)
+    (job / "input").mkdir()
+    (job / "input" / "a.mp4").write_bytes(b"x")
+    os.utime(job / "input" / "a.mp4", (1, 1))
+    good = {"version": face.FACE_VERSION, "source": "input/a.mp4", "fps_sampled": 30,
+            "frames": [], "median": None, "blinks": []}  # fmt: skip
+    (job / "work" / "face.json").write_text(json.dumps(good))
+    assert face.load_face(job, "input/a.mp4") == good
+    (job / "work" / "face.json").write_text(json.dumps({**good, **bad}))
+    assert face.load_face(job, "input/a.mp4") is None
+
+
+def test_a_short_segment_never_follows_a_single_frame():
+    doc = _face_doc([(t / 2, 0.45, 0.40) for t in range(20)] + [(10.0, 0.9, 0.4)])
+    assert face.segment_centre(doc, 9.99, 10.01) == (0.45, 0.40)

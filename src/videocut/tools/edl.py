@@ -53,13 +53,18 @@ def check(args) -> dict:
     }
 
 
+def _num(v) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool)
+
+
 def _blinks(job: Path, edl, duration: float | None) -> list[str]:
     face = load_face(job, edl.source)
     if not face or not face.get("blinks"):
         return []
     try:
         words = json.loads((job / "work" / "words.json").read_text())["words"]
-    except (OSError, ValueError, KeyError, TypeError):
+        words = [w for w in words if all(_num(w.get(k)) for k in ("t0", "t1"))]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         words = None
     out = []
     for w in blink_warnings(edl, face["blinks"], words, duration):

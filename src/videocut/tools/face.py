@@ -35,7 +35,9 @@ Idempotent: a face.json newer than the source and of this version is kept.
 """
 
 import json
+import math
 import subprocess
+import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -66,6 +68,7 @@ SAMPLE_FPS = 30.0
 BLINK_ON, BLINK_OFF = 0.5, 0.35
 BLINK_MAX_S = 0.8
 FOLLOW_MIN = 0.08  # fraction of the frame a segment's face median may drift before following
+FOLLOW_MIN_FRAMES = 5  # a segment needs this many face frames before it may follow
 _GAZE = ("eyeLookInLeft", "eyeLookOutLeft", "eyeLookInRight", "eyeLookOutRight")
 _GAZE_V = ("eyeLookUpLeft", "eyeLookUpRight", "eyeLookDownLeft", "eyeLookDownRight")
 
@@ -119,7 +122,8 @@ def segment_centre(face: dict, t0: float, t1: float) -> tuple[float, float] | No
     glob = face.get("median")
     if not glob:
         return None
-    own = median_of([f for f in face.get("frames", []) if t0 <= f["t"] <= t1])
+    mine = [f for f in face.get("frames", []) if t0 <= f["t"] <= t1]
+    own = median_of(mine) if sum(1 for f in mine if f.get("found")) >= FOLLOW_MIN_FRAMES else None
     if own and max(abs(own["cx"] - glob["cx"]), abs(own["cy"] - glob["cy"])) > FOLLOW_MIN:
         return own["cx"], own["cy"]
     return glob["cx"], glob["cy"]
@@ -153,7 +157,39 @@ def load_face(job: Path, source_rel: str | None = None) -> dict | None:
         return None
     if source_rel is not None and face["source"] != source_rel:
         return None
-    return face if is_fresh([path], [src]) else None
+    return face if is_fresh([path], [src]) and _valid(face) else None
+
+
+def _unit(v) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool) and 0 <= v <= 1
+
+
+def _time(v) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _valid(face: dict) -> bool:
+    """work/face.json is agent-writable: a malformed one counts as missing, never crashes."""
+    frames, blinks, med = face.get("frames"), face.get("blinks"), face.get("median")
+    if not (isinstance(frames, list) and isinstance(blinks, list)):
+        return False
+    if not all(isinstance(b, dict) and _time(b.get("t0")) and _time(b.get("t1")) for b in blinks):
+        return False
+    for f in frames:
+        if not (isinstance(f, dict) and _time(f.get("t"))):
+            return False
+        box = f.get("box")
+        if f.get("found") and not (
+            _unit(f.get("cx")) and _unit(f.get("cy"))
+            and isinstance(box, list) and len(box) == 4 and all(map(_unit, box))
+        ):  # fmt: skip
+            return False
+    if med is not None:
+        if not isinstance(med, dict) or not (
+            _unit(med.get("cx")) and _unit(med.get("cy")) and isinstance(med.get("box"), list)
+        ):
+            return False
+    return isinstance(face.get("fps_sampled", 0), int | float)
 
 
 def in_blink(t: float, blinks: list[dict], pad: float = 0.0) -> dict | None:
@@ -193,7 +229,9 @@ def detect(src: Path, info: dict, model: Path) -> tuple[list[dict], float, tuple
     )
     frames: list[dict] = []
     nbytes = w * h * 3
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=tool_env())
+    errf = tempfile.TemporaryFile()  # a file, not a pipe: a chatty ffmpeg never blocks
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf, env=tool_env())
+    done = False
     try:
         with FaceLandmarker.create_from_options(opts) as lm:
             i = 0
@@ -203,10 +241,15 @@ def detect(src: Path, info: dict, model: Path) -> tuple[list[dict], float, tuple
                 res = lm.detect_for_video(img, int(round(i * 1000 / fps)))
                 frames.append(_frame(round(i / fps, 3), res))
                 i += 1
+        done = True
     finally:
         proc.stdout.close()
-        err = proc.stderr.read().decode(errors="replace")
+        if not done:  # an exception stopped reading: ffmpeg would wait forever
+            proc.kill()
         proc.wait()
+        errf.seek(0)
+        err = errf.read().decode(errors="replace")
+        errf.close()
     if proc.returncode != 0:
         raise ToolError(f"ffmpeg failed: {err.strip()[-500:]}")
     return frames, fps, (w, h)
