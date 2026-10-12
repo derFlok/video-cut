@@ -19,6 +19,9 @@ Numbers per cut
     audio    `click_peak`: largest sample-to-sample step within +-10 ms of the cut relative to
              the median step size around it; `hf_spike_db`: energy of the second difference
              (a high-pass) within +-10 ms vs. its local median (flag `click`)
+    blink    flag `blink_at_cut` when one of the two output frames on either side of the cut
+             shows a blink: the frames are mapped to source time via the EDL and looked up
+             in the blink intervals of a current work/face.json
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s. A preview is
 checked at its half size, and its loudness (single-pass) is reported but not judged.
@@ -40,6 +43,7 @@ from ..edl import Edl, EdlError, load
 from ..paths import tool_env
 from . import _image as im
 from .common import ToolError, binary, job_parent, resolve_job, run_tool, write_json
+from .face import face_crops, in_blink, load_face
 
 RATE = 48000
 SMALL = (72, 128)  # luma frames for the difference score (w, h)
@@ -152,11 +156,16 @@ def is_jump(visual: dict) -> bool:
 
 
 def cut_notes(
-    visual: dict, audio: dict, median_jump: float | None, reframe: bool = False
+    visual: dict,
+    audio: dict,
+    median_jump: float | None,
+    reframe: bool = False,
+    blink: bool = False,
 ) -> tuple[list[str], list[str]]:
     """(flags, info) of one cut. `median_jump` is the median jump_score of the other cuts
     (None when there are none: a lone jump cut is never flagged); `reframe` means the EDL
-    changes crop or zoom at this cut, so a large jump is intended."""
+    changes crop or zoom at this cut, so a large jump is intended; `blink` that a frame at
+    the cut shows a blink."""
     flags, info = [], []
     if is_jump(visual):
         info.append("jump_cut")
@@ -170,6 +179,8 @@ def cut_notes(
         audio["click_peak"] >= CLICK_PEAK_MAX or audio["hf_spike_db"] >= HF_SPIKE_DB_MAX
     ):
         flags.append("click")
+    if blink:
+        flags.append("blink_at_cut")
     return flags, info
 
 
@@ -185,6 +196,17 @@ def reframes(edl: Edl) -> list[bool]:
         return (round(cx, 3), round(cy, 3), round(z, 3))
 
     return [framing(a, a.end) != framing(b, b.start) for a, b in pairwise(edl.segments)]
+
+
+def blinks_at_cuts(edl: Edl, blinks: list[dict]) -> list[bool]:
+    """Per inner cut: does one of the two output frames before or after it show a blink?
+    Output frames map to source time: the last ones of segment a end at a.end, the first
+    ones of segment b start at b.start."""
+    dt = 1 / edl.fps
+    return [
+        any(in_blink(t, blinks) for t in (a.end - 2 * dt, a.end - dt, b.start, b.start + dt))
+        for a, b in pairwise(edl.segments)
+    ]
 
 
 # ---------------------------------------------------------------- pictures
@@ -310,6 +332,7 @@ def verify(args) -> dict:
         except EdlError as e:
             warnings.append(f"work/edl.json is invalid: {e}")
     reframe = [False] * len(render["cuts"])
+    blink = [False] * len(render["cuts"])
     if edl is not None:
         cuts, edl_cuts = [float(c) for c in render["cuts"]], edl.cut_points()[1:-1]
         if len(cuts) != len(edl_cuts) or any(
@@ -317,7 +340,10 @@ def verify(args) -> dict:
         ):
             warnings.append("render.json cuts differ from work/edl.json; the render may be stale")
         else:
-            reframe = reframes(edl)
+            face = load_face(job, edl.source)
+            reframe = reframes(face_crops(edl, face)[0])  # the framing render used
+            if face:
+                blink = blinks_at_cuts(edl, face.get("blinks", []))
 
     vdir = job / "out" / "verify"
     vdir.mkdir(parents=True, exist_ok=True)
@@ -348,7 +374,10 @@ def verify(args) -> dict:
     for i, c in enumerate(cut_docs):
         others = [x for j, x in enumerate(scores) if j != i and x is not None]
         median = float(np.median(others)) if others else None
-        c["flags"], c["info"] = cut_notes(c["visual"], c["audio"], median, reframe[c["cut"] - 1])
+        i_cut = c["cut"] - 1
+        c["flags"], c["info"] = cut_notes(
+            c["visual"], c["audio"], median, reframe[i_cut], blink[i_cut]
+        )
 
     loud = loudness(reel)
     stretches = bad_stretches(reel, video_dur)

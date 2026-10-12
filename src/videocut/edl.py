@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 ZOOM_MIN, ZOOM_MAX = 1.0, 2.0
 FADE_MAX_MS = 200
 DEFAULT_FADE_MS = 30
+BLINK_SEARCH_MS = 150  # how far a blink-free cut point may be suggested from the original
 
 
 class EdlError(ValueError):
@@ -256,3 +257,48 @@ def save(edl: Edl, path: Path, source_duration: float | None = None) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     tmp.replace(path)
+
+
+def blink_warnings(
+    edl: Edl,
+    blinks: list[dict],
+    words: list[dict] | None = None,
+    source_duration: float | None = None,
+) -> list[dict]:
+    """Every segment boundary (in or out, source time) inside a blink interval +-1 output
+    frame, with the nearest time within +-BLINK_SEARCH_MS that is outside every blink (+-1
+    frame) and every word (`suggest`, None when there is none). `blinks` come from
+    work/face.json, `words` from work/words.json. Warnings, never errors."""
+    pad = 1 / edl.fps
+    words = words or []
+
+    def blink_at(t: float) -> dict | None:
+        return next((b for b in blinks if b["t0"] - pad <= t <= b["t1"] + pad), None)
+
+    def free(t: float) -> bool:
+        return not blink_at(t) and not any(w["t0"] < t < w["t1"] for w in words)
+
+    def valid(edge: str, s: Segment, c: float) -> bool:
+        if edge == "in":
+            return 0 <= c < s.end
+        return c > s.start and (source_duration is None or c <= source_duration)
+
+    out = []
+    # 5 ms grid, nearest first
+    steps = sorted(range(-BLINK_SEARCH_MS, BLINK_SEARCH_MS + 1, 5), key=abs)
+    for i, s in enumerate(edl.segments):
+        for edge, t in (("in", s.start), ("out", s.end)):
+            b = blink_at(t)
+            if b is None:
+                continue
+            cands = (round(t + ms / 1000, 3) for ms in steps)
+            suggest = next((c for c in cands if valid(edge, s, c) and free(c)), None)
+            out.append(
+                {
+                    "path": f"$.segments[{i}].{edge}",
+                    "t": t,
+                    "blink": [b["t0"], b["t1"]],
+                    "suggest": suggest,
+                }
+            )
+    return out

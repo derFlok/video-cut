@@ -1,7 +1,8 @@
 """`videocut run <video|job>`: the whole Phase 1 pipeline from the command line.
 
     prep     job new (when a file is given), then the deterministic tools: ingest --denoise,
-             transcribe (also writes candidates + takes_packed.md), sheet contact
+             face (face track + blinks), transcribe (also writes candidates +
+             takes_packed.md), sheet contact
     plan     Claude run with the `plan` skill -> work/project.md, nothing is cut
     approve  the human reads work/project.md and approves it (prompt; `--approve` skips it)
     cut      Claude run with the `cut` skill (resumes the plan session when the plan is
@@ -31,7 +32,7 @@ from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import approve_job, is_approved, project_sha, read_approval, revoke_approval
 
 TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
-PREP = [["ingest", "--denoise"], ["transcribe"], ["sheet", "contact"]]
+PREP = [["ingest", "--denoise"], ["face"], ["transcribe"], ["sheet", "contact"]]
 TEMPLATES = ROOT / "templates"
 PLAN_PROMPT = (
     "Use the video-cut:plan skill to plan the edit of the Video Cut job in the current folder. "
@@ -108,7 +109,11 @@ def prep(job: Path, steps: list[list[str]] | None = None, say=print) -> None:
     for argv in steps if steps is not None else PREP:
         t0 = time.monotonic()
         s = tool(job, *argv)
-        extra = {k: s[k] for k in ("sheets", "words", "transcribed", "denoised") if k in s}
+        extra = {
+            k: s[k]
+            for k in ("sheets", "words", "transcribed", "denoised", "found_pct", "blinks")
+            if k in s
+        }
         say(f"  {' '.join(argv):<16} {time.monotonic() - t0:5.1f}s  {extra or ''}".rstrip())
     # Claude may only read inside the job folder, so the reel contract is copied in.
     type_, dst = read_job(job).get("type") or "", job / "work" / "contract.md"
