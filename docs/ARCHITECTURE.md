@@ -164,12 +164,21 @@ system UI font.
 ## Overlays and captions (step 8)
 
 `captions` maps `work/words.json` through the segments to output time (a word cut to less
-than half is dropped, so removed fillers never show), groups words TikTok-style (pause ≥ 0.25 s,
-punctuation, ≤ 3 words / 18 characters) and marks emphasis from zoom keys or
+than half is dropped, so removed fillers never show), groups words into phrase blocks paced by the brand
+token `captions.pace` (`calm`, the default: 1–2 lines of ~5–8 words, ≥ 1.0 s on screen, broken
+at punctuation and pauses ≥ 0.25 s, held across gaps < 0.6 s so nothing flickers; `normal`;
+`fast` = the earlier ≤ 3 words / 18 characters), the active word highlight moving inside the
+block, and marks emphasis from zoom keys or
 `work/emphasis.json`. `overlays` writes `work/overlays.json` (size, fps, duration, resolved
 tokens, safe zones, the face track mapped to output px through the same crop windows render
 uses, captions, overlays) and runs the renderer; render composites `work/overlay.mov` when it
-is newer than the EDL.
+is newer than the EDL. Full-frame plates (`cta_end`) start no earlier than the last spoken
+word + 0.2 s; `overlays` shifts an earlier one and render appends a held last frame with
+silence for the plate. Captions are hidden under plates. Captions sit in the `center` or
+`lower` band (chest, below the face) per `captions.position`, falling back to the other band.
+`overlays` records SHA-256 of `overlay.mov`, `overlay_boxes.json` and `overlays.json` in
+`$VIDEOCUT_HOME/state/<job>/overlay_render.json`, outside the agent-writable job folder;
+verify flags `overlay_boxes_untrusted` when they do not match.
 
 Renderer (`renderer/render.js`): one headless Chromium page, a canvas with a pure `draw(t)`
 per scene, frames piped as PNG to FFmpeg → ProRes 4444 with alpha, BT.709 limited range and
