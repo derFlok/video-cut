@@ -34,7 +34,7 @@ def test_hello(capsys):
 
 @pytest.mark.parametrize(
     "argv",
-    [["transcribe"], ["candidates"], ["sheet", "contact"], ["render"], ["verify"]],
+    [["transcribe"], ["candidates"], ["render"]],
 )
 def test_stubs_fail_with_summary(capsys, argv):
     code, s, _ = run_tool(capsys, *argv)
