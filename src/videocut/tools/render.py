@@ -11,8 +11,9 @@
              the finished file is measured again
     colour   HDR sources (HLG/PQ) are tonemapped to SDR BT.709 and tagged so (_color.py)
     overlay  work/overlay.mov (transparent, `videocut tool overlays`) newer than edl.json is
-             composited over the cut video (alpha; preview: scaled), recorded as
-             "overlay": true in render.json; an older one is ignored with a warning
+             (and than overlays.json) is composited over the cut video (alpha; preview:
+             scaled), recorded as "overlay": true in render.json; an older one is
+             ignored with a warning
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
 
@@ -213,15 +214,21 @@ def render(args) -> dict:
     graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info))
     warnings, v_out = [], "[v]"
     overlay = work / "overlay.mov"
-    use_overlay = is_fresh([overlay], [edl_path])
+    ov_json = work / "overlays.json"
+    use_overlay = is_fresh([overlay], [edl_path] + ([ov_json] if ov_json.is_file() else []))
     if use_overlay:
         graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh))
         inputs += ["-i", str(overlay)]
         v_out = "[vo]"
     elif overlay.is_file():
         warnings.append(
-            "work/overlay.mov is older than edl.json and was left out; run "
+            "work/overlay.mov is older than edl.json or overlays.json and was left out; run "
             "`videocut tool overlays` again"
+        )
+    elif edl.captions or edl.overlays:
+        warnings.append(
+            "the EDL has captions/overlays but there is no work/overlay.mov; run "
+            "`videocut tool overlays` first"
         )
     graph_file = work / "render_filter.txt"
     _write_graph(graph_file, graph)

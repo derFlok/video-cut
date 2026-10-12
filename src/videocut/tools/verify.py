@@ -50,7 +50,15 @@ from ..edl import Edl, EdlError, load
 from ..paths import tool_env
 from . import _image as im
 from ._geometry import overlap, safe_zones
-from .common import ToolError, binary, job_parent, resolve_job, run_tool, write_json
+from .common import (
+    ToolError,
+    binary,
+    is_fresh,
+    job_parent,
+    resolve_job,
+    run_tool,
+    write_json,
+)
 from .face import face_crops, in_blink, load_face
 
 RATE = 48000
@@ -305,6 +313,9 @@ def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, in
     if not path.is_file():
         return None, [], TARGET_SIZE, []
     warnings = []
+    edl_path = job / "work" / "edl.json"
+    if edl_path.is_file() and not is_fresh([path], [edl_path]):
+        warnings.append("work/overlay_boxes.json is older than edl.json; the boxes may be stale")
     try:
         raw = json.loads(path.read_text())
     except ValueError:
@@ -328,7 +339,10 @@ def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, in
         face = [
             f
             for f in doc.get("face", [])
-            if _num(f.get("t")) and isinstance(f.get("box"), list) and len(f["box"]) == 4
+            if _num(f.get("t"))
+            and isinstance(f.get("box"), list)
+            and len(f["box"]) == 4
+            and all(map(_num, f["box"]))
         ]
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         warnings.append("work/overlays.json is missing or malformed; face overlap not checked")

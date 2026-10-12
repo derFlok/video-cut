@@ -44,6 +44,8 @@ DEFAULT_BRAND = "_example"
 def brand_tokens(ref: str) -> dict:
     """Resolved design tokens of brand `ref`. Uses videocut.brand.load when that module
     exists; until then the raw brand.json (bundled _example or $VIDEOCUT_HOME/brands/<id>)."""
+    if not isinstance(ref, str):
+        raise ToolError('job.json "brand" must be a brand id')
     try:
         from .. import brand  # type: ignore[attr-defined]
     except ImportError:
@@ -79,15 +81,19 @@ def build(job: Path) -> dict:
     if not edl_path.is_file():
         raise ToolError("work/edl.json is missing")
     try:
-        edl = load(edl_path)
+        rel = json.loads(edl_path.read_text()).get("source")
+    except (ValueError, AttributeError):
+        rel = None
+    src = (job / rel).resolve() if isinstance(rel, str) and rel else None
+    if src is None or not src.is_relative_to(job) or not src.is_file():
+        raise ToolError(f"EDL source {rel!r} is missing or outside the job folder")
+    info = probe(src)
+    try:
+        edl = load(edl_path, source_duration=info["duration"])
     except EdlError as e:
         raise ToolError(
             f"{len(e.errors)} problem(s) in edl.json: " + "; ".join(e.errors[:5])
         ) from None
-    src = (job / edl.source).resolve()
-    if not src.is_relative_to(job) or not src.is_file():
-        raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
-    info = probe(src)
     src_size = (int(info["size"][0]), int(info["size"][1]))
     edl, _, face = framed(job, edl)
     plan = plan_mod.build(edl, src_size, edl.size)

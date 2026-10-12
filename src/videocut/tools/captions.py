@@ -78,7 +78,7 @@ def mark_emph(words: list[dict], times: list[float]) -> None:
     for w in words:
         w["emph"] = False
     for t in times:
-        hit = next((w for w in words if w["src_t0"] <= t <= w["src_t1"]), None)
+        hit = next((w for w in words if w["src_t0"] <= t < w["src_t1"]), None)
         if hit is None:
             after = [w for w in words if 0 <= w["src_t0"] - t <= EMPH_LOOKAHEAD_S]
             hit = min(after, key=lambda w: w["src_t0"], default=None)

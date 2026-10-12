@@ -131,3 +131,17 @@ def test_brand_from_job_json(capsys, source, fake_renderer, videocut_home):
     assert code == 0, s
     doc = json.loads((job / "work" / "overlays.json").read_text())
     assert doc["tokens"]["name"] == "brand-a"
+
+
+def test_bad_brand_and_edl_beyond_source_are_errors(capsys, source, fake_renderer):
+    job = _job(capsys, source)
+    data = json.loads((job / "job.json").read_text())
+    (job / "job.json").write_text(json.dumps({**data, "brand": ["x"]}))
+    code, s, _ = run_tool(capsys, "overlays", "--no-render", "--job", str(job))
+    assert code == 1 and "brand" in s["error"]
+    (job / "job.json").write_text(json.dumps(data))
+    edl = json.loads((job / "work" / "edl.json").read_text())
+    edl["segments"][-1]["out"] = 9.0  # the source is 4 s long
+    (job / "work" / "edl.json").write_text(json.dumps(edl))
+    code, s, _ = run_tool(capsys, "overlays", "--no-render", "--job", str(job))
+    assert code == 1 and "beyond the source duration" in s["error"]

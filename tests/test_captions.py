@@ -129,3 +129,10 @@ def test_tool_without_words_fails(capsys, tmp_path):
     (job / "work" / "words.json").unlink()
     code, s, _ = run_tool(capsys, "captions", "--job", str(job))
     assert code == 1 and "words.json" in s["error"]
+
+
+def test_zoom_key_on_a_word_boundary_marks_the_next_word():
+    edl = _edl([{"in": 0.0, "out": 3.0, "zoom_keys": [[1.0, 1.25]]}])
+    words = cap.map_words([_w("a", 0.5, 1.0), _w("b", 1.0, 1.4)], edl.segments, edl.fps)
+    cap.mark_emph(words, cap.emphasis_times(edl, []))
+    assert [w["emph"] for w in words] == [False, True]
