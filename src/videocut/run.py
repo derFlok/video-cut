@@ -98,7 +98,7 @@ def open_job(ref: str, type_: str | None, brief: str | None) -> Path:
     data = read_job(job)
     changes = {k: v for k, v in (("type", type_), ("brief", brief)) if v and v != data.get(k)}
     if changes:
-        if is_approved(job):  # the approved plan was made for the old type/brief
+        if read_approval(job):  # any approval was for the old type/brief, even a stale one
             revoke_approval(job)
         update_job(job, **changes)
     return job
