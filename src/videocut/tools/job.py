@@ -1,12 +1,14 @@
-"""`videocut tool job new|show`: create a job folder and inspect it.
+"""`videocut tool job new|show|approve`: create a job folder, inspect it, approve its plan.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
-    job.json   id, created, source, type, brief, status
+    job.json   id, created, source, type, brief, status (new -> ingested -> approved),
+               approval {at, project_sha256} once a human approved work/project.md
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
     out/       finished renders
 """
 
+import hashlib
 import json
 import os
 import re
@@ -23,6 +25,7 @@ from .common import (
     read_job,
     resolve_job,
     run_tool,
+    update_job,
     write_json,
 )
 
@@ -35,9 +38,38 @@ ARTEFACTS = [
     "work/words.json",
     "work/takes_packed.md",
     "work/candidates.json",
-    "project.md",
+    "work/project.md",
     "work/edl.json",
+    "work/cut_report.md",
 ]
+PROJECT = "work/project.md"
+# Set in the environment of agent runs (agent.py): the human gate cannot be passed by Claude.
+AGENT_ENV = "VIDEOCUT_AGENT"
+
+
+def project_sha(job: Path) -> str | None:
+    p = job / PROJECT
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+
+
+def is_approved(job: Path, data: dict | None = None) -> bool:
+    """True when a human approved work/project.md and it is unchanged since."""
+    data = data if data is not None else read_job(job)
+    sha = project_sha(job)
+    return (
+        data.get("status") == "approved"
+        and sha is not None
+        and (data.get("approval") or {}).get("project_sha256") == sha
+    )
+
+
+def approve_job(job: Path) -> dict:
+    sha = project_sha(job)
+    if sha is None:
+        raise ToolError(f"{PROJECT} is missing; run the plan step first")
+    approval = {"at": datetime.now().astimezone().isoformat(timespec="seconds")}
+    approval["project_sha256"] = sha
+    return update_job(job, status="approved", approval=approval)
 
 
 def _default_id(video: Path, now: datetime) -> str:
@@ -92,7 +124,22 @@ def show(args) -> dict:
     outputs = sorted(p.name for p in (job / "out").glob("*") if p.is_file())
     print(job)
     print(json.dumps(data, ensure_ascii=False, indent=2))
-    return {"job": str(job), **data, "artefacts": present, "out": outputs}
+    return {
+        "job": str(job),
+        **data,
+        "approved": is_approved(job, data),
+        "artefacts": present,
+        "out": outputs,
+    }
+
+
+def approve(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human can approve the plan (not available inside an agent run)")
+    job = resolve_job(args.job_ref or args.job)
+    data = approve_job(job)
+    print(f"approved {PROJECT} of {data['id']}")
+    return {"job": str(job), "status": data["status"], **data["approval"]}
 
 
 def register(subparsers) -> None:
@@ -109,3 +156,10 @@ def register(subparsers) -> None:
     )
     s.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     s.set_defaults(handler=run_tool("job show", show))
+    a = sub.add_parser(
+        "approve",
+        help="approve work/project.md so the cut step may start (human only)",
+        parents=[job_parent()],
+    )
+    a.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    a.set_defaults(handler=run_tool("job approve", approve))

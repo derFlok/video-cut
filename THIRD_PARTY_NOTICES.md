@@ -23,3 +23,38 @@ by SHA-256 (see `manifest/tools.json`).
 - The editing approach (transcript first, contact sheets at decision points, edit decision list,
   self-check after render) follows [browser-use/video-use](https://github.com/browser-use/video-use)
   (MIT). Code taken from it will be marked in the source and listed here.
+- `src/videocut/tools/_transcribe_pack.py` adapts the packed-transcript format of
+  video-use `helpers/pack_transcripts.py` (commit 43cfc56): phrase grouping on silences
+  ≥ 0.5 s, one line per phrase with a fixed-width `[start-end]` prefix (`NNN.NN` seconds),
+  the `takes_packed.md` name and layout. Rewritten for this project's `words.json`; pause
+  markers, filler marks and retake hints are additions.
+- `claude-plugin/skills/plan/SKILL.md` and `claude-plugin/skills/cut/SKILL.md` follow the
+  editing workflow of video-use's `SKILL.md` (read the packed transcript fully, decide on text,
+  look at pictures only at decision points, EDL → render → self-check, bounded fix rounds,
+  cuts at word boundaries). The wording is this project's own; no text is copied.
+
+  Licence of the original (applies to the adapted parts above):
+
+  ```
+  MIT License
+
+  Copyright (c) 2026 Browser Use
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+  ```

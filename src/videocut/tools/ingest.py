@@ -1,12 +1,18 @@
 """`videocut tool ingest [--denoise]`: probe the source, extract audio, build a proxy.
 
 Writes into work/:
-    probe.json      duration, fps, display size (after rotation), rotation, audio rate
+    probe.json      duration, fps, display size (after rotation), rotation, colour (HDR?),
+                    the video and audio stream used, audio rate
     audio_raw.wav   48 kHz mono PCM straight from the source
     audio.wav       48 kHz mono PCM the rest of the pipeline uses; with --denoise
                     cleaned by DeepFilterNet (delay-compensated), else equal to the raw track
     audio.json      how audio.wav was made (so a changed --denoise redoes it)
-    proxy.mp4       short side 360 px, source fps, for contact sheets and bursts
+    proxy.mp4       short side 360 px, source fps, SDR BT.709 (HDR tonemapped), for
+                    contact sheets and bursts
+
+Audio comes from one deliberately chosen stream: the first AAC/PCM one, else the first
+other decodable one (phones add extra tracks such as spatial audio that ffmpeg's default
+"most channels" pick would prefer or fail on).
 
 Idempotent: every output that is newer than its input is kept.
 """
@@ -17,6 +23,7 @@ import tempfile
 from fractions import Fraction
 from pathlib import Path
 
+from ._color import is_hdr, output_tags, to_sdr
 from .common import (
     ToolError,
     binary,
@@ -34,6 +41,8 @@ from .common import (
 
 RATE = 48000
 PROXY_SHORT_SIDE = 360
+PROBE_VERSION = 2  # bump when probe.json gains fields, so old jobs re-probe
+UNDECODABLE_AUDIO = {"apple_apac", "unknown", None}
 
 
 def _rotation(stream: dict) -> int:
@@ -41,6 +50,15 @@ def _rotation(stream: dict) -> int:
         if "rotation" in sd:
             return int(round(float(sd["rotation"]))) % 360
     return int(stream.get("tags", {}).get("rotate", 0)) % 360
+
+
+def _pick_audio(streams: list[dict]) -> dict | None:
+    audio = [s for s in streams if s.get("codec_type") == "audio"]
+    for s in audio:
+        name = s.get("codec_name") or ""
+        if name == "aac" or name.startswith("pcm_"):
+            return s
+    return next((s for s in audio if s.get("codec_name") not in UNDECODABLE_AUDIO), None)
 
 
 def probe(src: Path) -> dict:
@@ -59,10 +77,12 @@ def probe(src: Path) -> dict:
     info = json.loads(out.stdout)
     streams = info.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
-    audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    audio = _pick_audio(streams)
     if video is None:
         raise ToolError("source has no video stream")
     if audio is None:
+        if any(s.get("codec_type") == "audio" for s in streams):
+            raise ToolError("source has no decodable audio stream")
         raise ToolError("source has no audio stream")
     rate = video.get("avg_frame_rate") or "0/1"
     if rate in ("0/0", "0/1"):
@@ -73,7 +93,8 @@ def probe(src: Path) -> dict:
     if rotation in (90, 270):
         w, h = h, w
     duration = float(info.get("format", {}).get("duration") or video.get("duration") or 0)
-    return {
+    info = {
+        "version": PROBE_VERSION,
         "duration": round(duration, 3),
         "fps": round(fps, 3),
         "fps_exact": rate,
@@ -81,14 +102,26 @@ def probe(src: Path) -> dict:
         "coded_size": [int(video["width"]), int(video["height"])],
         "rotation": rotation,
         "video_codec": video.get("codec_name"),
+        # Stream start times: a wav extracted from the audio starts at its first sample.
+        "video_start": float(video.get("start_time") or 0),
+        "audio_start": float(audio.get("start_time") or 0),
+        "video_index": int(video["index"]),
+        "pix_fmt": video.get("pix_fmt"),
+        "color_transfer": video.get("color_transfer"),
+        "color_primaries": video.get("color_primaries"),
+        "color_space": video.get("color_space"),
+        "audio_index": int(audio["index"]),
         "audio_rate": int(audio.get("sample_rate", 0)),
         "audio_channels": int(audio.get("channels", 0)),
         "audio_codec": audio.get("codec_name"),
     }
+    info["hdr"] = is_hdr(info)
+    return info
 
 
-def _extract_audio(src: Path, dst: Path) -> None:
-    ffmpeg_to(dst, "-i", str(src), "-vn", "-ac", "1", "-ar", str(RATE), "-c:a", "pcm_s16le")
+def _extract_audio(src: Path, dst: Path, index: int | None = None) -> None:
+    pick = ["-map", f"0:{index}"] if index is not None else ["-vn"]
+    ffmpeg_to(dst, "-i", str(src), *pick, "-ac", "1", "-ar", str(RATE), "-c:a", "pcm_s16le")
 
 
 def _denoise(raw: Path, dst: Path) -> None:
@@ -102,15 +135,21 @@ def _denoise(raw: Path, dst: Path) -> None:
         _extract_audio(cleaned, dst)
 
 
-def _proxy(src: Path, dst: Path) -> None:
+def _proxy(src: Path, dst: Path, info: dict) -> None:
     s = PROXY_SHORT_SIDE
     scale = f"scale='if(gt(iw,ih),-2,{s})':'if(gt(iw,ih),{s},-2)'"
+    vf = ",".join(f for f in (scale, to_sdr(info)) if f)
     ffmpeg_to(
         dst,
         "-i",
         str(src),
+        "-map",
+        f"0:{info['video_index']}",
+        "-map",
+        f"0:{info['audio_index']}",
         "-vf",
-        scale,
+        vf,
+        *output_tags(info),
         "-c:v",
         "libx264",
         "-preset",
@@ -145,9 +184,18 @@ def ingest(args) -> dict:
             done.append(name)
 
     probe_file = work / "probe.json"
+    raw, proxy = work / "audio_raw.wav", work / "proxy.mp4"
+    try:
+        if json.loads(probe_file.read_text()).get("version") != PROBE_VERSION:
+            probe_file.unlink()
+    except (OSError, ValueError):
+        pass
     step("probe", [probe_file], [src], lambda: write_json(probe_file, probe(src)))
-    raw = work / "audio_raw.wav"
-    step("audio_raw", [raw], [src], lambda: _extract_audio(src, raw))
+    info = json.loads(probe_file.read_text())
+    if "probe" in done:  # stream choice or colour handling may differ: redo what uses them
+        raw.unlink(missing_ok=True)
+        proxy.unlink(missing_ok=True)
+    step("audio_raw", [raw], [src], lambda: _extract_audio(src, raw, info["audio_index"]))
 
     audio, meta = work / "audio.wav", work / "audio.json"
     try:
@@ -166,10 +214,8 @@ def ingest(args) -> dict:
         write_json(meta, {"denoised": args.denoise, "rate": RATE, "channels": 1})
 
     step("audio", [audio, meta], [raw], make_audio)
-    proxy = work / "proxy.mp4"
-    step("proxy", [proxy], [src], lambda: _proxy(src, proxy))
+    step("proxy", [proxy], [src], lambda: _proxy(src, proxy, info))
 
-    info = json.loads(probe_file.read_text())
     if read_job(job).get("status") == "new":
         update_job(job, status="ingested")
     for name in done:
@@ -183,6 +229,7 @@ def ingest(args) -> dict:
         "fps": info["fps"],
         "size": info["size"],
         "rotation": info["rotation"],
+        "hdr": info["hdr"],
     }
 
 

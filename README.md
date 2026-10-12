@@ -46,6 +46,25 @@ cd video-cut
 
 Your brands, projects and downloaded models live in `~/VideoCut` (change with `VIDEOCUT_HOME`), never inside the repository.
 
+## Usage (command line, Phase 1)
+
+```bash
+.venv/bin/videocut run ~/Movies/take.mov --type thought --brief "one idea, strong first sentence"
+```
+
+1. **Prep** (local, no Claude): job folder in `~/VideoCut/jobs/<id>`, noise reduction,
+   transcription with word times, filler and pause candidates, contact sheets.
+2. **Plan:** Claude reads the transcript and a few stills and writes `work/project.md`: hook,
+   core message, target length, what to keep and cut, words to emphasise.
+3. **You approve** the plan in the terminal (edit `project.md` first if you like). Nothing is
+   cut before that. To decide later: `videocut tool job approve <id>`, then `videocut run <id>`.
+4. **Cut:** Claude writes the edit list, renders a preview, checks every cut (clicks, jumps,
+   loudness), fixes up to three rounds and renders `out/reel.mp4` (1080×1920, −14 LUFS).
+   `work/cut_report.md` lists what changed and any open doubts.
+
+Options: `--approve` (no prompt), `--replan`, `--max-turns N`. Time, turns, cost and tokens of
+every Claude run are logged in `work/runs.jsonl`.
+
 ## Brands
 
 Video Cut ships without any branding. You upload your own (logo, colours, fonts, optionally a brand guide and example posts) and every video adapts to it. You can keep several brands side by side and pick one per video. See [`docs/BRIEF.md`](docs/BRIEF.md) §9.
