@@ -20,6 +20,11 @@
 - `videocut ui`: local web app (127.0.0.1 only, per-session token, host check) with a
   connection check: one click starts Claude, progress streams live (server-sent events).
   Verified end to end: 9 s, 5 turns, ~USD 0.06 equivalent.
+- Pipeline tool registry (`src/videocut/tools/`): `videocut tool job new|show`, `ingest
+  [--denoise]` (probe, 48 kHz mono audio, 360p proxy, idempotent), `edl check`; stubs with final
+  signatures for `transcribe`, `candidates`, `sheet contact|burst|timeline`, `render`, `verify`.
+  Every tool ends with one JSON summary line. EDL schema module (`edl.py`) with validation by
+  JSON path. Generated landscape/portrait/rotated test clips (`tests/clips.py`).
 
 ### Observed
 - Whisper large-v3-turbo dropped all three filler words ("äh", "ähm") from the synthetic test

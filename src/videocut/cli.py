@@ -1,4 +1,4 @@
-"""Command line: videocut setup | doctor | selftest | models pull <name>."""
+"""Command line: videocut setup | doctor | selftest | models | ui | auth | tool <name>."""
 
 import argparse
 import os
@@ -40,7 +40,9 @@ def main(argv: list[str] | None = None) -> int:
 
     t = sub.add_parser("tool", help="pipeline commands used by Claude inside a job")
     tsub = t.add_subparsers(dest="tool_cmd", required=True)
-    tsub.add_parser("hello", help="connectivity check")
+    from . import tools
+
+    tools.register_all(tsub)
 
     a = p.parse_args(argv)
     _use_installed_tools()
@@ -95,9 +97,8 @@ def main(argv: list[str] | None = None) -> int:
         mode = settings.load()["auth"]
         print("Mode: " + ("API key (keychain)" if mode == "apikey" else "own Claude Code sign-in"))
         return 0
-    if a.cmd == "tool" and a.tool_cmd == "hello":
-        print(f"videocut {__version__} ready in {os.getcwd()}")
-        return 0
+    if a.cmd == "tool":
+        return a.handler(a)
     return 2
 
 
