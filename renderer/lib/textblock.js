@@ -137,7 +137,7 @@ function drawBlock(ctx, env, L, t, dur, wordState) {
       ctx.shadowBlur = L.px * 0.35;
       ctx.strokeStyle = colors.box;
       ctx.lineWidth = L.px * 0.14;
-      ctx.filter = `blur(${(L.px * 0.04).toFixed(2)}px)`;
+      // Shadow only (no ctx.filter: a canvas blur filter per word is ~10x slower).
       ctx.strokeText(word.text, word.x, word.y);
       ctx.strokeText(word.text, word.x, word.y);
       ctx.restore();
