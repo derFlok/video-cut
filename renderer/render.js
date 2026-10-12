@@ -184,7 +184,10 @@ function pageMain(spec) {
     return { png: r.canvas.toDataURL("image/png"), boxes: r.boxes };
   };
 
-  window.sheet = (times, sub) => {
+  // `opt.labels` (one per time) replaces the time label, `opt.background` (a colour)
+  // replaces the checkerboard: the brand preview sheet shows scenes on the brand's own
+  // background.
+  window.sheet = (times, sub, opt = {}) => {
     const cols = 3;
     const rows = Math.ceil(times.length / cols);
     const cw = Math.round(size[0] / cols);
@@ -193,11 +196,15 @@ function pageMain(spec) {
     const sc = s.getContext("2d");
     // Checkerboard so transparent and opaque areas are both visible (tooling, not brand).
     const cell = 16;
-    for (let y = 0; y < s.height; y += cell)
-      for (let x = 0; x < s.width; x += cell) {
-        sc.fillStyle = ((x + y) / cell) % 2 ? "#9a9a9a" : "#6e6e6e";
-        sc.fillRect(x, y, cell, cell);
-      }
+    if (opt.background) {
+      sc.fillStyle = opt.background;
+      sc.fillRect(0, 0, s.width, s.height);
+    } else
+      for (let y = 0; y < s.height; y += cell)
+        for (let x = 0; x < s.width; x += cell) {
+          sc.fillStyle = ((x + y) / cell) % 2 ? "#9a9a9a" : "#6e6e6e";
+          sc.fillRect(x, y, cell, cell);
+        }
     const boxes = [];
     times.forEach((t, k) => {
       const r = render(t, sub);
@@ -207,12 +214,13 @@ function pageMain(spec) {
       sc.drawImage(r.canvas, x, y, cw, ch);
       sc.strokeStyle = "#000";
       sc.strokeRect(x + 0.5, y + 0.5, cw - 1, ch - 1);
-      sc.fillStyle = "#000";
-      sc.fillRect(x + 1, y + 1, 92, 30);
-      sc.fillStyle = "#fff";
+      const label = opt.labels && opt.labels[k] != null ? String(opt.labels[k]) : `${t.toFixed(2)} s`;
       sc.font = "20px monospace";
+      sc.fillStyle = "#000";
+      sc.fillRect(x + 1, y + 1, Math.ceil(sc.measureText(label).width) + 16, 30);
+      sc.fillStyle = "#fff";
       sc.textBaseline = "top";
-      sc.fillText(`${t.toFixed(2)} s`, x + 8, y + 6);
+      sc.fillText(label, x + 8, y + 6);
     });
     return { jpg: s.toDataURL("image/jpeg", 0.88), boxes };
   };
@@ -399,8 +407,11 @@ async function main() {
       summary.still = args.still.png;
     }
     if (args.sheet) {
-      const times = sheetTimes(list, spec.duration);
-      const r = await page.evaluate(([ts, sub]) => window.sheet(ts, sub), [times, args.blur]);
+      // overlays.json may fix the sheet: {"sheet": {"times": [s], "labels": [..], "background": "#hex"}}
+      const fixed = spec.sheet && typeof spec.sheet === "object" ? spec.sheet : {};
+      const times = Array.isArray(fixed.times) && fixed.times.length ? fixed.times : sheetTimes(list, spec.duration);
+      const opt = { labels: fixed.labels, background: fixed.background };
+      const r = await page.evaluate(([ts, sub, o]) => window.sheet(ts, sub, o), [times, args.blur, opt]);
       fs.writeFileSync(args.sheet, decode(r.jpg));
       summary.sheet = args.sheet;
     }

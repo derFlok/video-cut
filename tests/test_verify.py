@@ -211,7 +211,8 @@ def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
     src = json.loads((job / "job.json").read_text())["source"]
     caps = [{"t0": i * 0.6, "t1": i * 0.6 + 0.6, "words": []} for i in range(5)]
     edl = {"fps": 30, "size": [1080, 1920], "source": src, "segments": [{"in": 0, "out": 3}]}
-    (job / "work" / "edl.json").write_text(json.dumps({**edl, "captions": caps}))
+    ovs = [{"scene": "keyword", "t0": 1.0, "t1": 2.0, "props": {"text": "x"}}]
+    (job / "work" / "edl.json").write_text(json.dumps({**edl, "captions": caps, "overlays": ovs}))
     (job / "work" / "overlays.json").write_text(
         json.dumps({"size": [1080, 1920], "fps": 30, "duration": 3.0, "face": FACE})
     )
@@ -234,6 +235,7 @@ def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
     doc = json.loads((job / "out" / "verify.json").read_text())
     assert len(doc["caption_times"]) == 5
     assert doc["caption_sheets"] == ["out/verify/captions_01.jpg"]
+    assert doc["overlay_times"] == [1.5] and s["overlay_sheets"] == ["out/verify/overlays_01.jpg"]
     out = subprocess.run(
         [clips.ffprobe(), "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0"]
         + [str(job / "out" / "verify" / "captions_01.jpg")],

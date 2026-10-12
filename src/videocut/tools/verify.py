@@ -27,7 +27,8 @@ track are in the output px of work/overlays.json)
     flag `overlay_in_safe_zone` when a box reaches into the organic safe zones (top 250 px,
     bottom 350 px, 6 % at the sides, docs/BRIEF.md §8); flag `overlay_on_face` when a box
     covers more than 2 % of the face box at any face sample (output time) while it is
-    visible. out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet).
+    visible. out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
+    out/verify/overlays_NN.jpg: one tile per overlay, once its entry animation is over.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s. A preview is
 checked at its half size, and its loudness (single-pass) is reported but not judged.
@@ -76,6 +77,7 @@ FLOOR = 1e-4  # about -80 dBFS: keeps ratios finite next to digital silence
 STRIP_TILES, TILE_W, WAVE_H = 5, 216, 140
 FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
 CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
+OVERLAY_SETTLE_S = 0.6  # overlay tiles show this long after the overlay starts
 CAPTION_COLS = 3
 
 
@@ -360,8 +362,24 @@ def caption_times(captions: list[dict], fps: float, duration: float) -> list[flo
     return sorted(times)
 
 
-def caption_sheets(reel: Path, v: dict, times: list[float], dest: Path) -> list[Path]:
-    """3x3 contact sheets of the frames at `times`: out/verify/captions_NN.jpg."""
+def overlay_times(overlays: list[dict], fps: float, duration: float) -> list[float]:
+    """One output time per overlay (not caption): OVERLAY_SETTLE_S after its start (at most
+    its middle), when its entry animation is over; snapped, unique, inside the reel."""
+    times = []
+    for o in overlays:
+        t0, t1 = o.get("t0"), o.get("t1")
+        if not (_num(t0) and _num(t1)) or t1 <= t0:
+            continue
+        t = im.snap(min(t0 + OVERLAY_SETTLE_S, (t0 + t1) / 2), fps)
+        if 0 <= t < duration and t not in times:
+            times.append(t)
+    return sorted(times)
+
+
+def caption_sheets(
+    reel: Path, v: dict, times: list[float], dest: Path, prefix: str = "captions"
+) -> list[Path]:
+    """3x3 contact sheets of the frames at `times`: out/verify/<prefix>_NN.jpg."""
     tw, th = im.tile_size(v["width"], v["height"])
     font = im.find_font()
     label = "," + im.drawtext(font, im.label_expr(v["fps"]), "4", "h-th-4", 22) if font else ""
@@ -370,7 +388,7 @@ def caption_sheets(reel: Path, v: dict, times: list[float], dest: Path) -> list[
         f"[0:v]select='{im.select_times(times, v['fps'])}',scale={tw}:{th}{label},"
         f"tile={n}x{n}:padding=0:margin=0[out]"
     )
-    return im.render_jpegs([["-i", str(reel)]], graph, dest, lambda k: f"captions_{k:02d}.jpg")
+    return im.render_jpegs([["-i", str(reel)]], graph, dest, lambda k: f"{prefix}_{k:02d}.jpg")
 
 
 # ---------------------------------------------------------------- global checks
@@ -543,6 +561,11 @@ def verify(args) -> dict:
     for old in vdir.glob("captions_*.jpg"):
         if old not in sheets:
             old.unlink()
+    ov_times = overlay_times(edl.overlays, fps, video_dur) if edl is not None else []
+    ov_sheets = caption_sheets(reel, v, ov_times, vdir, "overlays") if ov_times else []
+    for old in vdir.glob("overlays_*.jpg"):
+        if old not in ov_sheets:
+            old.unlink()
     overlay_flagged = [
         {"scene": o["scene"], "t0": o["t0"], "t1": o["t1"], "flags": o["flags"]}
         for o in overlay_docs
@@ -565,6 +588,8 @@ def verify(args) -> dict:
         "overlay_flagged": overlay_flagged,
         "caption_sheets": [str(p.relative_to(job)) for p in sheets],
         "caption_times": times,
+        "overlay_sheets": [str(p.relative_to(job)) for p in ov_sheets],
+        "overlay_times": ov_times,
         "warnings": warnings,
     }
     write_json(job / "out" / "verify.json", doc)
@@ -585,6 +610,7 @@ def verify(args) -> dict:
         "failed": failed,
         "warnings": warnings,
         "images": [c["image"] for c in cut_docs] + [str(p.relative_to(job)) for p in sheets],
+        "overlay_sheets": [str(p.relative_to(job)) for p in ov_sheets],
     }
 
 

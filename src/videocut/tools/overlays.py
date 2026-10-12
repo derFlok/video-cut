@@ -91,17 +91,11 @@ def build(job: Path) -> dict:
     }
 
 
-def render_overlay(job: Path, doc_path: Path) -> dict:
-    """Run the renderer; returns its JSON summary line."""
-    work = job / "work"
-    cmd = renderer_cmd() + [
-        str(doc_path),
-        "--out",
-        str(work / "overlay.mov"),
-        "--boxes",
-        str(work / "overlay_boxes.json"),
-    ]
-    r = subprocess.run(cmd, capture_output=True, text=True, env=tool_env(), cwd=job)
+def run_renderer(argv: list[str], cwd: Path) -> dict:
+    """Run renderer/render.js with `argv`; returns its JSON summary line, raises on failure."""
+    r = subprocess.run(
+        renderer_cmd() + argv, capture_output=True, text=True, env=tool_env(), cwd=cwd
+    )
     lines = r.stdout.strip().splitlines()
     try:
         result = json.loads(lines[-1]) if lines else {}
@@ -112,10 +106,26 @@ def render_overlay(job: Path, doc_path: Path) -> dict:
             r.stderr or r.stdout
         ).strip()[-600:]
         raise ToolError(f"renderer failed: {tail}")
+    return result if isinstance(result, dict) else {}
+
+
+def render_overlay(job: Path, doc_path: Path) -> dict:
+    """Render work/overlay.mov + work/overlay_boxes.json; returns the renderer summary."""
+    work = job / "work"
+    result = run_renderer(
+        [
+            str(doc_path),
+            "--out",
+            str(work / "overlay.mov"),
+            "--boxes",
+            str(work / "overlay_boxes.json"),
+        ],
+        job,
+    )
     for name in ("overlay.mov", "overlay_boxes.json"):
         if not (work / name).is_file():
             raise ToolError(f"renderer reported success but wrote no work/{name}")
-    return result if isinstance(result, dict) else {}
+    return result
 
 
 def overlays(args) -> dict:

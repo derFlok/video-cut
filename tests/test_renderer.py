@@ -101,7 +101,7 @@ def probe(mov: Path) -> dict:
             "v:0",
             "-count_frames",
             "-show_entries",
-            "stream=codec_name,profile,pix_fmt,width,height,nb_read_frames",
+            "stream=codec_name,profile,pix_fmt,width,height,nb_read_frames,color_space",
             "-of",
             "json",
             str(mov),
@@ -169,6 +169,7 @@ def test_render_example_brand(tmp_path, monkeypatch):
     # Encoded as yuva444p10le; ffprobe reports the ProRes decoder's 4:4:4:4 output format.
     assert st["pix_fmt"].startswith("yuva444")
     assert (st["width"], st["height"]) == SIZE
+    assert st.get("color_space") == "bt709"  # composited into a BT.709 reel
     assert int(st["nb_read_frames"]) == int(DURATION * FPS)
 
     frames = alpha_frames(mov)
@@ -275,3 +276,39 @@ def test_ffmpeg_failure_and_edge_items(tmp_path, monkeypatch):
         "caption",
         "keyword",
     ]
+
+
+@needs_renderer
+def test_brand_sheet_shows_every_scene(tmp_path, capsys):
+    from helpers import run_tool
+
+    from videocut.tools import brand as brand_tool
+
+    out = tmp_path / "preview.jpg"
+    code, s, _ = run_tool(capsys, "brand", "sheet", "_example", "--out", str(out))
+    assert code == 0, s
+    scenes = brand_tool.scene_names()
+    assert s["scenes"][0] == "caption" and set(s["scenes"]) == set(scenes)
+    assert s["skipped_scenes"] == [] and s["no_sample"] == []
+    st = probe_image(out)
+    rows = -(-len(scenes) // 3)
+    assert (st["width"], st["height"]) == (1080, rows * 640)
+
+
+def probe_image(path: Path) -> dict:
+    out = subprocess.run(
+        [
+            ffprobe(),
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return json.loads(out)["streams"][0]
