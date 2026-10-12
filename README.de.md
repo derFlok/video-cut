@@ -20,6 +20,25 @@ Voraussetzungen: macOS 14+ auf Apple Silicon, 16 GB RAM empfohlen, rund 15 GB fr
 
 Marken, Projekte und Modelle liegen in `~/VideoCut` (änderbar über `VIDEOCUT_HOME`), nie im Repository.
 
+## Benutzung (Kommandozeile, Phase 1)
+
+```bash
+.venv/bin/videocut run ~/Movies/aufnahme.mov --type thought --brief "eine These, starker erster Satz"
+```
+
+1. **Vorbereitung** (lokal, ohne Claude): Projektordner in `~/VideoCut/jobs/<id>`,
+   Rauschunterdrückung, Transkript mit Wortzeiten, Füllwort- und Pausenkandidaten, Kontaktbögen.
+2. **Plan:** Claude liest das Transkript und wenige Standbilder und schreibt `work/project.md`:
+   Hook, Kernaussage, Ziel-Länge, was bleibt und was raus fliegt, Betonungen.
+3. **Du gibst frei** – im Terminal (vorher `project.md` gern anpassen). Vorher wird nichts
+   geschnitten. Später freigeben: `videocut tool job approve <id>`, dann `videocut run <id>`.
+4. **Schnitt:** Claude schreibt die Schnittliste, rendert eine Vorschau, prüft jeden Schnitt
+   (Knackser, Bildsprünge, Lautheit), korrigiert bis zu drei Runden und rendert
+   `out/reel.mp4` (1080×1920, −14 LUFS). `work/cut_report.md` nennt Änderungen und offene Fragen.
+
+Optionen: `--approve` (ohne Nachfrage), `--replan`, `--max-turns N`. Zeit, Turns, Kosten und
+Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
+
 ## Marken
 
 Video Cut bringt kein eigenes Branding mit. Du lädst deins hoch (Logo, Farben, Schriften, optional Brand-Guide und Beispielposts), und jedes Video passt sich daran an. Mehrere Marken nebeneinander sind möglich, pro Video wählst du eine.

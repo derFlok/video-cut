@@ -27,7 +27,13 @@ by SHA-256 (see `manifest/tools.json`).
   video-use `helpers/pack_transcripts.py` (commit 43cfc56): phrase grouping on silences
   ≥ 0.5 s, one line per phrase with a fixed-width `[start-end]` prefix (`NNN.NN` seconds),
   the `takes_packed.md` name and layout. Rewritten for this project's `words.json`; pause
-  markers, filler marks and retake hints are additions. Licence of the original:
+  markers, filler marks and retake hints are additions.
+- `claude-plugin/skills/plan/SKILL.md` and `claude-plugin/skills/cut/SKILL.md` follow the
+  editing workflow of video-use's `SKILL.md` (read the packed transcript fully, decide on text,
+  look at pictures only at decision points, EDL → render → self-check, bounded fix rounds,
+  cuts at word boundaries). The wording is this project's own; no text is copied.
+
+  Licence of the original (applies to the adapted parts above):
 
   ```
   MIT License

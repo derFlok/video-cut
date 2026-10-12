@@ -14,6 +14,7 @@ cost, tokens), and its raw event stream goes to work/claude-<phase>.jsonl.
 """
 
 import contextlib
+import functools
 import io
 import json
 import shutil
@@ -234,6 +235,7 @@ def main(args) -> int:
             approve=args.approve,
             max_turns=args.max_turns,
             replan=args.replan,
+            say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:
         print(f"\033[31m✗ {e}\033[0m", file=sys.stderr)
