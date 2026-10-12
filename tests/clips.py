@@ -109,3 +109,88 @@ def build(folder: Path, orientation: str = "portrait", rotate: int = 0) -> Path:
     if rotate:
         _ff("-display_rotation", str(rotate), "-i", str(plain), "-c", "copy", str(out))
     return out
+
+
+# Known-filler clip: phrases and fillers spoken as separate `say` segments, joined with
+# exact silences, so every filler's position is known to the sample.
+FILLER_SCRIPT = [
+    ("phrase", "Also, heute zeige ich Ihnen drei Dinge."),
+    ("silence", 0.4),
+    ("filler", "ähm"),
+    ("silence", 0.4),
+    ("phrase", "Das erste ist ganz einfach."),
+    ("silence", 0.35),
+    ("filler", "äh"),
+    ("silence", 0.35),
+    ("phrase", "Das zweite ist etwas schwieriger."),
+    ("silence", 0.8),
+    ("phrase", "Und das dritte"),
+    ("silence", 0.4),
+    ("filler", "öhm"),
+    ("silence", 0.4),
+    ("phrase", "zeige ich Ihnen morgen."),
+]
+
+
+def _audible(samples: bytes, rate: int) -> tuple[float, float]:
+    """First and last audible sample (above ~-50 dBFS) of 16-bit mono PCM, in seconds."""
+    import array
+
+    a = array.array("h", samples)
+    loud = [i for i, v in enumerate(a) if abs(v) > 100]
+    return (loud[0] / rate, (loud[-1] + 1) / rate) if loud else (0.0, 0.0)
+
+
+def filler_clip(folder: Path) -> tuple[Path, list[dict]]:
+    """Portrait clip of FILLER_SCRIPT and its layout: one entry per phrase/filler/silence
+    with "kind", "text", segment "t0"/"t1" and audible "a0"/"a1" (source seconds)."""
+    import json
+    import wave
+
+    folder.mkdir(parents=True, exist_ok=True)
+    out, layout_file = folder / "filler-clip.mp4", folder / "filler-clip.json"
+    if out.is_file() and layout_file.is_file():
+        return out, json.loads(layout_file.read_text())
+    rate, pcm, layout = 48000, b"", []
+    for k, (kind, item) in enumerate(FILLER_SCRIPT):
+        if kind == "silence":
+            seg = b"\0\0" * int(round(item * rate))
+        else:
+            aiff, wav = folder / f"seg{k}.aiff", folder / f"seg{k}.wav"
+            subprocess.run(["say", "-v", "Anna", "-o", str(aiff), item], check=True)
+            _ff("-i", str(aiff), "-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le", str(wav))
+            with wave.open(str(wav), "rb") as f:
+                seg = f.readframes(f.getnframes())
+        t0 = len(pcm) / 2 / rate
+        a0, a1 = _audible(seg, rate)
+        entry = {"kind": kind, "text": None if kind == "silence" else item}
+        entry.update(t0=t0, t1=t0 + len(seg) / 2 / rate, a0=t0 + a0, a1=t0 + a1)
+        layout.append(entry)
+        pcm += seg
+    wav = folder / "filler-speech.wav"
+    with wave.open(str(wav), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(rate)
+        f.writeframes(pcm)
+    w, h = SIZES["portrait"]
+    _ff(
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=size={w}x{h}:rate={FPS}:duration={len(pcm) / 2 / rate:.3f}",
+        "-i",
+        str(wav),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-shortest",
+        str(out),
+    )
+    layout_file.write_text(json.dumps(layout, ensure_ascii=False, indent=1))
+    return out, layout
