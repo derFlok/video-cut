@@ -65,6 +65,8 @@
 - End-to-end test without Claude (generated clip → prep → hand-written EDL → render → verify).
 
 ### Changed
+- HDR→SDR: reference white 203 nits (BT.2408) instead of 100; real iPhone HLG footage no longer
+  looks oversaturated.
 - Verify: a talking-head jump cut is expected. A clear visual jump is reported as info
   `jump_cut` (`reframe` when the EDL changes crop/zoom there); the flag `visual_jump` is kept
   for a jump ≥ 3× (and ≥ 8) the median of the reel's other cuts without a reframe. Verify checks the

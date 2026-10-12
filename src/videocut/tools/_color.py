@@ -2,11 +2,14 @@
 
 Phones record HLG (iPhone) or PQ in BT.2020, 10 bit. Re-encoding that to 8-bit H.264
 without tonemapping keeps the HDR tags on SDR-range pixels and looks washed out. HDR
-sources are linearised with zscale, tonemapped (mobius: keeps SDR-range
-brightness close to the original, unlike hable; no desaturation) and converted to
-BT.709 limited range; SDR sources pass through unchanged.
+sources are linearised with zscale at HDR reference white (203 nits, ITU-R BT.2408),
+tonemapped (mobius: keeps SDR-range brightness close to the original, unlike hable, which
+looks dark and grey; no desaturation, which blows out highlights) and converted to BT.709
+limited range; SDR sources pass through unchanged.
 """
 
+# HDR reference white in nits (ITU-R BT.2408); HLG/PQ are mastered to it, 100 looks oversaturated.
+HDR_REFERENCE_WHITE_NITS = 203
 HDR_TRANSFERS = {"arib-std-b67", "smpte2084"}  # HLG, PQ
 # Input properties zscale falls back to when the stream does not tag them.
 _DEFAULT_PRIMARIES, _DEFAULT_MATRIX = "bt2020", "bt2020nc"
@@ -42,7 +45,7 @@ def to_sdr(info: dict) -> str:
     matrix = matrix if matrix in _KNOWN_MATRICES else _DEFAULT_MATRIX
     return ",".join(
         [
-            f"zscale=tin={info['color_transfer']}:pin={prim}:min={matrix}:rin=tv:t=linear:npl=100",
+            f"zscale=tin={info['color_transfer']}:pin={prim}:min={matrix}:rin=tv:t=linear:npl={HDR_REFERENCE_WHITE_NITS}",
             "format=gbrpf32le",
             "zscale=p=bt709",
             "tonemap=tonemap=mobius:desat=0",
