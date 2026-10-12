@@ -252,3 +252,18 @@ def test_vfr_source_keeps_av_sync(capsys, clip_dir):
     assert flashes == pytest.approx([2.5, 7.5, 10.5, 14.5], abs=FRAME + 1e-3)
     assert len(beeps) == len(flashes)
     assert max(abs(a - b) for a, b in zip(flashes, beeps, strict=True)) <= FRAME + 0.005
+
+
+def test_silent_source_renders_with_a_warning(capsys, clip_dir):
+    clip = clip_dir / "silent.mp4"
+    if not clip.is_file():
+        _ff_out(
+            "-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30:duration=3",
+            "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-t", "3",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(clip),
+        )  # fmt: skip
+    job = _job(capsys, clip, "silent", [{"in": 0.5, "out": 2.5}])
+    code, s, out = run_tool(capsys, "render", "--job", str(job))
+    assert code == 0, s
+    assert s["loudness"]["integrated_lufs"] is None and "the reel is silent" in s["warnings"]
+    json.loads((job / "out" / "render.json").read_text())  # strict JSON, no -Infinity

@@ -102,6 +102,9 @@ def probe(src: Path) -> dict:
         "coded_size": [int(video["width"]), int(video["height"])],
         "rotation": rotation,
         "video_codec": video.get("codec_name"),
+        # Stream start times: a wav extracted from the audio starts at its first sample.
+        "video_start": float(video.get("start_time") or 0),
+        "audio_start": float(audio.get("start_time") or 0),
         "video_index": int(video["index"]),
         "pix_fmt": video.get("pix_fmt"),
         "color_transfer": video.get("color_transfer"),

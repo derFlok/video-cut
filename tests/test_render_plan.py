@@ -104,3 +104,9 @@ def test_audio_stream_is_picked_deliberately():
     assert _pick_audio([v, opus, aac])["index"] == 2  # AAC/PCM first
     assert _pick_audio([v, spatial, opus])["index"] == 3
     assert _pick_audio([v, spatial]) is None
+
+
+def test_zoom_keys_at_the_same_time_last_in_file_wins():
+    seg = {"in": 0, "out": 2, "zoom_keys": [[1.0, 1.6], [1.0, 1.2]]}
+    plan = rp.build(_edl([seg]), (1920, 1080), OUT)
+    assert [r.zoom for r in plan.ranges] == [1.0, 1.2]

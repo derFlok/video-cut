@@ -22,6 +22,7 @@ passed to ffmpeg as a file, so long EDLs never hit the command line limit.
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 
@@ -85,16 +86,26 @@ def measure(path: Path) -> dict:
         )
     )
     return {
-        "integrated_lufs": float(stats["input_i"]),
-        "true_peak_dbtp": float(stats["input_tp"]),
-        "lra": float(stats["input_lra"]),
+        "integrated_lufs": _finite(stats["input_i"]),
+        "true_peak_dbtp": _finite(stats["input_tp"]),
+        "lra": _finite(stats["input_lra"]),
     }
+
+
+def _finite(v) -> float | None:
+    """loudnorm reports -inf for silence; JSON has no infinity, so that becomes None."""
+    f = float(v)
+    return f if math.isfinite(f) else None
 
 
 def _audio_input(job: Path, src: Path, rel: str, info: dict) -> tuple[list[str], str, str]:
     """(extra ffmpeg input args, filter input label, description) for the audio to cut."""
     wav, meta = job / "work" / "audio.wav", job / "work" / "audio.json"
-    if read_job(job).get("source") == rel and meta.is_file() and is_fresh([wav, meta], [src]):
+    # The wav starts at the audio's first sample; only use it when that is where the video
+    # starts too, else cutting it by source time would shift the audio.
+    aligned = abs(info.get("audio_start", 0) - info.get("video_start", 0)) < 0.001
+    fresh = meta.is_file() and is_fresh([wav, meta], [src])
+    if read_job(job).get("source") == rel and aligned and fresh:
         return ["-i", str(wav)], "1:a", "work/audio.wav"
     return [], f"0:{info['audio_index']}", f"source stream {info['audio_index']}"
 
@@ -158,14 +169,18 @@ def render(args) -> dict:
     work.mkdir(exist_ok=True)
     out.mkdir(exist_ok=True)
 
-    measured = None
-    if not preview:
-        mgraph = work / "render_measure.txt"
-        _write_graph(mgraph, plan_mod.measure_graph(plan, audio_in))
-        measured = _loudnorm_json(
-            _ffmpeg_info(*inputs, "-/filter_complex", str(mgraph), "-map", "[a]", "-f", "null", "-")
-        )
-        mgraph.unlink(missing_ok=True)
+    # First loudness pass (audio only, fast). Also run for previews: loudnorm turns digital
+    # silence into NaN samples, so silence must be known before the render.
+    mgraph = work / "render_measure.txt"
+    _write_graph(mgraph, plan_mod.measure_graph(plan, audio_in))
+    measured = _loudnorm_json(
+        _ffmpeg_info(*inputs, "-/filter_complex", str(mgraph), "-map", "[a]", "-f", "null", "-")
+    )
+    mgraph.unlink(missing_ok=True)
+    if not all(math.isfinite(float(measured[k])) for k in plan_mod.MEASURED_KEYS):
+        measured = "silent"
+    elif preview:
+        measured = None  # single pass
     graph_file = work / "render_filter.txt"
     _write_graph(graph_file, plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info)))
 
@@ -240,8 +255,9 @@ def render(args) -> dict:
         "loudness": loud,
         "preview": preview,
     }
-    off = loud["integrated_lufs"] - plan_mod.TARGET_I
-    if abs(off) > 1:
+    if loud["integrated_lufs"] is None:
+        warnings.append("the reel is silent")
+    elif abs(off := loud["integrated_lufs"] - plan_mod.TARGET_I) > 1:
         warnings.append(
             f"loudness {loud['integrated_lufs']} LUFS is {off:+.1f} LU off target"
             " (loudnorm needs a few seconds of material)"

@@ -17,6 +17,7 @@ TARGET_I, TARGET_TP, TARGET_LRA = -14.0, -1.0, 11.0
 # loudnorm aims this much below TARGET_TP: AAC encoding overshoots the true peak by a few
 # tenths of a dB, and the finished file must still stay at or below TARGET_TP.
 TP_HEADROOM = 0.5
+MEASURED_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
 RATE = 48000
 
 
@@ -95,7 +96,7 @@ def build(edl: Edl, src_size: tuple[int, int], out_size: tuple[int, int]) -> Pla
         cx, cy, base = (crop.cx, crop.cy, crop.zoom) if crop else (0.5, 0.5, 1.0)
         # Zoom steps: (output frame where it starts, zoom). Hard punch-ins, no animation.
         steps = [(frame0, base)]
-        for t, z in sorted(seg.zoom_keys):
+        for t, z in sorted(seg.zoom_keys, key=lambda k: k[0]):  # ties: last in file wins
             f = round((t_out + t - seg.start) * fps)
             f = min(max(f, frame0), f_end)
             steps = [s for s in steps if s[0] < f] + [(f, z)]
@@ -147,8 +148,11 @@ def audio_chain(plan: Plan, audio_in: str) -> list[str]:
     return [split + ";", *lines, joined]
 
 
-def loudnorm(measured: dict | None) -> str:
-    """Second pass (linear, with first-pass numbers) or single pass when `measured` is None."""
+def loudnorm(measured: dict | str | None) -> str:
+    """Second pass (linear, with first-pass numbers), single pass when `measured` is None,
+    nothing for "silent" (loudnorm would turn digital silence into NaN)."""
+    if measured == "silent":
+        return f"aresample={RATE}"
     f = f"loudnorm=I={TARGET_I}:TP={TARGET_TP - TP_HEADROOM}:LRA={TARGET_LRA}"
     if measured:
         f += (
@@ -168,7 +172,9 @@ def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
     for i, r in enumerate(plan.ranges):
         w = r.window
         end = r.src_in + float(r.frames / plan.fps)
-        # Decode-side trim (frame accurate), then a constant frame rate with the last frame
+        # Decode-side trim (frame accurate; a range starts with the first source frame at or
+        # after src_in, so video may trail audio by < 1 source frame there, never drifting),
+        # then a constant frame rate with the last frame
         # held if the source runs short, then exactly `frames` frames.
         f = [
             f"trim=start={_t(r.src_in)}:end={_t(end)}",
@@ -186,7 +192,9 @@ def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
     return [*lines, joined]
 
 
-def graph(plan: Plan, measured: dict | None, video_in: str, audio_in: str, to_sdr: str = "") -> str:
+def graph(
+    plan: Plan, measured: dict | str | None, video_in: str, audio_in: str, to_sdr: str = ""
+) -> str:
     """Full render graph: [v] video, [a] normalised audio."""
     lines = [
         *video_chain(plan, video_in, to_sdr),
