@@ -85,3 +85,17 @@
 - Whisper large-v3-turbo dropped all three filler words ("äh", "ähm") from the synthetic test
   voice. Synthetic speech is not representative; filler retention must be measured on a real
   recording (Phase 0 in the brief).
+- Phase 0/1 measurement on one real recording (66 s German selfie video, iPhone HLG HDR,
+  rotated, VFR; the recording is not part of the repository). Whisper turbo with the disfluency
+  prompt found 9 of 9 filler words that the speaker confirmed, with none missed. Without the
+  prompt it found 0. The 4 gap-energy candidates were false alarms (tails of "und").
+  Transcription takes ~5 s.
+- Phase 1 acceptance on that recording: `videocut run` produced a 23.8 s 9:16 reel. The speaker
+  accepted it with 0 corrections, the target is ≤ 3. Fillers, a false start and an off-topic
+  aside were removed, and the thesis moved to the front as the hook. The reel is at −14.1 LUFS
+  and −1.45 dBTP, with no cut inside a blink after the face track (`edl check`, `verify`).
+- Per run with the speaker's own sign-in: plan 82 s / 14 turns, cut 108 s / 19 turns, API-price
+  equivalent ≈ $0.48 + $0.41 (logged in `work/runs.jsonl`).
+- The reel came out at 23.8 s, below the 30–45 s target for type 1 (the material did not
+  carry more). The island name is never spoken in the kept parts, so the plan proposes a text
+  overlay (Phase 2).
