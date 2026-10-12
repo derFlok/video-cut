@@ -28,7 +28,7 @@ from pathlib import Path
 from . import agent
 from .paths import ROOT
 from .tools.common import ToolError, read_job, resolve_job, update_job
-from .tools.job import approve_job, is_approved, project_sha
+from .tools.job import approve_job, is_approved, project_sha, read_approval, revoke_approval
 
 TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
 PREP = [["ingest", "--denoise"], ["transcribe"], ["sheet", "contact"]]
@@ -98,8 +98,8 @@ def open_job(ref: str, type_: str | None, brief: str | None) -> Path:
     data = read_job(job)
     changes = {k: v for k, v in (("type", type_), ("brief", brief)) if v and v != data.get(k)}
     if changes:
-        if is_approved(job, data):  # the approved plan was made for the old type/brief
-            changes.update(status="ingested", approval=None)
+        if is_approved(job):  # the approved plan was made for the old type/brief
+            revoke_approval(job)
         update_job(job, **changes)
     return job
 
@@ -234,7 +234,7 @@ def run(
         say("plan: approved")
 
     resume = plan_session if plan_session and project_sha(job) == plan_sha else None
-    approved_sha = read_job(job)["approval"]["project_sha256"]
+    approved_sha = read_approval(job)["project_sha256"]
     started = time.time()
     claude(job, "cut", CUT_PROMPT, max_turns, resume, say)
     if project_sha(job) != approved_sha:

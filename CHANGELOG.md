@@ -55,6 +55,8 @@
 - `videocut tool job approve`: the human gate. Stores the SHA-256 of `work/project.md` in
   `job.json` (status `approved`); a changed plan, type or brief is no longer approved. Refused
   inside agent runs (`VIDEOCUT_AGENT`).
+- Human gate: approvals are stored in `$VIDEOCUT_HOME/approvals/<id>.json`, outside the
+  agent-writable job folder (in-folder approvals are ignored); `render` refuses without one.
 - Agent runs may write only below `work/`; `job.json`, `.claude/`, `CLAUDE.md`, `.mcp.json` are
   denied. stderr of `claude` goes to a file (a full pipe could hang a run).
 - `videocut run <video|job> [--type] [--brief] [--approve] [--replan] [--max-turns]`: prep →

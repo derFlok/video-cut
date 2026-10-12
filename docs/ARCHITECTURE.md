@@ -61,7 +61,9 @@ out/       preview.mp4 | reel.mp4, cover.jpg, render.json                       
 
 Lifecycle (`status` in job.json): `new` → `ingested` (ingest) → `approved` (`job approve`, by a
 human). Approval stores the SHA-256 of `work/project.md`; `job show` reports `approved: true`
-only while the plan is unchanged, so a new plan needs a new approval.
+only while the plan is unchanged, so a new plan needs a new approval. The trusted record lives outside the
+agent-writable job folder, in `$VIDEOCUT_HOME/approvals/<id>.json` (job path, time, SHA-256);
+job.json only mirrors it for display, and `render` (also `--preview`) refuses without it.
 
 Ingest is idempotent: an output newer than its input is kept. DeepFilterNet runs with delay
 compensation (`-D`) so cleaned audio stays in sync with the picture. Transcribe keeps a

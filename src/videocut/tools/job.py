@@ -2,10 +2,14 @@
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
-               approval {at, project_sha256} once a human approved work/project.md
+               approval {at, project_sha256}: a display copy only, never trusted
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
     out/       finished renders
+
+The approval itself lives outside the job folder, which agent runs may write to:
+$VIDEOCUT_HOME/approvals/<id>.json = {job, at, project_sha256}. Only that record, matched
+against the current work/project.md, counts as approved.
 """
 
 import hashlib
@@ -20,6 +24,7 @@ from .common import (
     ID_RE,
     JOB_FILE,
     ToolError,
+    home,
     job_parent,
     jobs_root,
     read_job,
@@ -52,15 +57,33 @@ def project_sha(job: Path) -> str | None:
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
 
 
-def is_approved(job: Path, data: dict | None = None) -> bool:
-    """True when a human approved work/project.md and it is unchanged since."""
-    data = data if data is not None else read_job(job)
+def approvals_root() -> Path:
+    """Approval records; outside every job folder, so an agent run cannot reach them."""
+    return home() / "approvals"
+
+
+def approval_path(job: Path) -> Path:
+    return approvals_root() / f"{job.resolve().name}.json"
+
+
+def read_approval(job: Path) -> dict | None:
+    """The human approval of this job folder, or None (missing, unreadable, other folder)."""
+    try:
+        record = json.loads(approval_path(job).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("job") != str(job.resolve()):
+        return None
+    return record
+
+
+def is_approved(job: Path) -> bool:
+    """True when a human approved work/project.md and it is unchanged since.
+
+    Reads only the record under approvals/; status/approval in job.json are not trusted."""
     sha = project_sha(job)
-    return (
-        data.get("status") == "approved"
-        and sha is not None
-        and (data.get("approval") or {}).get("project_sha256") == sha
-    )
+    record = read_approval(job)
+    return sha is not None and record is not None and record.get("project_sha256") == sha
 
 
 def approve_job(job: Path) -> dict:
@@ -69,7 +92,14 @@ def approve_job(job: Path) -> dict:
         raise ToolError(f"{PROJECT} is missing; run the plan step first")
     approval = {"at": datetime.now().astimezone().isoformat(timespec="seconds")}
     approval["project_sha256"] = sha
+    approvals_root().mkdir(parents=True, exist_ok=True)
+    write_json(approval_path(job), {"job": str(job.resolve()), **approval})
     return update_job(job, status="approved", approval=approval)
+
+
+def revoke_approval(job: Path) -> None:
+    approval_path(job).unlink(missing_ok=True)
+    update_job(job, status="ingested", approval=None)
 
 
 def _default_id(video: Path, now: datetime) -> str:
@@ -127,7 +157,7 @@ def show(args) -> dict:
     return {
         "job": str(job),
         **data,
-        "approved": is_approved(job, data),
+        "approved": is_approved(job),
         "artefacts": present,
         "out": outputs,
     }

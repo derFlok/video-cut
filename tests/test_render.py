@@ -8,6 +8,8 @@ import numpy as np
 import pytest
 from helpers import run_tool
 
+from videocut.tools.job import approve_job
+
 pytestmark = pytest.mark.media
 
 FRAME = 1 / clips.FPS
@@ -27,6 +29,8 @@ def _job(capsys, clip, job_id, segments=SEGMENTS, **extra) -> Path:
     job = Path(s["job"])
     edl = {"fps": 30, "size": [1080, 1920], "source": s["source"], "segments": segments, **extra}
     (job / "work" / "edl.json").write_text(json.dumps(edl))
+    (job / "work" / "project.md").write_text("# Plan: render test\n")
+    approve_job(job)  # render refuses before the human gate
     return job
 
 
