@@ -91,6 +91,9 @@ another.
    - `overlay_on_face` → move the overlay to a moment where the face is elsewhere, shorten its
      text, or use a smaller scene (a `keyword` instead of a `number_card`).
    - `overlay_in_safe_zone` → shorter text (fewer lines), or drop the overlay.
+   - `overlay_overlap` → the overlay and a caption fight for the same free strip (typical
+     when the face fills the frame). Move the overlay to a moment with more room, make it
+     smaller, or drop it; never leave one covering the other.
    - a flagged `caption` group cannot be moved; note it in the report.
    - `cta_end` is a full-frame end card and is never flagged.
 4. Look only at `out/verify/overlays_NN.jpg` (one tile per overlay) and, if a caption is in

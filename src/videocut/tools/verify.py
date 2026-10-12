@@ -27,8 +27,10 @@ track are in the output px of work/overlays.json)
     flag `overlay_in_safe_zone` when a box reaches into the organic safe zones (top 250 px,
     bottom 350 px, 6 % at the sides, docs/BRIEF.md §8); flag `overlay_on_face` when a box
     covers more than 2 % of the face box at any face sample (output time) while it is
-    visible. A full-frame end card (`cta_end`) is exempt from both: it hides the video on
-    purpose and keeps its own content inside the safe area.
+    visible; flag `overlay_overlap` when an overlay and a caption on screen at the same time
+    share more than 10 % of the smaller box (one hides the other: there was no free room).
+    A full-frame end card (`cta_end`) is exempt from these and from the frozen check: it
+    hides the video on purpose and keeps its own content inside the safe area.
     out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
     out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
@@ -79,6 +81,7 @@ FLOOR = 1e-4  # about -80 dBFS: keeps ratios finite next to digital silence
 STRIP_TILES, TILE_W, WAVE_H = 5, 216, 140
 FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
 CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
+BLOCK_OVERLAP_MAX = 0.1  # share of the smaller box an overlay and a caption may share
 FULL_FRAME_SCENES = {"cta_end"}  # end card: an opaque plate over the whole frame, by design
 CAPTION_COLS = 3
 
@@ -295,6 +298,15 @@ def overlay_checks(boxes: list[dict], face: list[dict], size: tuple[int, int]) -
                     worst, at = share, f["t"]
         if worst > FACE_OVERLAP_MAX and b.get("scene") not in FULL_FRAME_SCENES:
             flags.append("overlay_on_face")
+        if b.get("scene") not in ("caption", *FULL_FRAME_SCENES) and any(
+            c.get("scene") == "caption"
+            and c["t0"] < b["t1"]
+            and c["t1"] > b["t0"]
+            and overlap(b["box"], c["box"])
+            > BLOCK_OVERLAP_MAX * min(_area(b["box"]), _area(c["box"]))
+            for c in boxes
+        ):
+            flags.append("overlay_overlap")
         out.append(
             {
                 "scene": b.get("scene"),
@@ -307,6 +319,19 @@ def overlay_checks(boxes: list[dict], face: list[dict], size: tuple[int, int]) -
             }
         )
     return out
+
+
+def _area(b: list[float]) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def full_frame_spans(overlays: list[dict]) -> list[tuple[float, float]]:
+    return [
+        (o["t0"], o["t1"])
+        for o in overlays
+        if isinstance(o, dict) and o.get("scene") in FULL_FRAME_SCENES
+        and _num(o.get("t0")) and _num(o.get("t1"))
+    ]  # fmt: skip
 
 
 def _num(v) -> bool:
@@ -530,7 +555,16 @@ def verify(args) -> dict:
         )
 
     loud = loudness(reel)
-    stretches = bad_stretches(reel, video_dur)
+    # A static end card is not a frozen picture (one frame of slack at either end).
+    plates = full_frame_spans(edl.overlays) if edl is not None else []
+    stretches = [
+        s
+        for s in bad_stretches(reel, video_dur)
+        if not (
+            s["kind"] == "frozen"
+            and any(a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in plates)
+        )
+    ]
     want = float(render["output_duration"])
     want_size = tuple(x // 4 * 2 for x in TARGET_SIZE) if preview else TARGET_SIZE
     lufs, peak = loud["integrated_lufs"], loud["true_peak_dbtp"]

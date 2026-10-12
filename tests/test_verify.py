@@ -255,3 +255,17 @@ def test_full_frame_end_card_is_not_flagged():
     out = verify.overlay_checks(boxes, face, (1080, 1920))
     assert out[0]["flags"] == []
     assert out[1]["flags"] == ["overlay_in_safe_zone", "overlay_on_face"]
+
+
+def test_overlay_covering_a_caption_is_flagged():
+    boxes = [
+        {"scene": "caption", "t0": 1.0, "t1": 2.0, "box": [300, 300, 780, 480]},
+        {"scene": "keyword", "t0": 1.5, "t1": 4.0, "box": [350, 320, 730, 500]},
+        {"scene": "keyword", "t0": 2.0, "t1": 4.0, "box": [350, 1300, 730, 1450]},  # later, apart
+        {"scene": "cta_end", "t0": 0.5, "t1": 2.0, "box": [0, 0, 1080, 1920]},
+    ]
+    flags = [o["flags"] for o in verify.overlay_checks(boxes, [], (1080, 1920))]
+    assert flags == [[], ["overlay_overlap"], [], []]
+    assert verify.full_frame_spans([{"scene": "cta_end", "t0": 1, "t1": 2}, {"scene": "x"}]) == [
+        (1, 2)
+    ]

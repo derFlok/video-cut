@@ -108,6 +108,8 @@ function allowedArea(size, safe, inset = 0) {
 // clears the face first, then the other blocks, then lies closest to the preferred
 // spot. `inset` keeps that much extra distance from the safe zones (room for
 // transitions that draw outside the box). Returns {box, overlapsFace, overlapsBlock}.
+const SCAN_STEP = 8; // px between candidate positions of the vertical scan
+
 function placeBlock({ size, safe, w, h, face, avoid = [], position = "center", margin = 24, inset = 0 }) {
   const [ax0, ay0, ax1, ay1] = allowedArea(size, safe, inset);
   const x0 = Math.round(Math.max(ax0, Math.min(ax1 - w, (size[0] - w) / 2)));
@@ -121,6 +123,9 @@ function placeBlock({ size, safe, w, h, face, avoid = [], position = "center", m
   const others = avoid.map(grow);
   const ys = [preferred];
   for (const b of faceG ? [faceG, ...others] : others) ys.push(clampY(Math.ceil(b[3])), clampY(Math.floor(b[1] - h)));
+  // Plus a scan of the whole allowed height, so a free gap between several obstacles is
+  // found too (the spots next to one obstacle may each collide with another).
+  if (faceG || others.length) for (let y = ay0; y <= ay1 - h; y += SCAN_STEP) ys.push(clampY(y));
   const best = ys
     .map((y) => ({
       y,
