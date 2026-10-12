@@ -12,9 +12,10 @@ Numbers per cut
     visual   mean absolute luma difference across the cut vs. the median difference of the
              neighbouring frame pairs; `jump_score` is their ratio. A jump cut in a talking
              head is expected, so a clear jump is only reported as info `jump_cut`; the flag
-             `visual_jump` is reserved for a jump far above the median jump_score of the
-             reel's other cuts (e.g. a cut into a different shot or a glitch frame) where
-             the EDL does not change the framing (crop or zoom: info `reframe`)
+             `visual_jump` is reserved for a jump far above (>= 3x, and >= 8) the
+             median jump_score of the reel's other cuts (e.g. a cut into a different shot
+             or a glitch frame) where the EDL does not change the framing (crop or zoom:
+             info `reframe`)
     audio    `click_peak`: largest sample-to-sample step within +-10 ms of the cut relative to
              the median step size around it; `hf_spike_db`: energy of the second difference
              (a high-pass) within +-10 ms vs. its local median (flag `click`)
@@ -48,6 +49,7 @@ TRUE_PEAK_MAX = -1.0
 MAX_STRETCH_S = 0.5
 VISUAL_MIN_DIFF, VISUAL_MIN_SCORE = 8.0, 4.0  # luma levels (0..255), ratio to neighbours
 LARGE_JUMP_X_MEDIAN = 3.0  # `visual_jump`: jump_score this many times the other cuts' median
+LARGE_JUMP_MIN = 8.0  # ... and at least this (a still pose with a few normal jump cuts)
 CLICK_PEAK_MAX, HF_SPIKE_DB_MAX = 12.0, 15.0
 CLICK_HALF_S, BASE_S, BLOCK = 0.010, 0.100, 240
 FLOOR = 1e-4  # about -80 dBFS: keeps ratios finite next to digital silence
@@ -160,7 +162,9 @@ def cut_notes(
         info.append("jump_cut")
         if reframe:
             info.append("reframe")
-        elif median_jump and visual["jump_score"] >= LARGE_JUMP_X_MEDIAN * median_jump:
+        elif median_jump is not None and visual["jump_score"] >= max(
+            LARGE_JUMP_MIN, LARGE_JUMP_X_MEDIAN * median_jump
+        ):
             flags.append("visual_jump")
     if audio["click_peak"] is not None and (
         audio["click_peak"] >= CLICK_PEAK_MAX or audio["hf_spike_db"] >= HF_SPIKE_DB_MAX

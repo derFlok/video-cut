@@ -13,6 +13,8 @@ from helpers import run_tool
 from videocut import agent, run, settings
 from videocut.tools import job as job_tool
 
+REAL_PREP = run.prep  # the `fake` fixture replaces run.prep
+
 # Captured at import, before the autouse fixture points VIDEOCUT_HOME at a temp folder.
 REAL_MODELS = Path(os.environ.get("VIDEOCUT_HOME", Path.home() / "VideoCut")) / "models"
 
@@ -43,7 +45,11 @@ def test_plan_and_cut_runs_are_restricted(monkeypatch, prompt):
     assert values("--allowedTools") == agent.ALLOWED
     assert [a for a in agent.ALLOWED if a.startswith("Bash")] == ["Bash(videocut tool *)"]
     assert not any(a.startswith(("Task", "Agent", "WebFetch", "WebSearch")) for a in agent.ALLOWED)
-    assert values("--disallowedTools") == ["Write(./job.json)", "Edit(./job.json)"]
+    writes = [a for a in agent.ALLOWED if a.startswith(("Write", "Edit"))]
+    assert writes == ["Write(./work/**)", "Edit(./work/**)", "Write(./pong.txt)"]
+    denied = values("--disallowedTools")
+    for path in ("./job.json", "./.claude/**", "./CLAUDE.md", "./.mcp.json"):
+        assert f"Write({path})" in denied and f"Edit({path})" in denied
     assert values("--permission-mode") == ["dontAsk"]
     assert values("--max-turns") == ["40"] and values("--resume") == ["sess-1"]
     assert env["VIDEOCUT_AGENT"] == "1"
@@ -76,7 +82,7 @@ class FakeClaude:
         else:
             assert job_tool.is_approved(job_dir)
             (job_dir / "out" / "reel.mp4").write_bytes(b"x")
-            (job_dir / "out" / "verify.json").write_text('{"ok": true}')
+            (job_dir / "out" / "verify.json").write_text('{"ok": true, "reel": "out/reel.mp4"}')
         usage = {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}
         return agent.Result(True, "done", f"s-{phase}", 0.12, 7, "local", usage, 3000)
 
@@ -85,6 +91,7 @@ class FakeClaude:
 def fake(monkeypatch, tmp_path, capsys):
     claude = FakeClaude()
     monkeypatch.setattr(run.agent, "run", claude)
+    monkeypatch.setattr(run.agent.shutil, "which", lambda _: "/usr/local/bin/claude")
     monkeypatch.setattr(run, "prep", lambda job, steps=None, say=print: None)
     v = tmp_path / "take.mov"
     v.write_bytes(b"not a video")
@@ -127,7 +134,7 @@ def test_run_refuses_a_plan_run_that_writes_an_edl(fake, monkeypatch):
         return claude(prompt, job_dir, *a, **k)
 
     monkeypatch.setattr(run.agent, "run", bad)
-    with pytest.raises(run.RunError, match="edl.json"):
+    with pytest.raises(run.RunError, match="must only plan"):
         run.run(str(video), approve=True, say=lambda _: None)
 
 
@@ -195,3 +202,37 @@ def test_prep_then_handwritten_edl_renders_and_verifies(capsys, clip_dir, videoc
     assert s["checked"] == "out/reel.mp4" and s["cuts"] == len(segments) - 1
     assert s["ok"] is True, (s["flagged"], s["failed"], s["info"])  # jump cuts: info only
     assert (job / "out" / "reel.mp4").stat().st_size > 10_000
+
+
+def test_run_rejects_a_cut_run_without_final_render(fake, monkeypatch):
+    claude, video = fake
+
+    def preview_only(prompt, job_dir, *a, **k):
+        res = claude(prompt, job_dir, *a, **k)
+        if prompt == run.CUT_PROMPT:
+            (job_dir / "out" / "verify.json").write_text('{"ok": true, "preview": true}')
+        return res
+
+    monkeypatch.setattr(run.agent, "run", preview_only)
+    with pytest.raises(run.RunError, match="preview"):
+        run.run(str(video), approve=True, say=lambda _: None)
+
+
+def test_changed_brief_revokes_approval_and_stale_contract_goes(fake, monkeypatch, tmp_path):
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), approve=True, say=lines.append) == 0
+    job = Path(lines[0].split("job: ")[1])
+    assert job_tool.is_approved(job)
+    run.open_job(job.name, None, "a different brief")
+    assert not job_tool.is_approved(job)
+    # prep copies the contract of the type and removes it when the type has none
+    monkeypatch.setattr(run, "TEMPLATES", tmp_path / "templates")
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "thought.md").write_text("30-45 s")
+    run.open_job(job.name, "thought", None)
+    REAL_PREP(job, steps=[])
+    assert (job / "work" / "contract.md").read_text() == "30-45 s"
+    run.open_job(job.name, "../thought", None)
+    REAL_PREP(job, steps=[])
+    assert not (job / "work" / "contract.md").exists()

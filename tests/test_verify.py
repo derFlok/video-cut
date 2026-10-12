@@ -150,6 +150,9 @@ def test_talking_head_jump_cuts_are_info_not_flags():
     assert verify.cut_notes(_vis(50.0), QUIET, None) == ([], ["jump_cut"])
     # far above the other cuts' median: flagged
     assert verify.cut_notes(_vis(30.0), QUIET, 8.0) == (["visual_jump"], ["jump_cut"])
+    # still pose: smooth cuts around 1, a normal jump cut at 4.5 is not a glitch
+    assert verify.cut_notes(_vis(4.5), QUIET, 1.0) == ([], ["jump_cut"])
+    assert verify.cut_notes(_vis(30.0), QUIET, 0.0) == (["visual_jump"], ["jump_cut"])
     # no visible jump: neither
     assert verify.cut_notes(_vis(1.2), QUIET, 8.0) == ([], [])
     assert verify.cut_notes(_vis(1.2), {"click_peak": 20.0, "hf_spike_db": 0.0}, 8.0) == (

@@ -53,8 +53,10 @@
   stops; the cut run writes `work/edl.json`, previews, verifies, fixes (max. 3 rounds), renders
   and writes `work/cut_report.md`. Both keep an image budget.
 - `videocut tool job approve`: the human gate. Stores the SHA-256 of `work/project.md` in
-  `job.json` (status `approved`); a changed plan is no longer approved. Refused inside agent
-  runs (`VIDEOCUT_AGENT`), and agent runs cannot write or edit `job.json`.
+  `job.json` (status `approved`); a changed plan, type or brief is no longer approved. Refused
+  inside agent runs (`VIDEOCUT_AGENT`).
+- Agent runs may write only below `work/`; `job.json`, `.claude/`, `CLAUDE.md`, `.mcp.json` are
+  denied. stderr of `claude` goes to a file (a full pipe could hang a run).
 - `videocut run <video|job> [--type] [--brief] [--approve] [--replan] [--max-turns]`: prep →
   plan run → approval prompt → cut run (resumes the plan session) → `out/`. Every Claude run
   appends wall time, turns, cost and token usage to `work/runs.jsonl`.
@@ -63,7 +65,7 @@
 ### Changed
 - Verify: a talking-head jump cut is expected. A clear visual jump is reported as info
   `jump_cut` (`reframe` when the EDL changes crop/zoom there); the flag `visual_jump` is kept
-  for a jump ≥ 3× the median of the reel's other cuts without a reframe. Verify checks the
+  for a jump ≥ 3× (and ≥ 8) the median of the reel's other cuts without a reframe. Verify checks the
   preview (`out/preview.mp4`, half size, loudness not judged) when the last render was one.
 - Waveforms in burst, timeline and verify pictures are peak-normalised per picture (gain capped
   at +26 dB) and drawn per-pixel peak, so normal speech levels are readable.

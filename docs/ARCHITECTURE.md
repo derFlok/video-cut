@@ -95,8 +95,12 @@ Every Claude run appends `{phase, wall_s, turns, cost_usd, usage, duration_ms, s
 resumed, auth}` to `work/runs.jsonl` (the token and runtime log of BRIEF §11).
 
 Guardrails of an agent run (`agent.py`): tools `Bash,Read,Write,Edit,Skill` (no subagents, no
-web, no MCP); Bash only `videocut tool *`; Read/Write/Edit only `./**` (the job folder);
-`job.json` is read-only; `VIDEOCUT_AGENT=1` is set, so `job approve` refuses.
+web, no MCP); Bash only `videocut tool *`; Read only `./**` (the job folder); Write/Edit only
+`./work/**` (plus the ping file); `job.json`, `.claude/`, `CLAUDE.md` and `.mcp.json` denied,
+so an injected run cannot plant settings or hooks for the next one; `VIDEOCUT_AGENT=1` is
+set, so `job approve` refuses. `videocut run` also fails when the plan run wrote an EDL or
+rendered, when `project.md` changed during the cut run, or when the cut run did not end with
+a fresh full render + verify.
 
 **Deviation from BRIEF §5/§6:** pictures are not handed to subagents (the restricted runner
 has no Task tool); the skills keep an image budget instead.
@@ -105,7 +109,7 @@ has no Task tool); the skills keep an image budget instead.
 
 Per inner cut: a luma jump score, audio click numbers and a picture. A jump cut in a talking
 head is expected: a clear jump is info `jump_cut` (plus `reframe` when the EDL changes crop or
-zoom at that cut). The flag `visual_jump` is raised only for a jump ≥ 3× the median jump score
+zoom at that cut). The flag `visual_jump` is raised only for a jump ≥ 3× (and ≥ 8) the median jump score
 of the reel's other cuts without a reframe; `click` for an audio step. Global checks: duration,
 loudness, true peak, size, black/frozen stretches. After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
