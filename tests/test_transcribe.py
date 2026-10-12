@@ -131,7 +131,9 @@ def test_pack_size_stays_small_for_minutes_of_speech():
 
 def test_filler_word_list():
     assert energy.filler_score("Ähm,") and energy.filler_score("äääh...")
-    assert energy.filler_score("Um,") and energy.filler_score("hmm")
+    assert energy.filler_score("Um,", "en") and energy.filler_score("hmm")
+    assert energy.filler_score("Mmm") and energy.filler_score("um") is None  # German "um"
+    assert energy.filler_score("...") is None
     assert energy.filler_score("er") is None and energy.filler_score("Ich") is None
 
 

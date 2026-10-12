@@ -38,7 +38,7 @@ FILLERS = {
     "äh": 0.95, "ähm": 0.95, "äm": 0.9, "öh": 0.9, "öhm": 0.9, "eh": 0.7, "ehm": 0.9,
     "hm": 0.6, "mhm": 0.5, "hmhm": 0.5,
     # English
-    "uh": 0.95, "um": 0.95, "uhm": 0.95, "erm": 0.9, "mm": 0.5,
+    "uh": 0.95, "um": 0.95, "uhm": 0.95, "erm": 0.9, "m": 0.5,
 }  # fmt: skip
 
 
@@ -47,8 +47,16 @@ def normalise(word: str) -> str:
     return re.sub(r"(.)\1+", r"\1", w)
 
 
-def filler_score(word: str) -> float | None:
-    return FILLERS.get(normalise(word))
+# Real words in German ("um zu", "eh schon"): fillers only in English recordings. Elsewhere
+# they still count when they stand alone between pauses (see _isolated_short).
+ENGLISH_ONLY = {"um", "eh"}
+
+
+def filler_score(word: str, language: str | None = "de") -> float | None:
+    w = normalise(word)
+    if w in ENGLISH_ONLY and not (language or "").startswith("en"):
+        return None
+    return FILLERS.get(w)
 
 
 def read_wav(path: Path) -> tuple[np.ndarray, int]:
@@ -161,7 +169,7 @@ def expected_word_s(word: str) -> float:
     return 0.1 + 0.075 * len(normalise(word))
 
 
-def find(words: list[dict], frames: Frames, duration: float) -> dict:
+def find(words: list[dict], frames: Frames, duration: float, language: str | None = "de") -> dict:
     """candidates.json content for `words` (each {"w", "t0", "t1", ...}) on `frames`."""
     pauses, fillers = [], []
     # Gaps: start of file -> first word, between words, last word -> end of file.
@@ -184,7 +192,7 @@ def find(words: list[dict], frames: Frames, duration: float) -> dict:
             score = round(run["score"] * (SPILL_FACTOR if spill else 1.0), 2)
             fillers.append({**run, "score": score, "kind": "gap_energy", "text": None})
     for k, w in enumerate(words):
-        score = filler_score(w["w"])
+        score = filler_score(w["w"], language)
         if score is None and _isolated_short(words, k):
             score = ISOLATED_SCORE
         if score is not None:
@@ -213,7 +221,7 @@ def find(words: list[dict], frames: Frames, duration: float) -> dict:
 def _isolated_short(words: list[dict], k: int) -> bool:
     """A word of <= 3 letters standing alone between pauses: often a filler the model
     wrote as a real word ("Im.", "Em.")."""
-    if len(normalise(words[k]["w"])) > 3:
+    if not 0 < len(normalise(words[k]["w"])) <= 3:
         return False
     before = words[k]["t0"] - words[k - 1]["t1"] if k else ISOLATED_GAP_S
     after = words[k + 1]["t0"] - words[k]["t1"] if k + 1 < len(words) else ISOLATED_GAP_S

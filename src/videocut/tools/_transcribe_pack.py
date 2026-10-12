@@ -65,7 +65,8 @@ def retakes(words: list[dict], groups: list[list[int]], filler_idx: set[int]) ->
                 and same_start.size >= RETAKE_MIN_WORDS
                 and same_start.size >= 0.8 * min(len(a), len(b))
             )
-            if m.ratio() >= RETAKE_SIMILARITY or restart:
+            similar = min(len(a), len(b)) > RETAKE_MIN_WORDS and m.ratio() >= RETAKE_SIMILARITY
+            if similar or restart:
                 found[j] = i
                 break
     return found
@@ -76,9 +77,9 @@ def pack(words_doc: dict, candidates: dict | None = None) -> str:
     fillers = (candidates or {}).get("fillers", [])
     # Word-kind fillers mark the word itself; gap_energy ones become markers by time.
     filler_idx: set[int] = set()
-    by_span = {(f["t0"], f["t1"]) for f in fillers if f["kind"] == "word"}
+    by_span = {(f["t0"], f["t1"], f["text"]) for f in fillers if f["kind"] == "word"}
     for i, w in enumerate(words):
-        if (w["t0"], w["t1"]) in by_span:
+        if (w["t0"], w["t1"], w["w"]) in by_span:
             filler_idx.add(i)
     voice = sorted((f for f in fillers if f["kind"] == "gap_energy"), key=lambda f: f["t0"])
 

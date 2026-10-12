@@ -123,7 +123,8 @@ def run_parakeet(audio: Path) -> tuple[list, str]:
         if raw and not tok.text.startswith(" "):
             raw[-1][0] += tok.text
             raw[-1][2] = tok.end
-            raw[-1][3] = min(raw[-1][3], tok.confidence)
+            confs = [c for c in (raw[-1][3], tok.confidence) if c is not None]
+            raw[-1][3] = min(confs) if confs else None
         else:
             raw.append([tok.text, tok.start, tok.end, tok.confidence])
     return [tuple(r) for r in raw], "auto"
@@ -143,7 +144,8 @@ def make_candidates(work: Path) -> dict:
     doc = json.loads(words_file.read_text())
     x, rate = energy.read_wav(work / "audio.wav")
     frames = energy.Frames(x, rate)
-    cands = energy.find(doc["words"], frames, doc.get("duration") or len(x) / rate)
+    duration = doc.get("duration") or len(x) / rate
+    cands = energy.find(doc["words"], frames, duration, doc.get("language"))
     write_json(work / "candidates.json", cands)
     packed = pack(doc, cands)
     tmp = work / "takes_packed.md.tmp"
