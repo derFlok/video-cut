@@ -7,6 +7,8 @@ import clips
 import pytest
 from helpers import run_tool
 
+from videocut.tools import verify
+
 pytestmark = pytest.mark.skipif(clips.ffmpeg() is None, reason="needs ffmpeg")
 
 AMP = 0.3056  # a sine of this amplitude measures about -14 LUFS
@@ -76,8 +78,11 @@ def test_hard_cut_is_flagged_and_faded_cut_passes(capsys, reel):
     hard, soft = doc["cuts"]
     assert "click" in hard["flags"] and hard["audio"]["click_peak"] >= 12
     assert soft["flags"] == [], soft
-    assert "visual_jump" in hard["flags"] and hard["visual"]["jump_score"] >= 4
-    assert "visual_jump" not in soft["flags"]
+    # the inverted picture is far above the other cut's jump: info and flag
+    assert hard["info"] == ["jump_cut"] and hard["visual"]["jump_score"] >= 4
+    assert "visual_jump" in hard["flags"]
+    assert "visual_jump" not in soft["flags"] and soft["info"] == []
+    assert [i["cut"] for i in s["info"]] == [1]
     assert s["ok"] is False
     assert [f["cut"] for f in s["flagged"]] == [1]
     assert s["images"] == ["out/verify/cut_01.jpg", "out/verify/cut_02.jpg"]
@@ -129,3 +134,39 @@ def test_cut_outside_the_reel_is_a_failed_check(capsys, reel):
     job = _job(capsys, reel, [1.0, 9.0])
     code, s, _ = run_tool(capsys, "verify", "--job", str(job))
     assert code == 0 and "cuts_in_range" in s["failed"] and s["cuts"] == 1
+
+
+def _vis(score):
+    return {"diff_cut": 30.0, "diff_around": 30.0 / score, "jump_score": score}
+
+
+QUIET = {"click_peak": 1.0, "hf_spike_db": 0.0}
+
+
+def test_talking_head_jump_cuts_are_info_not_flags():
+    # similar jumps everywhere (normal jump cuts): reported, not flagged
+    assert verify.cut_notes(_vis(9.0), QUIET, 8.0) == ([], ["jump_cut"])
+    # a lone jump cut has no baseline and is never flagged
+    assert verify.cut_notes(_vis(50.0), QUIET, None) == ([], ["jump_cut"])
+    # far above the other cuts' median: flagged
+    assert verify.cut_notes(_vis(30.0), QUIET, 8.0) == (["visual_jump"], ["jump_cut"])
+    # no visible jump: neither
+    assert verify.cut_notes(_vis(1.2), QUIET, 8.0) == ([], [])
+    assert verify.cut_notes(_vis(1.2), {"click_peak": 20.0, "hf_spike_db": 0.0}, 8.0) == (
+        ["click"],
+        [],
+    )
+
+
+def test_reframe_at_a_cut_is_info_not_a_flag():
+    from videocut.edl import from_dict
+
+    segs = [
+        {"in": 0.0, "out": 2.0, "zoom_keys": [[1.0, 1.25]]},  # ends zoomed in
+        {"in": 3.0, "out": 5.0},  # starts at 1.0: reframe
+        {"in": 6.0, "out": 8.0},  # same framing: plain jump cut
+        {"in": 9.0, "out": 10.0, "crop": {"cx": 0.4, "cy": 0.5, "zoom": 1.0}},  # moved
+    ]
+    edl = from_dict({"fps": 30, "size": [1080, 1920], "source": "input/a.mp4", "segments": segs})
+    assert verify.reframes(edl) == [True, False, True]
+    assert verify.cut_notes(_vis(30.0), QUIET, 8.0, reframe=True) == ([], ["jump_cut", "reframe"])

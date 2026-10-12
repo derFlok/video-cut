@@ -3,7 +3,9 @@
 Claude runs as the official `claude` program with:
 - the Video Cut plugin (skills) from this repository,
 - exactly five tools (Bash, Read, Write, Edit, Skill), no MCP servers, no web access,
-- Bash limited to `videocut tool ...`, file access limited to the job folder,
+- Bash limited to `videocut tool ...`, file access limited to the job folder, and job.json
+  read-only (it carries the human approval; `videocut tool job approve` refuses to run
+  inside an agent run, see VIDEOCUT_AGENT),
 - "don't ask" permissions: anything not allowed is refused, nothing waits for a human.
 
 Auth: "local" uses the user's own Claude Code sign-in (personal use only, see docs/AUTH.md);
@@ -25,6 +27,7 @@ from .paths import ROOT, tool_env
 PLUGIN = ROOT / "claude-plugin"
 TOOLS = "Bash,Read,Write,Edit,Skill"
 ALLOWED = ["Bash(videocut tool *)", "Read(./**)", "Write(./**)", "Edit(./**)", "Skill"]
+DENIED = ["Write(./job.json)", "Edit(./job.json)"]
 EMPTY_MCP = '{"mcpServers": {}}'
 
 
@@ -47,6 +50,8 @@ class Result:
     cost_usd: float | None
     turns: int | None
     auth: str
+    usage: dict | None = None  # token counts of the result event
+    duration_ms: int | None = None
 
 
 def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tuple[list[str], dict]:
@@ -64,6 +69,8 @@ def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tupl
         TOOLS,
         "--allowedTools",
         *ALLOWED,
+        "--disallowedTools",
+        *DENIED,
         "--permission-mode",
         "dontAsk",
         "--strict-mcp-config",
@@ -83,6 +90,7 @@ def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tupl
     env = tool_env()
     env["PATH"] = f"{ROOT / '.venv' / 'bin'}{os.pathsep}{env['PATH']}"
     env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+    env["VIDEOCUT_AGENT"] = "1"
     env.pop("ANTHROPIC_API_KEY", None)
     if conf["auth"] == "apikey":
         key = settings.api_key()
@@ -122,6 +130,8 @@ def _events(line: str) -> Iterator[Event]:
                 "cost_usd": d.get("total_cost_usd"),
                 "turns": d.get("num_turns"),
                 "subtype": d.get("subtype"),
+                "usage": d.get("usage"),
+                "duration_ms": d.get("duration_ms"),
             },
         )
 
@@ -132,8 +142,9 @@ def run(
     on_event: Callable[[Event], None] = lambda e: None,
     resume: str | None = None,
     log: Path | None = None,
+    max_turns: int = 60,
 ) -> Result:
-    cmd, env = command(prompt, resume)
+    cmd, env = command(prompt, resume, max_turns)
     auth = settings.load()["auth"]
     final: Event | None = None
     log_f = log.open("a") if log else None
@@ -170,4 +181,6 @@ def run(
         final.data.get("cost_usd"),
         final.data.get("turns"),
         auth,
+        final.data.get("usage"),
+        final.data.get("duration_ms"),
     )

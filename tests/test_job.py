@@ -74,3 +74,27 @@ def test_failed_import_leaves_no_job(capsys, tmp_path, monkeypatch, videocut_hom
     code, s, _ = run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "f1")
     assert code == 1 and "disk full" in s["error"]
     assert not (videocut_home / "jobs" / "f1").exists()
+
+
+def test_approve_needs_project_and_tracks_its_content(capsys, tmp_path, videocut_home):
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "ap")
+    job = videocut_home / "jobs" / "ap"
+    code, s, _ = run_tool(capsys, "job", "approve", "ap")
+    assert code == 1 and "project.md" in s["error"]
+    (job / "work" / "project.md").write_text("# plan\n")
+    code, s, _ = run_tool(capsys, "job", "approve", "ap")
+    assert code == 0 and s["status"] == "approved" and len(s["project_sha256"]) == 64
+    assert run_tool(capsys, "job", "show", "ap")[1]["approved"] is True
+    # a plan changed after approval is no longer approved
+    (job / "work" / "project.md").write_text("# plan, rewritten\n")
+    _, s, _ = run_tool(capsys, "job", "show", "ap")
+    assert s["approved"] is False and "work/project.md" in s["artefacts"]
+
+
+def test_agent_runs_cannot_approve(capsys, tmp_path, videocut_home, monkeypatch):
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "ag")
+    (videocut_home / "jobs" / "ag" / "work" / "project.md").write_text("# plan\n")
+    monkeypatch.setenv("VIDEOCUT_AGENT", "1")
+    code, s, _ = run_tool(capsys, "job", "approve", "ag")
+    assert code == 1 and "human" in s["error"]
+    assert run_tool(capsys, "job", "show", "ag")[1]["approved"] is False

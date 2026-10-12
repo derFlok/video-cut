@@ -166,11 +166,12 @@ def burst(args) -> dict:
     w1 = min(v["duration"], args.t + args.span)
     font = im.find_font()
     seek = max(0.0, times[0] - 0.5)
+    gain = im.wave_gain(im.window_peak(wav, w0, w1))
     graph = (
         f"[0:v]select='{im.select_times(times, fps)}',scale={tw}:{th}"
         f"{_label(font, fps, max(14, tw // 15))},"
         f"tile={cols}x{rows}:padding=0:margin=0,format=rgb24,setpts=PTS-STARTPTS[g];"
-        f"[1:a]{im.wave_filter(width, WAVE_H, (args.t - w0) / (w1 - w0))}"
+        f"[1:a]{im.wave_filter(width, WAVE_H, (args.t - w0) / (w1 - w0), gain)}"
     )
     if font is not None:
         graph += "," + im.drawtext(
@@ -251,7 +252,8 @@ def timeline(args) -> dict:
     lower_h = WAVE_H + words_h + axis_h
 
     with tempfile.TemporaryDirectory() as tmp:
-        lower = [f"[1:a]{im.wave_filter(strip_w, WAVE_H)},setpts=PTS-STARTPTS[wave]"]
+        gain = im.wave_gain(im.window_peak(wav, t0, t1))
+        lower = [f"[1:a]{im.wave_filter(strip_w, WAVE_H, None, gain)},setpts=PTS-STARTPTS[wave]"]
         stack = ["[wave]"]
         if words_doc is not None:
             lower.append(f"color=c=0x181818:s={strip_w}x{words_h}:r=1,format=rgb24[wbg]")

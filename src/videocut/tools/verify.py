@@ -1,6 +1,7 @@
 """`videocut tool verify` (pipeline step 10): self-check of the last render.
 
-Reads out/reel.mp4 + out/render.json (+ work/edl.json when present) and writes
+Reads out/render.json and the render it describes (out/reel.mp4, or out/preview.mp4 after
+`render --preview`), + work/edl.json when present, and writes
     out/verify/cut_NN.jpg   per inner cut point: frames -2..+2 around the cut (output time)
                             and the audio waveform +-100 ms, a red marker at the cut
     out/verify.json         numbers per cut, global checks, flags
@@ -9,25 +10,32 @@ The tool never opens the pictures itself; they are for Claude (a subagent) to lo
 
 Numbers per cut
     visual   mean absolute luma difference across the cut vs. the median difference of the
-             neighbouring frame pairs; `jump_score` is their ratio (flag `visual_jump`)
+             neighbouring frame pairs; `jump_score` is their ratio. A jump cut in a talking
+             head is expected, so a clear jump is only reported as info `jump_cut`; the flag
+             `visual_jump` is reserved for a jump far above the median jump_score of the
+             reel's other cuts (e.g. a cut into a different shot or a glitch frame) where
+             the EDL does not change the framing (crop or zoom: info `reframe`)
     audio    `click_peak`: largest sample-to-sample step within +-10 ms of the cut relative to
              the median step size around it; `hf_spike_db`: energy of the second difference
              (a high-pass) within +-10 ms vs. its local median (flag `click`)
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
-<= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s.
+<= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s. A preview is
+checked at its half size, and its loudness (single-pass) is reported but not judged.
 
 The summary line has `ok` (all global checks pass and no cut is flagged), `flagged` (cuts with
-their flags) and `failed` (global checks). The exit code is 0 whenever the checks ran.
+their flags), `info` (cuts with info notes such as `jump_cut`) and `failed` (global checks).
+The exit code is 0 whenever the checks ran.
 """
 
 import json
 import re
 import subprocess
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
 
-from ..edl import EdlError, load
+from ..edl import Edl, EdlError, load
 from ..paths import tool_env
 from . import _image as im
 from .common import ToolError, binary, job_parent, resolve_job, run_tool, write_json
@@ -39,6 +47,7 @@ LUFS_TARGET, LUFS_TOL = -14.0, 1.0
 TRUE_PEAK_MAX = -1.0
 MAX_STRETCH_S = 0.5
 VISUAL_MIN_DIFF, VISUAL_MIN_SCORE = 8.0, 4.0  # luma levels (0..255), ratio to neighbours
+LARGE_JUMP_X_MEDIAN = 3.0  # `visual_jump`: jump_score this many times the other cuts' median
 CLICK_PEAK_MAX, HF_SPIKE_DB_MAX = 12.0, 15.0
 CLICK_HALF_S, BASE_S, BLOCK = 0.010, 0.100, 240
 FLOOR = 1e-4  # about -80 dBFS: keeps ratios finite next to digital silence
@@ -132,26 +141,56 @@ def audio_numbers(x: np.ndarray, t: float) -> dict:
     return {"click_peak": round(peak, 2), "hf_spike_db": round(20 * np.log10(max(hf, 1e-9)), 1)}
 
 
-def cut_flags(visual: dict, audio: dict) -> list[str]:
-    flags = []
-    if (
+def is_jump(visual: dict) -> bool:
+    return (
         visual["jump_score"] is not None
         and visual["diff_cut"] >= VISUAL_MIN_DIFF
         and visual["jump_score"] >= VISUAL_MIN_SCORE
-    ):
-        flags.append("visual_jump")
+    )
+
+
+def cut_notes(
+    visual: dict, audio: dict, median_jump: float | None, reframe: bool = False
+) -> tuple[list[str], list[str]]:
+    """(flags, info) of one cut. `median_jump` is the median jump_score of the other cuts
+    (None when there are none: a lone jump cut is never flagged); `reframe` means the EDL
+    changes crop or zoom at this cut, so a large jump is intended."""
+    flags, info = [], []
+    if is_jump(visual):
+        info.append("jump_cut")
+        if reframe:
+            info.append("reframe")
+        elif median_jump and visual["jump_score"] >= LARGE_JUMP_X_MEDIAN * median_jump:
+            flags.append("visual_jump")
     if audio["click_peak"] is not None and (
         audio["click_peak"] >= CLICK_PEAK_MAX or audio["hf_spike_db"] >= HF_SPIKE_DB_MAX
     ):
         flags.append("click")
-    return flags
+    return flags, info
+
+
+def reframes(edl: Edl) -> list[bool]:
+    """Per inner cut: does the framing (crop centre or zoom) change across it?"""
+
+    def framing(seg, t: float) -> tuple:
+        c = seg.crop
+        cx, cy, z = (c.cx, c.cy, c.zoom) if c else (0.5, 0.5, 1.0)
+        for kt, kz in sorted(seg.zoom_keys, key=lambda k: k[0]):
+            if kt <= t:
+                z = kz
+        return (round(cx, 3), round(cy, 3), round(z, 3))
+
+    return [framing(a, a.end) != framing(b, b.start) for a, b in pairwise(edl.segments)]
 
 
 # ---------------------------------------------------------------- pictures
 
 
-def cut_image(reel: Path, v: dict, t: float, frame: int, dest: Path, name: str) -> list[int]:
-    """Frames frame-2..frame+2 (the cut lies in front of `frame`) + waveform +-100 ms."""
+def cut_image(
+    reel: Path, v: dict, t: float, frame: int, dest: Path, name: str, gain: float = 1.0
+) -> list[int]:
+    """Frames frame-2..frame+2 (the cut lies in front of `frame`) + waveform +-100 ms
+    (display gain `gain`, see _image.wave_gain)."""
     fps = v["fps"]
     idx = [i for i in range(frame - 2, frame + 3) if 0 <= i < v["frames"]]
     times = [i / fps for i in idx]
@@ -165,7 +204,7 @@ def cut_image(reel: Path, v: dict, t: float, frame: int, dest: Path, name: str) 
     graph = (
         f"[0:v]select='{im.select_times(times, fps)}',scale={TILE_W}:{th}{label},"
         f"tile={len(idx)}x1:padding=0:margin=0,format=rgb24{cutline},setpts=PTS-STARTPTS[g];"
-        f"[1:a]{im.wave_filter(width, WAVE_H, (t - w0) / (w1 - w0))},setpts=PTS-STARTPTS[w];"
+        f"[1:a]{im.wave_filter(width, WAVE_H, (t - w0) / (w1 - w0), gain)},setpts=PTS-STARTPTS[w];"
         "[g][w]vstack=inputs=2[out]"
     )
     im.render_jpegs(
@@ -247,29 +286,34 @@ def _read_render(job: Path) -> dict:
 
 def verify(args) -> dict:
     job = resolve_job(args.job)
-    reel = job / "out" / "reel.mp4"
-    if not reel.is_file():
-        raise ToolError("out/reel.mp4 is missing; render first (`videocut tool render`)")
     render = _read_render(job)
+    preview = bool(render.get("preview"))
+    reel_name = "preview.mp4" if preview else "reel.mp4"
+    reel = job / "out" / reel_name
+    if not reel.is_file():
+        raise ToolError(f"out/{reel_name} is missing; render first (`videocut tool render`)")
     v = im.probe_video(reel)
     fps = v["fps"]
     frames, audio = luma_frames(reel), mono_audio(reel)
     n = len(frames)
     video_dur = n / fps
 
-    edl_cuts, warnings = None, []
+    edl, warnings = None, []
     edl_path = job / "work" / "edl.json"
     if edl_path.is_file():
         try:
-            edl_cuts = load(edl_path).cut_points()[1:-1]
+            edl = load(edl_path)
         except EdlError as e:
             warnings.append(f"work/edl.json is invalid: {e}")
-    if edl_cuts is not None:
-        cuts = [float(c) for c in render["cuts"]]
+    reframe = [False] * len(render["cuts"])
+    if edl is not None:
+        cuts, edl_cuts = [float(c) for c in render["cuts"]], edl.cut_points()[1:-1]
         if len(cuts) != len(edl_cuts) or any(
             abs(a - b) > 1 / fps for a, b in zip(cuts, edl_cuts, strict=True)
         ):
             warnings.append("render.json cuts differ from work/edl.json; the render may be stale")
+        else:
+            reframe = reframes(edl)
 
     vdir = job / "out" / "verify"
     vdir.mkdir(parents=True, exist_ok=True)
@@ -282,7 +326,9 @@ def verify(args) -> dict:
             continue
         name = f"cut_{i:02d}.jpg"
         vis, aud = visual_numbers(frames, k), audio_numbers(audio, t)
-        idx = cut_image(reel, v, t, k, vdir, name)
+        win = audio[max(0, int((t - 0.1) * RATE)) : int((t + 0.1) * RATE)]
+        gain = im.wave_gain(float(np.abs(win).max()) if len(win) else 0.0)
+        idx = cut_image(reel, v, t, k, vdir, name, gain)
         cut_docs.append(
             {
                 "cut": i,
@@ -292,13 +338,18 @@ def verify(args) -> dict:
                 "image": f"out/verify/{name}",
                 "visual": vis,
                 "audio": aud,
-                "flags": cut_flags(vis, aud),
             }
         )
+    scores = [c["visual"]["jump_score"] for c in cut_docs]
+    for i, c in enumerate(cut_docs):
+        others = [x for j, x in enumerate(scores) if j != i and x is not None]
+        median = float(np.median(others)) if others else None
+        c["flags"], c["info"] = cut_notes(c["visual"], c["audio"], median, reframe[c["cut"] - 1])
 
     loud = loudness(reel)
     stretches = bad_stretches(reel, video_dur)
     want = float(render["output_duration"])
+    want_size = tuple(x // 4 * 2 for x in TARGET_SIZE) if preview else TARGET_SIZE
     lufs, peak = loud["integrated_lufs"], loud["true_peak_dbtp"]
     checks = {
         "duration": _check(
@@ -307,10 +358,13 @@ def verify(args) -> dict:
             render_json_s=round(want, 3),
         ),
         "loudness": _check(
-            lufs is not None and abs(lufs - LUFS_TARGET) <= LUFS_TOL, integrated_lufs=lufs
+            preview or (lufs is not None and abs(lufs - LUFS_TARGET) <= LUFS_TOL),
+            integrated_lufs=lufs,
         ),
-        "true_peak": _check(peak is not None and peak <= TRUE_PEAK_MAX, true_peak_dbtp=peak),
-        "size": _check((v["width"], v["height"]) == TARGET_SIZE, size=[v["width"], v["height"]]),
+        "true_peak": _check(
+            preview or (peak is not None and peak <= TRUE_PEAK_MAX), true_peak_dbtp=peak
+        ),
+        "size": _check((v["width"], v["height"]) == want_size, size=[v["width"], v["height"]]),
         "black_or_frozen": _check(not stretches, stretches=stretches),
     }
     for old in vdir.glob("cut_*.jpg"):
@@ -318,15 +372,18 @@ def verify(args) -> dict:
             old.unlink()
     checks["cuts_in_range"] = _check(not bad_cuts, outside=bad_cuts)
     flagged = [{"cut": c["cut"], "t": c["t"], "flags": c["flags"]} for c in cut_docs if c["flags"]]
+    info = [{"cut": c["cut"], "t": c["t"], "info": c["info"]} for c in cut_docs if c["info"]]
     failed = [k for k, c in checks.items() if not c["ok"]]
     ok = not failed and not flagged
     doc = {
         "ok": ok,
-        "reel": "out/reel.mp4",
+        "reel": f"out/{reel_name}",
+        "preview": preview,
         "fps": fps,
         "checks": checks,
         "cuts": cut_docs,
         "flagged": flagged,
+        "info": info,
         "warnings": warnings,
     }
     write_json(job / "out" / "verify.json", doc)
@@ -337,8 +394,10 @@ def verify(args) -> dict:
     return {
         "ok": ok,
         "file": "out/verify.json",
+        "checked": f"out/{reel_name}",
         "cuts": len(cut_docs),
         "flagged": flagged,
+        "info": info,
         "failed": failed,
         "warnings": warnings,
         "images": [c["image"] for c in cut_docs],

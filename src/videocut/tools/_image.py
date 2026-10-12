@@ -14,6 +14,8 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
+
 from ..paths import tool_env
 from .common import ToolError, binary, run
 
@@ -22,6 +24,10 @@ from .common import ToolError, binary, run
 TILE_BOX = (360, 640)  # portrait tile; landscape is the transposed box
 WAVE_COLOR = "0x4db8ff"
 MARK_COLOR = "red"
+# Waveforms are peak-normalised per picture: normal speech peaks around -15 dBFS and would
+# draw as a nearly flat line. The gain is capped so a quiet pause does not turn into "speech".
+WAVE_PEAK = 0.9
+WAVE_MAX_GAIN = 20.0  # +26 dB
 
 _FONT_CANDIDATES = (
     "/System/Library/Fonts/Helvetica.ttc",
@@ -133,12 +139,33 @@ def probe_video(path: Path) -> dict:
     }
 
 
-def wave_filter(width: int, height: int, mark: float | None = None) -> str:
+def wave_gain(peak: float) -> float:
+    """Display gain that brings a window's sample peak to WAVE_PEAK (capped)."""
+    return min(WAVE_MAX_GAIN, WAVE_PEAK / max(peak, 1e-6)) if peak > 0 else 1.0
+
+
+def window_peak(audio: Path, t0: float, t1: float) -> float:
+    """Largest absolute sample (0..1) of `audio` in [t0, t1] seconds."""
+    r = subprocess.run(
+        [binary("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error"]
+        + ["-ss", f"{t0:.4f}", "-t", f"{max(t1 - t0, 0.001):.4f}", "-i", str(audio)]
+        + ["-vn", "-ac", "1", "-f", "f32le", "-"],
+        capture_output=True,
+        env=tool_env(),
+    )
+    if r.returncode != 0:
+        raise ToolError(f"ffmpeg failed: {r.stderr.decode(errors='replace').strip()[-500:]}")
+    x = np.frombuffer(r.stdout, np.float32)
+    return float(np.abs(x).max()) if len(x) else 0.0
+
+
+def wave_filter(width: int, height: int, mark: float | None = None, gain: float = 1.0) -> str:
     """Audio filter chain: waveform picture with an optional marker at `mark` (0..1 of
-    the window width)."""
+    the window width); `gain` scales the samples for display only (see wave_gain)."""
     f = (
         "aformat=channel_layouts=mono,"
-        f"showwavespic=s={width}x{height}:colors={WAVE_COLOR}:scale=lin,format=rgb24"
+        f"volume={gain:.4f}:precision=float,"
+        f"showwavespic=s={width}x{height}:colors={WAVE_COLOR}:scale=lin:filter=peak,format=rgb24"
     )
     f += f",drawbox=x=0:y={height // 2}:w={width}:h=1:color=gray@0.5:t=fill"
     if mark is not None:

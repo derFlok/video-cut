@@ -1,4 +1,4 @@
-"""Command line: videocut setup | doctor | selftest | models | ui | auth | tool <name>."""
+"""Command line: videocut setup | doctor | selftest | models | ui | auth | run | tool <name>."""
 
 import argparse
 import os
@@ -37,6 +37,14 @@ def main(argv: list[str] | None = None) -> int:
     asub.add_parser("local", help="use your own Claude Code sign-in (personal use)")
     asub.add_parser("key", help="store an Anthropic API key in the keychain and use it")
     asub.add_parser("status", help="show the current mode")
+
+    r = sub.add_parser("run", help="cut a recording: prep, plan, your approval, cut")
+    r.add_argument("target", help="a recording (creates a job) or an existing job folder/id")
+    r.add_argument("--type", help="video type, e.g. thought (thought of the day)")
+    r.add_argument("--brief", help="free-text instruction for Claude")
+    r.add_argument("--approve", action="store_true", help="approve the plan without asking")
+    r.add_argument("--replan", action="store_true", help="plan again even if a plan exists")
+    r.add_argument("--max-turns", type=int, default=60, help="turn limit per Claude run")
 
     t = sub.add_parser("tool", help="pipeline commands used by Claude inside a job")
     tsub = t.add_subparsers(dest="tool_cmd", required=True)
@@ -97,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
         mode = settings.load()["auth"]
         print("Mode: " + ("API key (keychain)" if mode == "apikey" else "own Claude Code sign-in"))
         return 0
+    if a.cmd == "run":
+        from . import run
+
+        return run.main(a)
     if a.cmd == "tool":
         return a.handler(a)
     return 2

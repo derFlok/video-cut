@@ -157,3 +157,14 @@ def test_requires_ingest(capsys, source, tmp_path):
     code, s, _ = run_tool(capsys, "job", "new", str(src), "--id", "bare")
     code, s, _ = run_tool(capsys, "sheet", "contact", "--job", s["job"])
     assert code == 1 and "ingest" in s["error"]
+
+
+def test_waveform_display_gain_is_peak_based_and_capped():
+    from videocut.tools import _image as im
+
+    assert im.wave_gain(0.18) == pytest.approx(5.0)  # normal speech fills the strip
+    assert im.wave_gain(0.9) == pytest.approx(1.0)
+    assert im.wave_gain(0.0001) == im.WAVE_MAX_GAIN  # room noise stays small
+    assert im.wave_gain(0.0) == 1.0
+    assert "volume=5.0000" in im.wave_filter(100, 50, None, 5.0)
+    assert "filter=peak" in im.wave_filter(100, 50)
