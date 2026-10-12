@@ -7,10 +7,19 @@ OUTPUT time through the segments (segment starts snapped to the output frame gri
 render does), clipped at the segment edges. A word cut down to less than half of itself
 or MIN_WORD_S is dropped, so a filler or slip the EDL removed never shows up as a caption.
 
-Grouping (TikTok style): a new group starts after a pause >= PAUSE_S, after a word ending
-in punctuation, and when the group would exceed MAX_WORDS words or MAX_CHARS characters.
-A group lasts from its first word to its last one, at least MIN_GROUP_S, and is held up
-to the next group across gaps shorter than PAUSE_S (no flicker between groups).
+Grouping by the brand's captions.pace (calm when the job has no brand or the brand sets none):
+    calm    phrase blocks of 1-2 lines, at most 8 words / 38 characters (two caption lines at
+            the caption size), on screen at least 1.0 s
+    normal  at most 5 words / 28 characters, at least 0.7 s
+    fast    TikTok style, at most 3 words / 18 characters, at least 0.4 s (the old behaviour)
+A block always ends at a sentence end and at a pause long enough to hide it (calm 0.6 s,
+normal 0.4 s). When a block is full it breaks at its last comma or short pause (>= PAUSE_S)
+so a phrase stays together, else before the word that does not fit. Blocks shorter than the
+minimum merge with a neighbour across a short gap when the two fit together, else they are
+stretched into the gap. A block stays on screen until the next one starts when the gap is
+shorter than the hide pause (no flicker), and is hidden in longer pauses. The spoken word
+is highlighted inside the block by the renderer (karaoke); the block itself stays. fast
+breaks at every pause >= PAUSE_S and every punctuation mark, like before.
 
 Emphasis (`emph`): a word is emphasised when a zoom key of the EDL falls on it (or on a
 pause right before it), or when work/emphasis.json names it:
@@ -22,17 +31,37 @@ left as it is.
 
 import json
 import re
+from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
+from .. import brand
 from ..edl import EdlError, validate
 from ..edl import from_dict as edl_from_dict
-from .common import ToolError, job_parent, resolve_job, run_tool, write_json
+from .common import ToolError, job_parent, read_job, resolve_job, run_tool, write_json
 
 PAUSE_S = 0.25
-MAX_WORDS = 3
-MAX_CHARS = 18
-MIN_GROUP_S = 0.4
+MAX_WORDS = 3  # fast
+MAX_CHARS = 18  # fast
+MIN_GROUP_S = 0.4  # fast
+
+
+@dataclass(frozen=True)
+class Pace:
+    max_words: int
+    max_chars: int
+    min_s: float  # shortest time a block is on screen
+    hide_gap: float  # a pause this long hides the block (and always ends it)
+    every_break: bool  # break at every pause >= PAUSE_S and punctuation (fast)
+
+
+PACES = {
+    "calm": Pace(8, 38, 1.0, 0.6, False),
+    "normal": Pace(5, 28, 0.7, 0.4, False),
+    "fast": Pace(MAX_WORDS, MAX_CHARS, MIN_GROUP_S, PAUSE_S, True),
+}
+DEFAULT_PACE = "calm"
+SENTENCE_END = re.compile(r"[.!?…]['\"»«”“)]*$")
 MIN_WORD_S = 0.06
 EMPH_LOOKAHEAD_S = 0.3  # a time in a pause marks the word that starts this soon after it
 BREAK_AFTER = re.compile(r"[.,!?;:…]['\"»«”“)]*$")
@@ -86,28 +115,129 @@ def mark_emph(words: list[dict], times: list[float]) -> None:
             hit["emph"] = True
 
 
-def group(words: list[dict], duration: float) -> list[dict]:
-    """TikTok-style caption groups (see module docstring) of output-time words."""
-    groups: list[list[dict]] = []
+def _text(ws: list[dict]) -> str:
+    return " ".join(x["w"] for x in ws)
+
+
+def _split(words: list[dict], pace: Pace) -> list[list[dict]]:
+    """Words -> blocks (lists of words) by the break rules of `pace`."""
+    blocks: list[list[dict]] = []
     for w in words:
-        cur = groups[-1] if groups else None
-        if (
-            cur is None
-            or w["t0"] - cur[-1]["t1"] >= PAUSE_S
-            or BREAK_AFTER.search(cur[-1]["w"])
-            or len(cur) >= MAX_WORDS
-            or len(" ".join(x["w"] for x in cur + [w])) > MAX_CHARS
-        ):
-            groups.append([w])
+        cur = blocks[-1] if blocks else None
+        if cur is None:
+            blocks.append([w])
+            continue
+        gap = w["t0"] - cur[-1]["t1"]
+        if pace.every_break:
+            hard = gap >= PAUSE_S or BREAK_AFTER.search(cur[-1]["w"])
         else:
+            hard = gap >= pace.hide_gap or SENTENCE_END.search(cur[-1]["w"])
+        if hard:
+            blocks.append([w])
+            continue
+        if len(cur) < pace.max_words and len(_text([*cur, w])) <= pace.max_chars:
             cur.append(w)
+            continue
+        # Full: break after the last comma or short pause, keeping that phrase together.
+        k = None
+        if not pace.every_break:
+            for i in range(len(cur) - 1, 0, -1):
+                if (
+                    BREAK_AFTER.search(cur[i - 1]["w"])
+                    or cur[i]["t0"] - cur[i - 1]["t1"] >= PAUSE_S
+                ):
+                    k = i
+                    break
+        rest = cur[k:] + [w] if k else [w]
+        if k and len(rest) <= pace.max_words and len(_text(rest)) <= pace.max_chars:
+            del cur[k:]
+            blocks.append(rest)
+        else:
+            blocks.append([w])
+    return blocks
+
+
+def _merge_short(blocks: list[list[dict]], pace: Pace) -> list[list[dict]]:
+    """Blocks spoken in less than pace.min_s merge with a neighbour across a gap shorter than
+    pace.hide_gap when the two fit one block (the closer neighbour first)."""
+    blocks = [list(b) for b in blocks]
+
+    def fits(a, b):
+        both = a + b
+        return (
+            b[0]["t0"] - a[-1]["t1"] < pace.hide_gap
+            and len(both) <= pace.max_words
+            and len(_text(both)) <= pace.max_chars
+        )
+
+    i = 0
+    while i < len(blocks):
+        b = blocks[i]
+        if b[-1]["t1"] - b[0]["t0"] >= pace.min_s:
+            i += 1
+            continue
+        options = []
+        if i > 0 and fits(blocks[i - 1], b):
+            options.append((b[0]["t0"] - blocks[i - 1][-1]["t1"], i - 1))
+        if i + 1 < len(blocks) and fits(b, blocks[i + 1]):
+            options.append((blocks[i + 1][0]["t0"] - b[-1]["t1"], i))
+        if not options:
+            # No neighbour takes it whole: share the words with the closer one instead.
+            for j in sorted(
+                (k for k in (i - 1, i) if 0 <= k and k + 1 < len(blocks)),
+                key=lambda k: blocks[k + 1][0]["t0"] - blocks[k][-1]["t1"],
+            ):
+                pair = _rebalance(blocks[j], blocks[j + 1], pace)
+                if pair:
+                    blocks[j : j + 2] = pair
+                    break
+            i += 1
+            continue
+        j = min(options)[1]
+        blocks[j : j + 2] = [blocks[j] + blocks[j + 1]]
+        i = j  # the merged block may still be short
+    return blocks
+
+
+def _rebalance(a: list[dict], b: list[dict], pace: Pace) -> list[list[dict]] | None:
+    """Two neighbouring blocks re-split so the shorter one lasts as long as possible (both
+    fitting), at a comma or short pause if that costs nothing, else as evenly as possible;
+    None when no split beats the current one."""
+    if b[0]["t0"] - a[-1]["t1"] >= pace.hide_gap:
+        return None
+
+    def dur(x):
+        return x[-1]["t1"] - x[0]["t0"]
+
+    both = a + b
+    best, now = None, min(dur(a), dur(b))
+    for i in range(1, len(both)):
+        left, right = both[:i], both[i:]
+        if not all(
+            len(x) <= pace.max_words and len(_text(x)) <= pace.max_chars for x in (left, right)
+        ):
+            continue
+        shortest = min(dur(left), dur(right), pace.min_s)
+        soft = BREAK_AFTER.search(left[-1]["w"]) or right[0]["t0"] - left[-1]["t1"] >= PAUSE_S
+        key = (-round(shortest, 3), not soft, abs(len(_text(left)) - len(_text(right))))
+        if shortest > now + 1e-9 and (best is None or key < best[0]):
+            best = (key, [left, right])
+    return best[1] if best else None
+
+
+def group(words: list[dict], duration: float, pace: str = "fast") -> list[dict]:
+    """Caption blocks (see module docstring) of output-time words at `pace`."""
+    p = PACES[pace]
+    blocks = _split(words, p)
+    if not p.every_break:
+        blocks = _merge_short(blocks, p)
     out = []
-    for i, g in enumerate(groups):
+    for i, g in enumerate(blocks):
         t0, t1 = g[0]["t0"], g[-1]["t1"]
-        nxt = groups[i + 1][0]["t0"] if i + 1 < len(groups) else duration
-        if nxt - t1 < PAUSE_S:
-            t1 = nxt  # hold until the next group
-        t1 = min(max(t1, t0 + MIN_GROUP_S), max(nxt, t1), duration)
+        nxt = blocks[i + 1][0]["t0"] if i + 1 < len(blocks) else duration
+        if nxt - t1 < p.hide_gap:
+            t1 = nxt  # hold until the next block
+        t1 = min(max(t1, t0 + p.min_s), max(nxt, t1), duration)
         out.append(
             {
                 "t0": _r(t0),
@@ -119,6 +249,18 @@ def group(words: list[dict], duration: float) -> list[dict]:
             }
         )
     return [g for g in out if g["t1"] > g["t0"]]
+
+
+def job_pace(job: Path) -> str:
+    """captions.pace of the job's brand (DEFAULT_PACE without a brand or an unknown one)."""
+    ref = read_job(job).get("brand")
+    if not isinstance(ref, str) or not ref:
+        return DEFAULT_PACE
+    try:
+        pace = brand.load(ref).get("captions", {}).get("pace")
+    except brand.BrandError as e:
+        raise ToolError(str(e)) from None
+    return pace if pace in PACES else DEFAULT_PACE
 
 
 def _read_json(path: Path, what: str):
@@ -180,18 +322,20 @@ def captions(args) -> dict:
     duration = edl.output_duration()
     words = map_words(_words(job), edl.segments, edl.fps)
     mark_emph(words, emphasis_times(edl, _emphasis(job)))
-    groups = group(words, duration)
+    pace = job_pace(job)
+    groups = group(words, duration, pace)
     data["captions"] = groups
     if errors := validate(data):
         raise ToolError("captions would make edl.json invalid: " + "; ".join(errors[:5]))
     write_json(edl_path, data)
     n_emph = sum(w["emph"] for g in groups for w in g["words"])
-    print(f"{len(groups)} caption groups, {len(words)} words ({n_emph} emphasised)")
+    print(f"{len(groups)} caption groups ({pace}), {len(words)} words ({n_emph} emphasised)")
     return {
         "job": str(job),
         "written": True,
         "file": "work/edl.json",
         "groups": len(groups),
+        "pace": pace,
         "words": len(words),
         "emph": n_emph,
     }

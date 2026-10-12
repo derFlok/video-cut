@@ -180,6 +180,20 @@
   `$VIDEOCUT_HOME/state/<job id>/overlay_render.json`. That folder is outside the job folder,
   like the approvals. A mismatch is flagged `overlay_boxes_untrusted`.
 
+- Calmer captions: phrase blocks instead of 3-word flashes. New optional brand token
+  `captions.pace` = `calm` (the default), `normal` or `fast`. `fast` behaves as before.
+  `calm` makes blocks of 1–2 lines, at most 8 words / 38 characters, and breaks at sentence
+  ends. A full block breaks at its last comma or short pause. Each block is on screen for at
+  least 1.0 s: short blocks merge with a neighbour, or share words with it. A block is held
+  across gaps under 0.6 s and hidden in longer pauses. The spoken word moves through the
+  block (karaoke). The caption scene allows at most 2 lines. On the 23.8 s test cut the
+  pace gives:
+
+  | Pace | Blocks per minute | Median block duration |
+  |---|---|---|
+  | `calm` | 35 | 1.48 s |
+  | `fast` | 78 | 0.70 s |
+
 ### Observed — Phase 2
 - Phase 2 acceptance on the Phase 1 recording (the approved 23.8 s cut, reused unchanged):
   `videocut run <job> --brand <id>` once per brand, each reel with 31 caption groups. Verify ok

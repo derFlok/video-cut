@@ -279,3 +279,27 @@ test("assets: only files inside the job folder (brand files also from brands fol
   assert.equal(collectAssets(list, scenes, {}, roots).length, 1);
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+test("a calm caption block (two lines, ~38 characters) fits the lower band of a close-up", () => {
+  // Close-ups: the face box covers the centre band; the chest area below it is free.
+  const closeUps = [[240, 420, 840, 1180], [190, 360, 890, 1240], [300, 520, 780, 1130]];
+  const text = "die mir beim Laufen am Meer wirklich".split(" ");
+  for (const face of closeUps)
+    for (const [position, kase] of [["lower", "upper"], ["center", "normal"], ["center", "upper"]]) {
+      const tokens = tokensFor("blur", { w: 13, z: 0.9 });
+      tokens.captions = { ...tokens.captions, position, case: kase, style: "box" };
+      const env = makeEnv(tokens, face);
+      const item = { scene: "caption", t0: 0, t1: 1.5, words: text.map((w, i) => ({ w, t0: i * 0.2, t1: i * 0.2 + 0.2 })) };
+      const ctx = fakeCtx();
+      const L = scene("caption").layout(ctx, item, env);
+      const msg = `${position}/${kase} face ${face}: ${L.box} (${L.lines.length} lines, ${L.px} px)`;
+      assert.ok(L.fits && !L.overlapsFace, msg);
+      assert.ok(L.lines.length <= 2, msg);
+      assert.equal(L.band, "lower", msg);
+      assert.ok(L.box[1] >= face[3], msg);
+      const box = drawAll(scene("caption"), item, env, ctx);
+      const [ax0, ay0, ax1, ay1] = allowedArea(SIZE, SAFE);
+      assert.ok(box[0] >= ax0 && box[1] >= ay0 && box[2] <= ax1 && box[3] <= ay1, `inside the safe area: ${box} ${msg}`);
+      assert.equal(overlapArea(box, face), 0, msg);
+    }
+});

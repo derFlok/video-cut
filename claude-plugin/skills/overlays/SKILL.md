@@ -38,6 +38,9 @@ brand's look, render, check and fix. **You never change the cut.**
 
 `videocut tool captions --force` writes the caption groups into `work/edl.json` in **output** time
 from the transcript (cut words never appear; emphasised words come from the zoom keys).
+The blocks follow the brand's `captions.pace` (default `calm`: phrase blocks of 1–2 lines,
+each on screen for at least 1 s, the spoken word highlighted inside). Do not split or
+shorten them by hand.
 `--force` replaces captions already in the EDL (they may belong to an earlier cut); they
 are deterministic, so rebuilding is always safe.
 

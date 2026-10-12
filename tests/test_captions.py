@@ -60,7 +60,7 @@ def test_grouping_breaks_at_pauses_punctuation_and_length():
         w("end.", 1.5, 1.7), w("next", 1.7, 1.8),  # punctuation breaks after "end."
         w("extraordinarily", 1.8, 2.0), w("long", 2.0, 2.2),  # > 18 chars together
     ]  # fmt: skip
-    groups = cap.group(words, duration=3.0)
+    groups = cap.group(words, duration=3.0, pace="fast")
     texts = [" ".join(x["w"] for x in g["words"]) for g in groups]
     assert texts == ["one two three", "four", "pause end.", "next", "extraordinarily", "long"]
     # "four" is 0.2 s long: stretched to the minimum, not held across the real pause
@@ -78,7 +78,7 @@ def test_min_group_duration_never_overlaps_the_next_group():
         {"w": "a", "t0": 0.0, "t1": 0.1, "emph": False},
         {"w": "b", "t0": 0.4, "t1": 0.5, "emph": False},
     ]
-    g = cap.group(words, duration=0.6)
+    g = cap.group(words, duration=0.6, pace="fast")
     assert g[0]["t1"] == 0.4 and g[1]["t1"] == 0.6  # capped by next group / duration
 
 
@@ -136,3 +136,69 @@ def test_zoom_key_on_a_word_boundary_marks_the_next_word():
     words = cap.map_words([_w("a", 0.5, 1.0), _w("b", 1.0, 1.4)], edl.segments, edl.fps)
     cap.mark_emph(words, cap.emphasis_times(edl, []))
     assert [w["emph"] for w in words] == [False, True]
+
+
+def _speech(text: str, t0: float = 0.0, word_s: float = 0.3, gap: float = 0.05, pauses=None):
+    """Words of `text` at a steady pace; `pauses` maps a word index to the pause before it."""
+    out, t = [], t0
+    for i, w in enumerate(text.split()):
+        t += (pauses or {}).get(i, 0.0)
+        out.append({"w": w, "t0": round(t, 3), "t1": round(t + word_s, 3), "emph": False})
+        t += word_s + gap
+    return out
+
+
+SPEECH = (
+    "Heute zeige ich dir drei Dinge, die mir beim Laufen am Meer wirklich geholfen haben. "
+    "Erstens: früh los. Zweitens, langsam anfangen und dann steigern. Ja. Drittens, Wasser."
+)
+
+
+def test_calm_blocks_are_phrases_of_two_lines_at_most():
+    words = _speech(SPEECH, pauses={14: 0.3})
+    groups = cap.group(words, duration=words[-1]["t1"] + 1.0, pace="calm")
+    p = cap.PACES["calm"]
+    for g in groups:
+        text = " ".join(w["w"] for w in g["words"])
+        assert len(g["words"]) <= p.max_words and len(text) <= p.max_chars, text
+    texts = [" ".join(w["w"] for w in g["words"]) for g in groups]
+    # a full block breaks at its last comma; a sentence end ends a block that is long enough
+    assert "Heute zeige ich dir drei Dinge," in texts, texts
+    assert texts[-1].endswith("Wasser.") and any(t.endswith("steigern.") for t in texts), texts
+    # far fewer, longer blocks than the fast pace
+    fast = cap.group(words, duration=words[-1]["t1"] + 1.0, pace="fast")
+    assert len(groups) * 2 <= len(fast)
+
+
+def test_calm_minimum_duration_merges_short_neighbours():
+    words = _speech(SPEECH)
+    groups = cap.group(words, duration=words[-1]["t1"] + 1.0, pace="calm")
+    for g in groups:
+        assert g["t1"] - g["t0"] >= cap.PACES["calm"].min_s - 1e-9, g
+    # "Ja." alone would be 0.25 s: it joined a neighbour
+    assert not any([w["w"] for w in g["words"]] == ["Ja."] for g in groups)
+
+
+def test_calm_no_flicker_in_short_gaps_hidden_in_long_pauses():
+    words = _speech("eins zwei drei. vier fünf sechs. sieben acht neun.", pauses={3: 0.4, 6: 1.5})
+    groups = cap.group(words, duration=words[-1]["t1"] + 1.0, pace="calm")
+    assert len(groups) == 3
+    assert groups[0]["t1"] == groups[1]["t0"]  # 0.45 s gap < 0.6 s: held to the next block
+    assert groups[2]["t0"] - groups[1]["t1"] > 1.0  # 1.55 s pause: hidden
+    assert groups[1]["t1"] - groups[1]["t0"] >= 1.0
+
+
+def test_pace_comes_from_the_brand_and_defaults_to_calm(capsys, tmp_path, videocut_home):
+    brand_dir = videocut_home / "brands" / "brand-x"
+    brand_dir.mkdir(parents=True)
+    tokens = json.loads(
+        (Path(__file__).parents[1] / "brands" / "_example" / "brand.json").read_text()
+    )
+    tokens["captions"] = {**tokens["captions"], "pace": "fast"}
+    (brand_dir / "brand.json").write_text(json.dumps({**tokens, "name": "brand-x"}))
+    job = tmp_path / "j"
+    (job / "work").mkdir(parents=True)
+    (job / "job.json").write_text(json.dumps({"id": "j"}))
+    assert cap.job_pace(job) == "calm"
+    (job / "job.json").write_text(json.dumps({"id": "j", "brand": "brand-x"}))
+    assert cap.job_pace(job) == "fast"

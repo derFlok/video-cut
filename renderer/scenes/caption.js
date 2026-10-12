@@ -1,5 +1,6 @@
-// TikTok-style caption: one word group (as given by the EDL), the spoken word
-// highlighted per tokens.captions.highlight (accent | underline | scale).
+// Caption: one phrase block (as given by the EDL, 1-2 lines) that stays on screen while the
+// spoken word moves through it (karaoke), highlighted per tokens.captions.highlight
+// (accent | underline | scale).
 // Colours, fonts and motion come only from env.tokens.
 
 const style = require("../lib/style");
@@ -20,7 +21,7 @@ function layout(ctx, item, env) {
       ctx,
       env,
       words.map((w) => style.setCase(tokens, String(w.w).trim())),
-      { px: size[0] * 0.07, role: "heading", maxLines: 3, t0: item.t0, t1: item.t1 },
+      { px: size[0] * 0.07, role: "heading", maxLines: 2, t0: item.t0, t1: item.t1 },
     ),
   );
 }
