@@ -9,6 +9,8 @@ import argparse
 from importlib import import_module
 
 MODULES = ["hello", "job", "ingest", "transcribe", "sheets", "edl", "render", "verify", "face"]
+MODULES += ["captions"]
+MODULES += ["overlays"]
 
 
 def register_all(subparsers: argparse._SubParsersAction) -> None:

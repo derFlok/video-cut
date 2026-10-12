@@ -173,3 +173,72 @@ def test_reframe_at_a_cut_is_info_not_a_flag():
     edl = from_dict({"fps": 30, "size": [1080, 1920], "source": "input/a.mp4", "segments": segs})
     assert verify.reframes(edl) == [True, False, True]
     assert verify.cut_notes(_vis(30.0), QUIET, 8.0, reframe=True) == ([], ["jump_cut", "reframe"])
+
+
+FACE = [{"t": t / 10, "box": [400, 600, 680, 900]} for t in range(30)]  # output px
+
+
+def test_overlay_boxes_flag_safe_zone_and_face():
+    boxes = [
+        {"scene": "caption", "t0": 0.0, "t1": 1.0, "box": [100, 1000, 980, 1100]},  # fine
+        {"scene": "keyword", "t0": 0.0, "t1": 1.0, "box": [100, 200, 980, 300]},  # top zone
+        {"scene": "caption", "t0": 1.0, "t1": 2.0, "box": [30, 1000, 500, 1100]},  # side zone
+        {"scene": "number_card", "t0": 1.0, "t1": 1.5, "box": [600, 850, 900, 1000]},  # face
+        {"scene": "lower_third", "t0": 1.0, "t1": 2.0, "box": [100, 1500, 980, 1600]},  # bottom
+        # overlaps the face box but only while no face sample is visible
+        {"scene": "cta_end", "t0": 3.5, "t1": 4.0, "box": [400, 600, 680, 900]},
+        # touches the face box by under 2 % of its area
+        {"scene": "keyword", "t0": 0.0, "t1": 1.0, "box": [100, 895, 980, 1000]},
+    ]
+    out = verify.overlay_checks(boxes, FACE, (1080, 1920))
+    assert [o["flags"] for o in out] == [
+        [], ["overlay_in_safe_zone"], ["overlay_in_safe_zone"], ["overlay_on_face"],
+        ["overlay_in_safe_zone"], [], [],
+    ]  # fmt: skip
+    assert out[3]["face_overlap"] == round(80 * 50 / (280 * 300), 3) and out[3]["face_t"] == 1.0
+    assert 0 < out[6]["face_overlap"] <= verify.FACE_OVERLAP_MAX
+
+
+def test_caption_times_one_per_change_snapped_and_unique():
+    caps = [{"t0": 0.0, "t1": 1.0}, {"t0": 1.0, "t1": 1.1}, {"t0": 1.0, "t1": 1.1}]
+    caps.append({"t0": 2.95, "t1": 3.5})  # its frame lies beyond the reel
+    # settle time after the change, at most the middle of a short group, on the frame grid
+    assert verify.caption_times(caps, 30, 3.0) == [4 / 30, 32 / 30]
+
+
+def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
+    job = _job(capsys, reel, [])
+    src = json.loads((job / "job.json").read_text())["source"]
+    caps = [{"t0": i * 0.6, "t1": i * 0.6 + 0.6, "words": []} for i in range(5)]
+    edl = {"fps": 30, "size": [1080, 1920], "source": src, "segments": [{"in": 0, "out": 3}]}
+    (job / "work" / "edl.json").write_text(json.dumps({**edl, "captions": caps}))
+    (job / "work" / "overlays.json").write_text(
+        json.dumps({"size": [1080, 1920], "fps": 30, "duration": 3.0, "face": FACE})
+    )
+    boxes = [
+        {"scene": "caption", "t0": 0.0, "t1": 3.0, "box": [100, 1000, 980, 1100]},
+        {"scene": "keyword", "t0": 1.0, "t1": 2.0, "box": [450, 650, 650, 850]},
+    ]
+    (job / "work" / "overlay_boxes.json").write_text(json.dumps(boxes))
+    stale = job / "out" / "verify" / "captions_09.jpg"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"x")
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0, s
+    assert s["ok"] is False and s["failed"] == []
+    assert s["overlay_flagged"] == [
+        {"scene": "keyword", "t0": 1.0, "t1": 2.0, "flags": ["overlay_on_face"]}
+    ]
+    assert any("no overlay composited" in w for w in s["warnings"])
+    assert not stale.exists() and "out/verify/captions_01.jpg" in s["images"]
+    doc = json.loads((job / "out" / "verify.json").read_text())
+    assert len(doc["caption_times"]) == 5
+    assert doc["caption_sheets"] == ["out/verify/captions_01.jpg"]
+    out = subprocess.run(
+        [clips.ffprobe(), "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0"]
+        + [str(job / "out" / "verify" / "captions_01.jpg")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == "1080,1920"  # 3x3 tiles of 360x640

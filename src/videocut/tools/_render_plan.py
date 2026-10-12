@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from ..edl import Edl
+from ._geometry import Window, crop_window
 
 SHARP_MIN_WIDTH = 608  # crop narrower than this is visibly soft at 1080 wide (BRIEF §10)
 TARGET_I, TARGET_TP, TARGET_LRA = -14.0, -1.0, 11.0
@@ -19,14 +20,6 @@ TARGET_I, TARGET_TP, TARGET_LRA = -14.0, -1.0, 11.0
 TP_HEADROOM = 0.5
 MEASURED_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
 RATE = 48000
-
-
-@dataclass
-class Window:
-    w: int
-    h: int
-    x: int
-    y: int
 
 
 @dataclass
@@ -60,28 +53,6 @@ class Plan:
 
     def min_crop_width(self) -> int:
         return min(r.window.w for r in self.ranges)
-
-
-def _even(v: float) -> int:
-    return max(2, int(round(v / 2)) * 2)
-
-
-def crop_window(
-    src: tuple[int, int], out: tuple[int, int], cx: float, cy: float, zoom: float
-) -> Window:
-    """Window of the output aspect in a `src`-sized (display) frame, `zoom`× tighter than
-    the largest one that fits, centred on (cx, cy) in normalised coords, kept inside."""
-    sw, sh = src
-    aspect = out[0] / out[1]
-    if sw / sh > aspect:  # wider than the output (landscape): full height
-        bw, bh = sh * aspect, sh
-    else:  # narrower or equal (portrait): full width
-        bw, bh = sw, sw / aspect
-    w = min(_even(bw / zoom), sw - sw % 2)
-    h = min(_even(bh / zoom), sh - sh % 2)
-    x = min(max(int(round(cx * sw - w / 2)), 0), sw - w)
-    y = min(max(int(round(cy * sh - h / 2)), 0), sh - h)
-    return Window(w, h, x, y)
 
 
 def build(edl: Edl, src_size: tuple[int, int], out_size: tuple[int, int]) -> Plan:
