@@ -209,6 +209,21 @@
   captions: in this close-up the face fills the frame, and the only free strip is above the
   head. Earlier attempts found the static end card failing the frozen check, the end card
   failing the safe-zone check, and the slow caption halo; all three are fixed above.
+- Re-run after the end card, caption band, trust and pacing fixes (same cut, `calm` pace).
+  Verify is ok with no flags for all three brands. Each reel has 14 caption blocks: 35 per
+  minute of speech, median 1.48 s (was 31 groups, median 0.70 s). Each agent placed the end
+  card at about 21.4 s, before the last word at 23.73 s. The tool moved it to 23.93 s and
+  added a held tail of 2.43–2.60 s, at -14.0 LUFS. No caption sits on the end card.
+
+  In this extreme close-up the face box reaches y ≈ 1250–1460 of 1920, so 11 of 14 blocks fit
+  the lower band for brand-b and brand-c. For brand-a, with large upper-case text, 6 of 14
+  fit; the rest fall back above the head.
+
+  | Brand | Overlays | Wall | Turns |
+  |---|---|---|---|
+  | brand-a | `cta_end` | 156 s | 21 |
+  | brand-b | 2 × `keyword`, `cta_end` | 172 s | 19 |
+  | brand-c | 2 × `keyword`, `cta_end` | 136 s | 17 |
 - Type 6 end to end on a generated walkthrough clip with a generated, neutral UI mock as the
   asset (`--asset`, brand-b): plan 69 s / 11 turns / ≈ $0.36, cut 60 s / 9 / ≈ $0.52,
   overlays 117 s / 15 / ≈ $0.44. The 25.8 s reel has four `screenshot_frame` steps zooming
