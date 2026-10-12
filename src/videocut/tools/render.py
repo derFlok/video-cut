@@ -31,6 +31,7 @@ Both modes refuse unless a human approved the current work/project.md (job.is_ap
 import hashlib
 import json
 import math
+from fractions import Fraction
 import re
 from pathlib import Path
 
@@ -142,15 +143,29 @@ def _duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
-def composite_graph(index: int, fps, size: tuple[int, int]) -> str:
+def overlay_matrix(info: dict) -> str:
+    """YUV matrix of the cut video the overlay is blended into: BT.709 after a tonemap and
+    for untagged sources (what players assume for HD), else the source's own matrix."""
+    space = info.get("color_space")
+    if is_hdr(info) or space not in ("bt709", "smpte170m", "bt470bg"):
+        return "bt709"
+    return space
+
+
+def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709") -> str:
     """Filter lines that lay input `index` (the transparent overlay.mov) over [v] as [vo]:
-    same fps, scaled to `size`, alpha blended in 4:4:4 so thin overlay edges keep their
-    colour; the video decides the length (a shorter overlay just ends)."""
+    same fps, scaled to `size`, converted from the overlay's BT.709 to `matrix` (the cut
+    video's), alpha blended in 4:4:4 so thin overlay edges keep their colour; the video
+    decides the length (a shorter overlay just ends). Both inputs are put on the same
+    frame grid first (pts = frame number), so overlay frame n lands on reel frame n even
+    when the joined segments carry rounded timestamps."""
     w, h = size
+    tb = f"{Fraction(fps).denominator}/{Fraction(fps).numerator}"
     return (
-        f";\n[{index}:v]setpts=PTS-STARTPTS,fps={fps},scale={w}:{h}:flags=lanczos,"
-        "format=yuva444p[ov];\n"
-        "[v]format=yuv444p[base];\n"
+        f";\n[{index}:v]setpts=PTS-STARTPTS,fps={fps},settb={tb},setpts=N,"
+        f"scale={w}:{h}:flags=lanczos:in_color_matrix=bt709:in_range=tv:"
+        f"out_color_matrix={matrix}:out_range=tv,format=yuva444p[ov];\n"
+        f"[v]settb={tb},setpts=N,format=yuv444p[base];\n"
         "[base][ov]overlay=0:0:format=yuv444:eof_action=pass:shortest=0,"
         "format=yuv420p[vo]\n"
     )
@@ -217,7 +232,9 @@ def render(args) -> dict:
     ov_json = work / "overlays.json"
     use_overlay = is_fresh([overlay], [edl_path] + ([ov_json] if ov_json.is_file() else []))
     if use_overlay:
-        graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh))
+        graph += composite_graph(
+            1 + len(audio_args) // 2, plan.fps, (ow, oh), overlay_matrix(info)
+        )
         inputs += ["-i", str(overlay)]
         v_out = "[vo]"
     elif overlay.is_file():

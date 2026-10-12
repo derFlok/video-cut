@@ -106,6 +106,17 @@ function drawBlock(ctx, env, L, t, dur, wordState) {
       ctx.lineWidth = L.px * 0.16;
       ctx.strokeText(word.text, word.x, word.y);
     } else if (L.style === "plain") {
+      // A soft halo in the box colour (blurred stroke + shadow) under the glyphs, so the
+      // text keeps its contrast on any video; lighter than an outline, never a hard edge.
+      ctx.save();
+      ctx.shadowColor = colors.box;
+      ctx.shadowBlur = L.px * 0.35;
+      ctx.strokeStyle = colors.box;
+      ctx.lineWidth = L.px * 0.14;
+      ctx.filter = `blur(${(L.px * 0.04).toFixed(2)}px)`;
+      ctx.strokeText(word.text, word.x, word.y);
+      ctx.strokeText(word.text, word.x, word.y);
+      ctx.restore();
       ctx.shadowColor = colors.box;
       ctx.shadowBlur = L.px * 0.2;
     }

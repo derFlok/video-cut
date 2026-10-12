@@ -306,8 +306,12 @@ function startFfmpeg(out, size, fps) {
     [
       "-y", "-loglevel", "error",
       "-f", "image2pipe", "-framerate", rate(fps), "-c:v", "png", "-i", "-",
+      // BT.709 limited range, tagged: render composites it into a BT.709 reel (an
+      // untagged RGB -> YUV conversion would use BT.601 and shift the brand colours).
+      "-vf", `scale=${size[0]}:${size[1]}:out_color_matrix=bt709:out_range=tv`,
       "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
-      "-s", `${size[0]}x${size[1]}`, out,
+      "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+      "-color_range", "tv", out,
     ],
     { stdio: ["pipe", "ignore", "pipe"] },
   );

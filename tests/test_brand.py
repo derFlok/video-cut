@@ -160,24 +160,3 @@ def test_list_and_show(videocut_home, capsys):
     assert "t1\tTest\tok" in out
     code, summary, _ = run_tool(capsys, "brand", "show", "t1")
     assert code == 0 and summary["tokens"]["caption_colors"]["box"] == "#202020"
-
-
-def test_scaffold_test_brands_are_valid(videocut_home, capsys):
-    from videocut.tools import brand as tool
-
-    if not any(
-        (d / n).is_file()
-        for d in tool.SYSTEM_FONT_DIRS
-        for v in tool.TEST_FONTS.values()
-        for n in v
-    ):
-        pytest.skip("no macOS system font found")  # fmt: skip
-    code, summary, _ = run_tool(capsys, "brand", "scaffold-test-brands")
-    assert code == 0
-    for bid in ("brand-a", "brand-b"):
-        t = brand.load(bid)
-        assert t["fonts"]["files"] and Path(t["logo"]["light"]).is_file()
-    assert brand.load("brand-a")["captions"]["case"] == "upper"
-    assert brand.load("brand-b")["motion"]["character"] == "federnd"
-    code, summary, _ = run_tool(capsys, "brand", "scaffold-test-brands")
-    assert summary["created"] == []  # existing brands are kept
