@@ -99,3 +99,53 @@
 - The reel came out at 23.8 s, below the 30–45 s target for type 1 (the material did not
   carry more). The island name is never spoken in the kept parts, so the plan proposes a text
   overlay (Phase 2).
+
+### Added — Phase 2: overlays, captions and brand profiles
+- Brand profiles (BRIEF §9) as validated design tokens with WCAG-AA caption colours; `videocut
+  tool brand list|check|show`; `job new --brand` / `job brand <id>`.
+- `videocut tool captions` (output-time caption groups, cut words never appear, emphasis from
+  zoom keys / emphasis.json); `videocut tool overlays` (overlays.json + transparent overlay
+  render); render composites the overlay; verify flags overlay_in_safe_zone / overlay_on_face and
+  writes caption-change sheets; shared crop/face geometry (_geometry.py).
+- Overlay renderer renderer/render.js: transparent ProRes 4444, --boxes/--still/--sheet/--blur N,
+  brand fonts via FontFace; lib (closed-form spring, text fitting, face- and safe-zone-aware
+  placement); scenes caption + keyword; node + pytest tests.
+- Scene library: number_card, list_item, chat_bubble, screenshot_frame (zoom focus + redaction
+  burnt in before first visible frame), split_compare, bar_chart, lower_third, cta_end (logo end
+  card); asset access limited to the job folder.
+- `videocut tool brand sheet <id>`: the brand's preview sheet (BRIEF §9), every installed scene
+  with neutral sample content on the brand background → `~/VideoCut/brands/<id>/preview.jpg`.
+  The renderer's `--sheet` takes fixed times, labels and a background from `overlays.json`.
+- Verify writes `out/verify/overlays_NN.jpg`, one tile per overlay once it has settled, so the
+  agent checks overlays with one or two pictures.
+- Step 8 for Claude: the `plan` skill proposes overlay ideas (scene, time, spoken words, why;
+  brand address du/sie, never a brand forbidden word); new `overlays` skill: captions → overlays
+  in `work/edl.json` (output time, one at a time, text only from what is spoken) → overlay
+  render → preview → verify (fix overlay_on_face / overlay_in_safe_zone) → final render →
+  `work/overlay_report.md`. No new tool permissions: the renderer is only reached through
+  `videocut tool overlays`.
+- `videocut run --brand <id>` runs the overlay stage after the approved cut, with no second
+  approval. It never runs before the cut is approved and fails when the overlay run changes the
+  cut (the EDL segments). A finished cut of the approved plan is kept on a re-run (`--recut`
+  cuts again), and `job.json` records `cut` and `overlays`. `--asset FILE` and `job new --asset`
+  add screenshots or images to a new job (`input/`, listed in `job.json` `assets`).
+
+### Changed — Phase 2
+- Removed `brand scaffold-test-brands`: invented colours do not belong in shipped code.
+- Overlay colour path: the renderer encodes the overlay as BT.709 limited range and tags it,
+  and render converts it to the matrix of the cut video. Before, the untagged BT.601 conversion
+  shifted brand colours in players; an accent read back as BT.709 was off by ΔE ≈ 100. Now the
+  drawn brand colours survive in the H.264 reel at ΔE ≈ 1 (CIE76).
+- Overlay composite on an exact frame grid: overlay frame n lands on reel frame n. The joined
+  segments' rounded timestamps used to show captions one frame late.
+- Caption style `plain` draws a soft halo in the derived box colour. With only a shadow, white
+  text on bright video measured a median of 4.3:1 against its surroundings (worst ≈ 1.8:1);
+  with the halo it measures ≥ 16:1. Covered by an end-to-end test (real renderer → render →
+  verify, ΔE and drawn contrast).
+- A word scaled by the `scale` highlight pushes its line apart instead of covering the space to
+  its neighbours. SVG logos without width/height are sized from their viewBox. `cta_end`
+  registers its content, so captions keep clear of the end card.
+- Brand module review: malformed sections, non-finite numbers and invalid weights are errors,
+  not crashes. `display`/`body` font files are registered when `files` is missing. Ambiguous
+  free-text enums warn. The default spring is BRIEF's (13, 0.8). Folders whose names are not
+  valid ids are not listed. `job brand` takes ids only and refuses inside an agent run.
