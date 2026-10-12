@@ -32,7 +32,6 @@ Read `work/project.md` (the keep list is the cut) and `work/words.json`
   "source": "<job.json source, e.g. input/take.mov>",
   "segments": [
     {"in": 12.48, "out": 17.92, "fade_ms": 30,
-     "crop": {"cx": 0.5, "cy": 0.5, "zoom": 1.0},
      "zoom_keys": [[14.10, 1.25]]}
   ]
 }
@@ -46,8 +45,8 @@ Read `work/project.md` (the keep list is the cut) and `work/words.json`
   ~0.3 s should be split into two segments instead.
 - **Fillers / false starts / retakes:** leave them out by ending one segment before and
   starting the next after them. The last complete take wins unless the plan says otherwise.
-- **Crop:** `cx`/`cy` default 0.5/0.5 (centre). Change only if the contact sheets show the
-  face clearly off-centre; keep one fixed crop for the whole reel.
+- **Crop:** leave `crop` out; render then centres every segment on the face
+  (`work/face.json`, follows only large moves). Set `{"cx", "cy", "zoom"}` only to override.
 - **Punch-in zooms:** `zoom_keys: [[t, 1.25]]` (source time inside the segment) on the
   emphasis words of the plan, at the word's `t0`; at most one zoom every 2–4 s of output,
   never 2 segments in a row. Use 1.25; up to 1.6 only for one critical moment.
@@ -55,7 +54,8 @@ Read `work/project.md` (the keep list is the cut) and `work/words.json`
   `videocut tool sheet burst <t>` (frames ±0.5 s + waveform) or
   `videocut tool sheet timeline <t0> <t1>` (words, pauses, filler shading). Sparingly.
 
-Then `videocut tool edl check`. Fix every reported path until it passes.
+Then `videocut tool edl check`. Fix every reported path until it passes. Its `warnings`
+name cut points inside a blink: move each to the suggested time (a cut is never in a blink).
 
 ## 2. Preview, check, fix (max 3 rounds)
 
@@ -63,7 +63,7 @@ Each round:
 
 1. `videocut tool render --preview` (fast, half size).
 2. `videocut tool verify`. Its summary lists `flagged` cuts (`click`, `visual_jump` = a jump
-   far larger than the other cuts) and `failed` global checks (duration, black/frozen
+   far larger than the other cuts, `blink_at_cut`) and `failed` global checks (duration, black/frozen
    stretches, size). `info` lists normal talking-head jump cuts — **expected, not errors.**
 3. Read only the images of **flagged** cuts (`out/verify/cut_NN.jpg`: frames −2…+2 around the
    cut, waveform ±100 ms, red marker at the cut). Decide whether it is real.

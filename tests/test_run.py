@@ -161,18 +161,25 @@ def test_prep_then_handwritten_edl_renders_and_verifies(capsys, clip_dir, videoc
     have_model = (REAL_MODELS / "whisper-large-v3-turbo" / "weights.safetensors").is_file()
     denoise = shutil.which("deep-filter") or (run.ROOT / ".tools" / "bin" / "deep-filter").exists()
     ingest = ["ingest", "--denoise"] if denoise else ["ingest"]
+    face = [["face"]] if (REAL_MODELS / "face_landmarker.task").is_file() else []
     if have_model:
         (videocut_home / "models").symlink_to(REAL_MODELS)
-        steps = [ingest, ["transcribe"], ["sheet", "contact"]]
+        steps = [ingest, *face, ["transcribe"], ["sheet", "contact"]]
     else:  # CI: exact word times instead of a model
         doc = {"model": "layout", "language": "de", "duration": layout[-1]["t1"]}
         (job / "work" / "words.json").write_text(
             json.dumps({**doc, "words": _layout_words(layout)})
         )
-        steps = [ingest, ["candidates"], ["sheet", "contact"]]
+        if face:
+            (videocut_home / "models").mkdir(parents=True)
+            (videocut_home / "models" / "face_landmarker.task").symlink_to(
+                REAL_MODELS / "face_landmarker.task"
+            )
+        steps = [ingest, *face, ["candidates"], ["sheet", "contact"]]
     run.prep(job, steps, say=lambda _: None)
     for f in ("work/takes_packed.md", "work/candidates.json", "work/sheets/contact_01.jpg"):
         assert (job / f).is_file(), f
+    assert not face or (job / "work" / "face.json").is_file()
 
     # What the cut skill would write: every phrase with a margin inside the silence around
     # it (the measured onset `a0` lies a few ms after the true one), fillers left out.

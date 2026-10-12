@@ -63,6 +63,12 @@
   plan run → approval prompt → cut run (resumes the plan session) → `out/`. Every Claude run
   appends wall time, turns, cost and token usage to `work/runs.jsonl`.
 - End-to-end test without Claude (generated clip → prep → hand-written EDL → render → verify).
+- `videocut tool face` (step 4): MediaPipe Face Landmarker (VIDEO mode, blendshapes) at 30 fps
+  over a 480p display-oriented pipe → `work/face.json` (box, centre, blink, gaze per frame,
+  median, blink intervals with 0.5/0.35 hysteresis). Render centres segments without a crop on
+  the face median and follows only moves > 8 %; `edl check` warns about cut points in a blink
+  with a blink-free, word-free suggestion; verify flags `blink_at_cut`; prep runs face after
+  ingest. Real 66 s HLG phone clip: 18–24 s, face in 100 % of frames, 25 blinks.
 
 ### Changed
 - Verify: a talking-head jump cut is expected. A clear visual jump is reported as info

@@ -33,6 +33,7 @@
 |---|---|
 | `job new <video> [--type] [--brief] [--id]`, `job show [job]`, `job approve [job]` | `job.py` |
 | `ingest [--denoise]` | `ingest.py` |
+| `face` | `face.py` |
 | `transcribe [--model turbo\|parakeet] [--language]`, `candidates` | `transcribe.py` |
 | `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>` | `sheets.py` |
 | `edl check [file]` | `edl.py` |
@@ -49,6 +50,7 @@ Helpers: `_transcribe_energy.py` (pauses, voiced gaps), `_transcribe_pack.py`
 job.json   id, created, source (relative), type, brief, status, approval
 input/     source recording, hard-linked (copied across volumes), never moved
 work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4        ingest
+           face.json                                                             face
            words.json, transcribe.json, candidates.json, takes_packed.md         transcribe
            sheets/contact_NN.jpg, burst_*.jpg, timeline_*.jpg                    sheet
            contract.md (reel contract of the type, copied by `run` if one exists)
@@ -81,7 +83,7 @@ between (BRIEF §5):
 
 `videocut run <video|job>`:
 
-1. **prep** (no Claude): `job new` when a file is given, `ingest --denoise`, `transcribe`
+1. **prep** (no Claude): `job new` when a file is given, `ingest --denoise`, `face`, `transcribe`
    (also candidates and the packed transcript), `sheet contact`; copies `templates/<type>.md`
    to `work/contract.md` when it exists.
 2. **plan run**: `claude -p` with the `plan` skill. Fails if `project.md` is missing or
@@ -106,6 +108,24 @@ a fresh full render + verify.
 
 **Deviation from BRIEF §5/§6:** pictures are not handed to subagents (the restricted runner
 has no Task tool); the skills keep an image budget instead.
+
+## Face (`tools/face.py`)
+
+MediaPipe Face Landmarker in VIDEO mode with blendshapes over the source, decoded by ffmpeg
+in display orientation at short side 480 px and 30 fps (scaled before the HDR tonemap) and
+read frame by frame from a pipe. `work/face.json` holds per frame `t`, `found`, a normalised
+`box`, `cx/cy`, `blink` (max of both eyeBlink scores) and `gaze_off` (0 = into the lens),
+the global median, and blink intervals: start at a score ≥ 0.5, end below 0.35 (hysteresis),
+closures longer than 0.8 s are not blinks. 30 fps instead of the brief's 5 fps, because
+blinks (100–400 ms) need it and the Landmarker costs only ~7.5 ms per 480p frame (66 s phone
+clip: 18–24 s in total). The file counts only while it is newer than the source and names it.
+
+Uses: `render` centres a segment without `crop` on the face median, or on the segment's own
+median when that is > 8 % of the frame away (fixed crop, follow only large moves; centre
+when no face was found); `edl check` warns (never fails) for an `in`/`out` inside a blink
+±1 frame, with the nearest time within ±150 ms outside blinks and `words.json` words; `verify`
+flags `blink_at_cut` when one of the two output frames on either side of a cut maps (via the
+EDL) into a blink, and uses the same face crops to tell reframes from jump cuts.
 
 ## Verify
 

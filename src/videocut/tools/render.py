@@ -4,7 +4,9 @@
              audio faded by fade_ms at every boundary
     reframe  crop window of the output aspect around crop.cx/cy, `zoom`× tighter, scaled
              to the EDL size at the EDL fps; zoom_keys are hard punch-ins from that
-             source time on (no animated zoom yet)
+             source time on (no animated zoom yet). A segment without a crop is centred
+             on the face median of a current work/face.json (following the face only on
+             a large move, face.face_crops), else on the frame centre
     loudness loudnorm two-pass to -14 LUFS / -1 dBTP / LRA 11 (preview: single pass);
              the finished file is measured again
     colour   HDR sources (HLG/PQ) are tonemapped to SDR BT.709 and tagged so (_color.py)
@@ -43,6 +45,7 @@ from .common import (
     run_tool,
     write_json,
 )
+from .face import face_crops, load_face
 from .ingest import probe
 from .job import PROJECT, is_approved
 
@@ -163,6 +166,8 @@ def render(args) -> dict:
         ) from None
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
+    face = load_face(job, edl.source)
+    edl, followed = face_crops(edl, face)
 
     preview = bool(args.preview)
     ow, oh = edl.size
@@ -288,6 +293,8 @@ def render(args) -> dict:
         "preview": preview,
         "hdr_tonemapped": is_hdr(info),
         "audio_from": audio_from,
+        "default_crop": "face" if face and face.get("median") else "centre",
+        "face_follow_segments": followed,
         "warnings": warnings,
     }
 
