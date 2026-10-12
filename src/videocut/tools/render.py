@@ -10,6 +10,10 @@
     loudness loudnorm two-pass to -14 LUFS / -1 dBTP / LRA 11 (preview: single pass);
              the finished file is measured again
     colour   HDR sources (HLG/PQ) are tonemapped to SDR BT.709 and tagged so (_color.py)
+    overlay  work/overlay.mov (transparent, `videocut tool overlays`) newer than edl.json is
+             (and than overlays.json) is composited over the cut video (alpha; preview:
+             scaled), recorded as "overlay": true in render.json; an older one is
+             ignored with a warning
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
 
@@ -33,6 +37,7 @@ from pathlib import Path
 from ..edl import EdlError, load
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
+from ._geometry import framed
 from .common import (
     ToolError,
     binary,
@@ -45,7 +50,6 @@ from .common import (
     run_tool,
     write_json,
 )
-from .face import face_crops, load_face
 from .ingest import probe
 from .job import PROJECT, is_approved
 
@@ -138,6 +142,20 @@ def _duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
+def composite_graph(index: int, fps, size: tuple[int, int]) -> str:
+    """Filter lines that lay input `index` (the transparent overlay.mov) over [v] as [vo]:
+    same fps, scaled to `size`, alpha blended in 4:4:4 so thin overlay edges keep their
+    colour; the video decides the length (a shorter overlay just ends)."""
+    w, h = size
+    return (
+        f";\n[{index}:v]setpts=PTS-STARTPTS,fps={fps},scale={w}:{h}:flags=lanczos,"
+        "format=yuva444p[ov];\n"
+        "[v]format=yuv444p[base];\n"
+        "[base][ov]overlay=0:0:format=yuv444:eof_action=pass:shortest=0,"
+        "format=yuv420p[vo]\n"
+    )
+
+
 def render(args) -> dict:
     job = resolve_job(args.job)
     if not is_approved(job):  # the human gate: no cut, not even a preview, before approval
@@ -166,8 +184,7 @@ def render(args) -> dict:
         ) from None
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
-    face = load_face(job, edl.source)
-    edl, followed = face_crops(edl, face)
+    edl, followed, face = framed(job, edl)
 
     preview = bool(args.preview)
     ow, oh = edl.size
@@ -194,8 +211,27 @@ def render(args) -> dict:
         measured = "silent"
     elif preview:
         measured = None  # single pass
+    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info))
+    warnings, v_out = [], "[v]"
+    overlay = work / "overlay.mov"
+    ov_json = work / "overlays.json"
+    use_overlay = is_fresh([overlay], [edl_path] + ([ov_json] if ov_json.is_file() else []))
+    if use_overlay:
+        graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh))
+        inputs += ["-i", str(overlay)]
+        v_out = "[vo]"
+    elif overlay.is_file():
+        warnings.append(
+            "work/overlay.mov is older than edl.json or overlays.json and was left out; run "
+            "`videocut tool overlays` again"
+        )
+    elif edl.captions or edl.overlays:
+        warnings.append(
+            "the EDL has captions/overlays but there is no work/overlay.mov; run "
+            "`videocut tool overlays` first"
+        )
     graph_file = work / "render_filter.txt"
-    _write_graph(graph_file, plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info)))
+    _write_graph(graph_file, graph)
 
     dst = out / ("preview.mp4" if preview else "reel.mp4")
     print(f"rendering {dst.name}: {len(edl.segments)} segments, {len(plan.ranges)} ranges")
@@ -205,7 +241,7 @@ def render(args) -> dict:
         "-/filter_complex",
         str(graph_file),
         "-map",
-        "[v]",
+        v_out,
         "-map",
         "[a]",
         "-r",
@@ -255,7 +291,6 @@ def render(args) -> dict:
 
     loud = measure(dst)
     min_w = plan.min_crop_width()
-    warnings = []
     if min_w < plan_mod.SHARP_MIN_WIDTH:
         warnings.append(
             f"crop is only {min_w} px wide (< {plan_mod.SHARP_MIN_WIDTH}); the reel will look soft"
@@ -268,6 +303,8 @@ def render(args) -> dict:
         "loudness": loud,
         "preview": preview,
     }
+    if use_overlay:
+        report["overlay"] = True
     if loud["integrated_lufs"] is None:
         warnings.append("the reel is silent")
     elif abs(off := loud["integrated_lufs"] - plan_mod.TARGET_I) > 1:
@@ -295,6 +332,7 @@ def render(args) -> dict:
         "audio_from": audio_from,
         "default_crop": "face" if face and face.get("median") else "centre",
         "face_follow_segments": followed,
+        "overlay": use_overlay,
         "warnings": warnings,
     }
 

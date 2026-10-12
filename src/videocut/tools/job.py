@@ -20,6 +20,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from .. import brand
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -116,10 +117,19 @@ def _link_or_copy(src: Path, dst: Path) -> str:
         return "copy"
 
 
+def _brand_id(ref: str) -> str:
+    """Id of a brand that loads without errors; anything else fails the command."""
+    try:
+        return brand.load(ref)["id"]
+    except brand.BrandError as e:
+        raise ToolError(str(e)) from None
+
+
 def new(args) -> dict:
     video = Path(args.video).expanduser()
     if not video.is_file():
         raise ToolError(f"video not found: {args.video}")
+    brand_id = _brand_id(args.brand) if args.brand else None
     now = datetime.now().astimezone()
     job_id = args.id or _default_id(video, now)
     if not ID_RE.fullmatch(job_id):
@@ -142,9 +152,25 @@ def new(args) -> dict:
         "brief": args.brief,
         "status": "new",
     }
+    if brand_id:
+        data["brand"] = brand_id
     write_json(job / JOB_FILE, data)
     print(job)
-    return {"job": str(job), "id": job_id, "source": data["source"], "imported": how}
+    return {
+        "job": str(job),
+        "id": job_id,
+        "source": data["source"],
+        "imported": how,
+        "brand": brand_id,
+    }
+
+
+def set_brand(args) -> dict:
+    job = resolve_job(args.job)
+    brand_id = _brand_id(args.brand)
+    update_job(job, brand=brand_id)
+    print(f"{job.name}: brand {brand_id}")
+    return {"job": str(job), "id": job.name, "brand": brand_id}
 
 
 def show(args) -> dict:
@@ -179,6 +205,7 @@ def register(subparsers) -> None:
     n.add_argument("video", help="source recording (linked or copied, never moved)")
     n.add_argument("--type", help="video type, e.g. a reel contract name")
     n.add_argument("--brief", help="free-text instruction from the user")
+    n.add_argument("--brand", help="brand id (see `tool brand list`)")
     n.add_argument("--id", help="job id (default: timestamp + file name)")
     n.set_defaults(handler=run_tool("job new", new))
     s = sub.add_parser(
@@ -193,3 +220,6 @@ def register(subparsers) -> None:
     )
     a.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     a.set_defaults(handler=run_tool("job approve", approve))
+    b = sub.add_parser("brand", help="set or replace the brand of a job", parents=[job_parent()])
+    b.add_argument("brand", help="brand id (see `tool brand list`)")
+    b.set_defaults(handler=run_tool("job brand", set_brand))
