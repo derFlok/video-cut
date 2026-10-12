@@ -18,6 +18,8 @@ by ingest's probe (first AAC/PCM one, never a spatial-audio track).
 Writes out/reel.mp4 + out/cover.jpg (preview: out/preview.mp4, half size, fast), and
 out/render.json. The filter graph of the last run is kept in work/render_filter.txt; it is
 passed to ffmpeg as a file, so long EDLs never hit the command line limit.
+
+Both modes refuse unless a human approved the current work/project.md (job.is_approved).
 """
 
 import hashlib
@@ -42,6 +44,7 @@ from .common import (
     write_json,
 )
 from .ingest import probe
+from .job import PROJECT, is_approved
 
 CRF, PRESET = "18", "medium"
 PREVIEW_PRESET = "veryfast"
@@ -134,6 +137,11 @@ def _duration(path: Path) -> float:
 
 def render(args) -> dict:
     job = resolve_job(args.job)
+    if not is_approved(job):  # the human gate: no cut, not even a preview, before approval
+        raise ToolError(
+            f"{PROJECT} is not approved (or changed since); a human runs "
+            f"`videocut tool job approve {job.name}` first"
+        )
     work, out = job / "work", job / "out"
     edl_path = work / "edl.json"
     if not edl_path.is_file():
