@@ -111,13 +111,6 @@ def run_tool(name: str, fn: Callable[[argparse.Namespace], dict]) -> Callable:
     return handler
 
 
-def not_implemented(name: str) -> Callable:
-    def body(args: argparse.Namespace) -> dict:
-        raise ToolError(f"{name}: not implemented yet")
-
-    return run_tool(name, body)
-
-
 def is_fresh(outputs: list[Path], inputs: list[Path]) -> bool:
     """True when every output exists and is newer than every input."""
     if not all(o.is_file() for o in outputs):

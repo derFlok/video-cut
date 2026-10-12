@@ -1,7 +1,6 @@
 import argparse
 
 import pytest
-from helpers import run_tool
 
 from videocut import tools
 from videocut.cli import main
@@ -30,16 +29,6 @@ def test_every_module_registers_handlers():
 def test_hello(capsys):
     assert main(["tool", "hello"]) == 0
     assert "ready in" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize(
-    "argv",
-    [["sheet", "contact"]],
-)
-def test_stubs_fail_with_summary(capsys, argv):
-    code, s, _ = run_tool(capsys, *argv)
-    assert code == 1
-    assert s["ok"] is False and "not implemented yet" in s["error"]
 
 
 def test_unknown_tool_is_rejected():
