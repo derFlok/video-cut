@@ -254,6 +254,11 @@ def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
     assert code == 0 and s["ok"] is False
     assert s["overlay_flagged"][0]["flags"] == ["overlay_boxes_untrusted"]
     assert any("work/overlay_boxes.json" in w for w in s["warnings"])
+    # ... nor is an overlay.mov whose boxes file was removed
+    (job / "work" / "overlay_boxes.json").unlink()
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and s["ok"] is False
+    assert s["overlay_flagged"][0]["flags"] == ["overlay_boxes_untrusted"]
 
 
 def test_full_frame_end_card_is_not_flagged():

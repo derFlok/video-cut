@@ -161,6 +161,25 @@
   - Asset paths such as `..name.png` are accepted, and font `file://` URLs are percent-decoded.
 - Layout also scans the whole allowed height for a free spot between several obstacles.
 
+- End card after the speech: `cta_end` (any full-frame plate scene) starts at the last spoken
+  word + 0.2 s. `videocut tool overlays` moves an earlier one there, keeping its length; when
+  it then runs past the cut, the reel gets a held tail: the last frame repeats under the card
+  and the audio is padded with silence after loudnorm, so the loudness is unchanged
+  (`render.json` `tail_s`). Chosen over rejecting the EDL because it always succeeds, also
+  when the recording ends right on the last word. overlays, render and verify compute the
+  same schedule from the EDL and the transcript (`_plates.py`).
+- No caption is drawn while a plate is on screen. `cta_end` no longer registers its content
+  for caption layout. Boxes carry the drawn times. verify flags `caption_on_plate` and
+  `plate_over_speech`.
+- Caption bands: `center` and `lower` (chest area, below the face, above the bottom safe zone).
+  `tokens.captions.position` picks the first one, and the other is the fallback. Both win over
+  the strip above the head, which close-ups used to get. A block shrinks before it leaves both
+  bands.
+- Verify trusts the overlay files only as written: `videocut tool overlays` records the
+  sha256 of `overlay.mov`, `overlay_boxes.json` and `overlays.json` in
+  `$VIDEOCUT_HOME/state/<job id>/overlay_render.json`. That folder is outside the job folder,
+  like the approvals. A mismatch is flagged `overlay_boxes_untrusted`.
+
 ### Observed — Phase 2
 - Phase 2 acceptance on the Phase 1 recording (the approved 23.8 s cut, reused unchanged):
   `videocut run <job> --brand <id>` once per brand, each reel with 31 caption groups. Verify ok

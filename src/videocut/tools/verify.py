@@ -625,7 +625,10 @@ def verify(args) -> dict:
     )
     if boxes is not None and not render.get("overlay"):
         warnings.append("this render has no overlay composited; boxes checked anyway")
-    untrusted = overlays_mod.check_record(job) if boxes is not None else None
+    # Checked whenever there is an overlay at all: a missing or broken boxes file next to an
+    # overlay.mov (or a render with one composited) is no excuse to skip the record.
+    has_overlay = (job / "work" / "overlay.mov").is_file() or bool(render.get("overlay"))
+    untrusted = overlays_mod.check_record(job) if boxes is not None or has_overlay else None
     if untrusted:
         warnings.append(f"overlay boxes not trusted: {untrusted}")
     times = caption_times(edl.captions, fps, video_dur) if edl is not None else []

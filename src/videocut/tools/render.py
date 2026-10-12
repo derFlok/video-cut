@@ -212,7 +212,9 @@ def render(args) -> dict:
     plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh))
     overlay = work / "overlay.mov"
     ov_json = work / "overlays.json"
-    use_overlay = is_fresh([overlay], [edl_path] + ([ov_json] if ov_json.is_file() else []))
+    # words.json too: the end card's tail is computed from it (_plates), like overlays did.
+    ov_inputs = [p for p in (ov_json, work / "words.json") if p.is_file()]
+    use_overlay = is_fresh([overlay], [edl_path, *ov_inputs])
     if use_overlay and plan.frames:  # the end card's held tail (same schedule as overlays)
         plan = plan_mod.with_tail(plan, _plates.for_job(job, edl, plan.duration).tail_frames)
     audio_args, audio_in, audio_from = _audio_input(job, src, edl.source, info)
@@ -243,8 +245,8 @@ def render(args) -> dict:
         v_out = "[vo]"
     elif overlay.is_file():
         warnings.append(
-            "work/overlay.mov is older than edl.json or overlays.json and was left out; run "
-            "`videocut tool overlays` again"
+            "work/overlay.mov is older than edl.json, overlays.json or words.json and was left "
+            "out; run `videocut tool overlays` again"
         )
     elif edl.captions or edl.overlays:
         warnings.append(
