@@ -7,6 +7,7 @@ import clips
 import pytest
 from helpers import run_tool
 
+from videocut.tools import overlays as overlays_mod
 from videocut.tools import verify
 
 pytestmark = pytest.mark.skipif(clips.ffmpeg() is None, reason="needs ffmpeg")
@@ -221,6 +222,8 @@ def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
         {"scene": "keyword", "t0": 1.0, "t1": 2.0, "box": [450, 650, 650, 850]},
     ]
     (job / "work" / "overlay_boxes.json").write_text(json.dumps(boxes))
+    (job / "work" / "overlay.mov").write_bytes(b"mov")
+    overlays_mod.write_record(job)  # as `videocut tool overlays` does after its render
     stale = job / "out" / "verify" / "captions_09.jpg"
     stale.parent.mkdir(parents=True)
     stale.write_bytes(b"x")
@@ -245,6 +248,13 @@ def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
     )
     assert out.stdout.strip() == "1080,1920"  # 3x3 tiles of 360x640
 
+    # Boxes edited after the tool wrote them (the agent may write work/) are not trusted.
+    (job / "work" / "overlay_boxes.json").write_text(json.dumps(boxes[:1]))
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and s["ok"] is False
+    assert s["overlay_flagged"][0]["flags"] == ["overlay_boxes_untrusted"]
+    assert any("work/overlay_boxes.json" in w for w in s["warnings"])
+
 
 def test_full_frame_end_card_is_not_flagged():
     face = [{"t": 1.0, "box": [400, 600, 700, 1000]}]
@@ -262,10 +272,22 @@ def test_overlay_covering_a_caption_is_flagged():
         {"scene": "caption", "t0": 1.0, "t1": 2.0, "box": [300, 300, 780, 480]},
         {"scene": "keyword", "t0": 1.5, "t1": 4.0, "box": [350, 320, 730, 500]},
         {"scene": "keyword", "t0": 2.0, "t1": 4.0, "box": [350, 1300, 730, 1450]},  # later, apart
-        {"scene": "cta_end", "t0": 0.5, "t1": 2.0, "box": [0, 0, 1080, 1920]},
+        {"scene": "cta_end", "t0": 2.5, "t1": 4.0, "box": [0, 0, 1080, 1920]},
     ]
     flags = [o["flags"] for o in verify.overlay_checks(boxes, [], (1080, 1920))]
     assert flags == [[], ["overlay_overlap"], [], []]
     assert verify.full_frame_spans([{"scene": "cta_end", "t0": 1, "t1": 2}, {"scene": "x"}]) == [
         (1, 2)
     ]
+
+
+def test_caption_on_the_end_card_and_end_card_over_speech_are_flagged():
+    plate = {"scene": "cta_end", "t0": 5.0, "t1": 7.0, "box": [0, 0, 1080, 1920]}
+    cap = {"scene": "caption", "t0": 4.0, "t1": 5.5, "box": [100, 1000, 980, 1100]}
+    # The renderer hides captions under the plate: drawn only until 4.97 s, not flagged.
+    hidden = {**cap, "drawn": [4.0, 4.967]}
+    out = verify.overlay_checks([plate, hidden], [], (1080, 1920), last_word=4.8)
+    assert [o["flags"] for o in out] == [[], []]
+    # A caption drawn over the plate, and a plate before the last word + 0.2 s.
+    out = verify.overlay_checks([{**plate, "drawn": [5.03, 7.0]}, cap], [], (1080, 1920), 4.9)
+    assert [o["flags"] for o in out] == [["plate_over_speech"], ["caption_on_plate"]]

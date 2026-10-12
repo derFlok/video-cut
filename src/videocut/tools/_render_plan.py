@@ -7,7 +7,7 @@ Timing: every segment boundary and zoom key is snapped to the output frame grid
 snapped duration, so audio and video never drift apart however many cuts there are.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 
 from ..edl import Edl
@@ -45,7 +45,8 @@ class Plan:
     out_size: tuple[int, int]
     ranges: list[Range]
     audio: list[AudioPart]
-    frames: int
+    frames: int  # all output frames, the held tail included
+    tail: int = 0  # held frames after the cut (the last frame repeats, silent audio)
 
     @property
     def duration(self) -> float:
@@ -88,6 +89,12 @@ def build(edl: Edl, src_size: tuple[int, int], out_size: tuple[int, int]) -> Pla
         t_out += seg.duration
         frame0 = f_end
     return Plan(fps, out_size, ranges, audio, frame0)
+
+
+def with_tail(plan: Plan, frames: int) -> Plan:
+    """`plan` extended by `frames` held frames (the last frame repeats, the audio is padded
+    with silence after loudnorm); see _plates."""
+    return replace(plan, frames=plan.frames - plan.tail + frames, tail=frames)
 
 
 def _t(v: float) -> str:
@@ -159,6 +166,8 @@ def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
         ]
         lines.append(f"[v{i}]" + ",".join(f) + f"[vc{i}];")
     tail = ",".join(f for f in (to_sdr, "format=yuv420p") if f)
+    if plan.tail:
+        tail = f"tpad=stop_mode=clone:stop={plan.tail},{tail}"
     joined = "".join(f"[vc{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0,{tail}[v]"
     return [*lines, joined]
 
@@ -166,13 +175,14 @@ def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
 def graph(
     plan: Plan, measured: dict | str | None, video_in: str, audio_in: str, to_sdr: str = ""
 ) -> str:
-    """Full render graph: [v] video, [a] normalised audio."""
+    """Full render graph: [v] video, [a] normalised audio (+ the silent tail)."""
+    pad = f",apad=whole_dur={_t(plan.duration)}" if plan.tail else ""
     lines = [
         *video_chain(plan, video_in, to_sdr),
         ";",
         *audio_chain(plan, audio_in),
         ";",
-        f"[cut]{loudnorm(measured)}[a]",
+        f"[cut]{loudnorm(measured)}{pad}[a]",
     ]
     return "\n".join(lines) + "\n"
 

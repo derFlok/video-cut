@@ -39,11 +39,11 @@ def source(tmp_path_factory):
     return path
 
 
-def _overlay(path: Path) -> None:
+def _overlay(path: Path, dur: float = DUR) -> None:
     """Transparent ProRes 4444 at the output size with one opaque red box."""
     x0, y0, x1, y1 = BOX
     _ff(
-        "-f", "lavfi", "-i", f"color=c=black@0.0:s=1080x1920:r=30:d={DUR},format=rgba",
+        "-f", "lavfi", "-i", f"color=c=black@0.0:s=1080x1920:r=30:d={dur},format=rgba",
         "-vf", f"drawbox=x={x0}:y={y0}:w={x1 - x0}:h={y1 - y0}:color=red:t=fill:replace=1",
         "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le", str(path),
     )  # fmt: skip
@@ -106,3 +106,38 @@ def test_render_composites_a_fresh_overlay(capsys, source):
     code, s, _ = run_tool(capsys, "render", "--preview", "--job", str(job))
     assert code == 0 and s["overlay"] is False
     assert any("overlay.mov is older" in w for w in s["warnings"])
+
+
+def _rms(path: Path, t0: float, t1: float) -> float:
+    raw = _ff("-ss", f"{t0:.3f}", "-to", f"{t1:.3f}", "-i", str(path), "-ac", "1",
+              "-f", "f32le", "-")  # fmt: skip
+    x = np.frombuffer(raw, np.float32)
+    return float(np.sqrt(np.mean(x**2))) if len(x) else 0.0
+
+
+def test_end_card_after_the_last_word_extends_the_reel_with_a_held_tail(capsys, source):
+    code, s, _ = run_tool(capsys, "job", "new", str(source), "--id", "ovt")
+    job = Path(s["job"])
+    caps = [{"t0": 2.0, "t1": 2.7, "words": [{"w": "end", "t0": 2.0, "t1": 2.6}]}]
+    cta = [{"scene": "cta_end", "t0": 2.0, "t1": 3.0, "props": {"text": "x"}}]
+    edl = {"fps": 30, "size": [1080, 1920], "source": s["source"], "segments": SEGMENTS}
+    (job / "work" / "edl.json").write_text(json.dumps({**edl, "captions": caps, "overlays": cta}))
+    (job / "work" / "project.md").write_text("# Plan: tail test\n")
+    approve_job(job)
+    code, base, _ = run_tool(capsys, "render", "--job", str(job))  # no overlay: no tail
+    assert code == 0 and abs(base["duration"] - DUR) <= 1 / 30 + 1e-3, base
+
+    # the end card moves to 2.8 s (last word 2.6 s + 0.2 s) and lasts 1 s: 0.8 s of tail
+    _overlay(job / "work" / "overlay.mov", 3.8)
+    code, s, _ = run_tool(capsys, "render", "--job", str(job))
+    assert code == 0 and s["overlay"] is True, s
+    rj = json.loads((job / "out" / "render.json").read_text())
+    assert rj["tail_s"] == 0.8 and rj["output_duration"] == 3.8
+    assert abs(s["duration"] - 3.8) <= 1 / 30 + 1e-3
+    reel = job / "out" / "reel.mp4"
+    inside, far = _regions((1080, 1920))
+    last, held = _rgb(reel, 2.95), _rgb(reel, 3.7)
+    assert np.abs(held[far] - last[far]).mean() < 3  # the last frame is held
+    assert _rms(reel, 3.1, 3.75) < 1e-3 < _rms(reel, 1.0, 2.5)  # silent tail
+    # the spoken part keeps its loudness
+    assert abs(s["loudness"]["integrated_lufs"] - base["loudness"]["integrated_lufs"]) <= 0.5

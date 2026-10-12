@@ -154,15 +154,22 @@ function pageMain(spec) {
     if (L && !L.fits) placement.cramped++;
   }
 
-  // Draw every item alive at output time t onto ctx; returns [[index, box], ...].
+  // Full-frame plate items (scene.plate, the end card): no caption is drawn while one is
+  // on screen.
+  const { platesOf, hidesCaptions } = window.__load("lib/plates");
+  const plates = platesOf(items, scenes);
+
+  // Draw every item alive at output time t onto ctx; returns [[index, box, t], ...].
   function drawAt(t) {
     const boxes = [];
+    const hideCaptions = hidesCaptions(plates, t);
     items.forEach((item, i) => {
       if (t < item.t0 || t > item.t1) return;
+      if (hideCaptions && item.scene === "caption") return;
       ctx.save();
       const box = scenes[item.scene].draw(ctx, t - item.t0, item, env);
       ctx.restore();
-      if (box) boxes.push([i, box]);
+      if (box) boxes.push([i, box, t]);
     });
     return boxes;
   }
@@ -425,9 +432,9 @@ async function main() {
 
     const collected = new (require("./lib/boxes").BoxCollector)(size);
     const collect = (pairs) => {
-      for (const [i, box] of pairs) {
+      for (const [i, box, t] of pairs) {
         const it = list[i];
-        collected.add(i, { scene: it.scene, t0: it.t0, t1: it.t1 }, box);
+        collected.add(i, { scene: it.scene, t0: it.t0, t1: it.t1 }, box, t);
       }
     };
 

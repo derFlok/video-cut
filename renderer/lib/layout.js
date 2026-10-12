@@ -101,40 +101,66 @@ function allowedArea(size, safe, inset = 0) {
   return [side, (s.top || 0) + inset, size[0] - side, size[1] - (s.bottom || 0) - inset];
 }
 
-// Place a w x h block horizontally centred inside the allowed area. Vertically it sits
-// in the centre band (or the lower part for position "lower"). When it would overlap
-// the face box or one of the `avoid` boxes (other blocks on screen at the same time),
-// each grown by `margin`, it moves just above or below one of them: the spot that
-// clears the face first, then the other blocks, then lies closest to the preferred
-// spot. `inset` keeps that much extra distance from the safe zones (room for
-// transitions that draw outside the box). Returns {box, overlapsFace, overlapsBlock}.
+// Place a w x h block horizontally centred inside the allowed area, in one of two bands:
+// "center" (the middle of the allowed area) or "lower" (the chest area: below the face
+// box, above the bottom safe zone; without a face the lower part of the area). `position`
+// is the preferred band, the other one is the fallback; anywhere else (e.g. the strip
+// above the head) comes last. When the block would overlap the face box or one of the
+// `avoid` boxes (other blocks on screen at the same time), each grown by `margin`, it
+// moves just above or below one of them: the spot that clears the face first, then the
+// other blocks, then lies in the better band, then closest to that band's own spot.
+// `inset` keeps that much extra distance from the safe zones (room for transitions that
+// draw outside the box). Returns {box, overlapsFace, overlapsBlock, band}.
 const SCAN_STEP = 8; // px between candidate positions of the vertical scan
+const LOWER_AT = 0.72; // spot of the lower band without a face (share of the allowed height)
 
 function placeBlock({ size, safe, w, h, face, avoid = [], position = "center", margin = 24, inset = 0 }) {
   const [ax0, ay0, ax1, ay1] = allowedArea(size, safe, inset);
   const x0 = Math.round(Math.max(ax0, Math.min(ax1 - w, (size[0] - w) / 2)));
   const clampY = (y) => Math.round(Math.max(ay0, Math.min(ay1 - h, y)));
-  const preferred = clampY(
-    position === "lower" ? ay0 + (ay1 - ay0) * 0.72 - h / 2 : (ay0 + ay1) / 2 - h / 2,
-  );
   const at = (y) => [x0, y, x0 + w, y + h];
   const grow = (b) => [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin];
   const faceG = face ? grow(face) : null;
   const others = avoid.map(grow);
-  const ys = [preferred];
+  const ah = ay1 - ay0;
+  // Each band: whether a block top y lies in it, and its own spot.
+  const bands = {
+    center: {
+      has: (y) => Math.abs(y + h / 2 - (ay0 + ah / 2)) <= ah * 0.2,
+      spot: clampY(ay0 + ah / 2 - h / 2),
+    },
+    lower: faceG
+      ? { has: (y) => y >= faceG[3] - 0.5, spot: clampY(Math.max(Math.ceil(faceG[3]), ay0 + ah * LOWER_AT - h / 2)) }
+      : { has: (y) => y + h / 2 >= ay0 + ah * 0.5, spot: clampY(ay0 + ah * LOWER_AT - h / 2) },
+  };
+  const order = position === "lower" ? ["lower", "center"] : ["center", "lower"];
+  const rank = (y) => {
+    const k = order.findIndex((b) => bands[b].has(y));
+    return k < 0 ? order.length : k;
+  };
+  const ys = [bands[order[0]].spot, bands[order[1]].spot];
   for (const b of faceG ? [faceG, ...others] : others) ys.push(clampY(Math.ceil(b[3])), clampY(Math.floor(b[1] - h)));
   // Plus a scan of the whole allowed height, so a free gap between several obstacles is
   // found too (the spots next to one obstacle may each collide with another).
   if (faceG || others.length) for (let y = ay0; y <= ay1 - h; y += SCAN_STEP) ys.push(clampY(y));
   const best = ys
-    .map((y) => ({
-      y,
-      face: overlapArea(at(y), faceG),
-      block: others.reduce((sum, b) => sum + overlapArea(at(y), b), 0),
-      dist: Math.abs(y - preferred),
-    }))
-    .sort((a, b) => a.face - b.face || a.block - b.block || a.dist - b.dist)[0];
-  return { box: at(best.y), overlapsFace: best.face > 0, overlapsBlock: best.block > 0 };
+    .map((y) => {
+      const r = rank(y);
+      return {
+        y,
+        rank: r,
+        face: overlapArea(at(y), faceG),
+        block: others.reduce((sum, b) => sum + overlapArea(at(y), b), 0),
+        dist: Math.abs(y - bands[order[Math.min(r, order.length - 1)]].spot),
+      };
+    })
+    .sort((a, b) => a.face - b.face || a.block - b.block || a.rank - b.rank || a.dist - b.dist)[0];
+  return {
+    box: at(best.y),
+    overlapsFace: best.face > 0,
+    overlapsBlock: best.block > 0,
+    band: best.rank < order.length ? order[best.rank] : "other",
+  };
 }
 
 module.exports = { breakLines, fitText, faceAt, faceDuring, overlapArea, allowedArea, placeBlock };

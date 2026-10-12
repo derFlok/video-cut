@@ -87,9 +87,10 @@ def test_overlays_json_contract_and_renderer_call(capsys, source, fake_renderer)
     assert code == 0, s
     assert s["rendered"] and s["box_count"] == 1 and s["renderer"]["frames"] == 60
     doc = json.loads((job / "work" / "overlays.json").read_text())
-    keys = {"size", "fps", "duration", "tokens", "safe", "face", "captions", "overlays"}
+    keys = {"size", "fps", "duration", "tokens", "safe", "face", "captions", "overlays", "plates"}
     assert set(doc) == keys
     assert doc["size"] == [1080, 1920] and doc["fps"] == 30 and doc["duration"] == 2.0
+    assert doc["plates"] == {"last_word": 0.5, "tail_s": 0.0, "shifted": []}
     assert doc["safe"] == {"top": 250, "bottom": 350, "side": 65}
     assert doc["tokens"]["name"] and "colors" in doc["tokens"]  # the neutral bundled brand
     assert doc["captions"][0]["words"][0]["w"] == "hi" and doc["overlays"][0]["scene"] == "keyword"
@@ -109,6 +110,38 @@ def test_no_render_only_writes_the_json(capsys, source, fake_renderer):
     assert code == 0 and s["rendered"] is False and s["face_samples"] == 0
     assert (job / "work" / "overlays.json").is_file()
     assert not (job / "work" / "overlay.mov").exists()
+    assert overlays.check_record(job)  # nothing rendered, nothing recorded
+
+
+def test_end_card_moves_behind_the_last_word_and_extends_the_track(capsys, source, fake_renderer):
+    cta = {"scene": "cta_end", "t0": 1.2, "t1": 2.0, "props": {"text": "x"}}
+    caps = [{"t0": 0.1, "t1": 1.6, "words": [{"w": "hi", "t0": 0.1, "t1": 1.5}]}]
+    job = _job(capsys, source, captions=caps, overlays=[cta])
+    code, s, _ = run_tool(capsys, "overlays", "--job", str(job))
+    assert code == 0, s
+    doc = json.loads((job / "work" / "overlays.json").read_text())
+    assert doc["overlays"] == [{**cta, "t0": 1.7, "t1": 2.5}]
+    assert doc["plates"] == {
+        "last_word": 1.5, "tail_s": 0.5, "shifted": [{"scene": "cta_end", "from": 1.2, "to": 1.7}]
+    }  # fmt: skip
+    assert doc["duration"] == 2.5 and s["renderer"]["frames"] == 75 and s["plates"]
+
+
+def test_overlay_record_detects_tampered_outputs(capsys, source, fake_renderer, videocut_home):
+    job = _job(capsys, source)
+    code, s, _ = run_tool(capsys, "overlays", "--job", str(job))
+    assert code == 0, s
+    rec = overlays.record_path(job)
+    assert rec.is_file() and not rec.is_relative_to(job)  # outside the agent's reach
+    assert rec.is_relative_to(videocut_home / "state")
+    assert overlays.check_record(job) is None
+    boxes = job / "work" / "overlay_boxes.json"
+    boxes.write_text(json.dumps([]))  # an agent "fixing" its flags by editing the boxes
+    assert "work/overlay_boxes.json" in overlays.check_record(job)
+    code, s, _ = run_tool(capsys, "overlays", "--job", str(job))  # a new run is trusted again
+    assert overlays.check_record(job) is None
+    (job / "work" / "overlays.json").write_text("{}")
+    assert "work/overlays.json" in overlays.check_record(job)
 
 
 def test_renderer_failure_is_reported(capsys, source, tmp_path, monkeypatch):

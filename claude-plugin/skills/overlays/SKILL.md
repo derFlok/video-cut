@@ -74,8 +74,15 @@ Add `overlays` to `work/edl.json`, times in **output** seconds:
 | `split_compare` | `left`, `right`: `{"title", "text"}` (spoken words) | myth vs. reality, before/after |
 | `bar_chart` | `bars`: `[{"label", "value"}]` (≤ 8, spoken figures only), `unit` | spoken figures compared |
 | `lower_third` | `title`, `subtitle` (spoken or from the brief) | once, early |
-| `cta_end` | `text`: the brand's `cta`, else the spoken call to action; `logo`: true | the last 2–3 s (full-frame card) |
+| `cta_end` | `text`: the brand's `cta`, else the spoken call to action; `logo`: true | 2–3 s right after the last spoken word (full-frame card) |
 | `screenshot_frame` | `file`: an image from `job.json` `assets` (e.g. `"input/screen.png"`); `focus`: `[x0, y0, x1, y1]` 0..1 of the image (zoom target, optional); `redact`: list of such boxes (names, numbers, faces of others) | while the speaker talks about that image |
+
+**End card (`cta_end`):** it covers the speaker, so it starts only after the last spoken
+word. Put `t0` at the end of the last caption word + 0.2 s and `t1` 2–3 s later; `t1` may
+run past the end of the cut. `videocut tool overlays` moves an end card that starts earlier
+to that moment (summary `plates.shifted`) and, when it runs past the cut, extends the reel
+with a held last frame and silence (`plates.tail_s`); that is expected, not an error. No
+caption is drawn while the end card is on screen.
 
 A scene the renderer does not have is skipped (`skipped_scenes` in the summary); then pick
 another.
@@ -94,8 +101,15 @@ another.
    - `overlay_overlap` → the overlay and a caption fight for the same free strip (typical
      when the face fills the frame). Move the overlay to a moment with more room, make it
      smaller, or drop it; never leave one covering the other.
-   - a flagged `caption` group cannot be moved; note it in the report.
-   - `cta_end` is a full-frame end card and is never flagged.
+   - a flagged `caption` group cannot be moved; note it in the report. Captions sit
+     centred, or in the lower band (chest area, below the face) when the face fills the
+     centre; the brand's `captions.position` decides which band comes first.
+   - `cta_end` is a full-frame end card; it is not checked for the safe zones or the face.
+     `plate_over_speech` (it starts before the last word) or `caption_on_plate` mean
+     `work/overlays.json` is not from the current EDL: run `videocut tool overlays` again.
+   - `overlay_boxes_untrusted` → `work/overlay.mov`, `overlay_boxes.json` or `overlays.json`
+     changed after `videocut tool overlays` wrote them. Never edit those files; run
+     `videocut tool overlays` again.
 4. Look only at `out/verify/overlays_NN.jpg` (one tile per overlay) and, if a caption is in
    doubt, one `out/verify/captions_NN.jpg`. Check: readable, not on the face, brand look.
 

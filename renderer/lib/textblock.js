@@ -4,10 +4,12 @@
 const style = require("./style");
 const { fitText, placeBlock, allowedArea } = require("./layout");
 
-// Lay out `texts` (already cased) starting at font size `px`, placed in the centre
-// band outside the safe zones, away from the face during [t0, t1] and from blocks
+// Lay out `texts` (already cased) starting at font size `px`, placed in the preferred
+// band (`position`, else tokens.captions.position: center | lower) outside the safe zones, away from the face during [t0, t1] and from blocks
 // laid out before it that share that time. When the face cannot be cleared or the
-// block does not fit the safe area, it shrinks (down to 60 %) before it gives up. The renderer lays out all items
+// block does not fit the safe area, it shrinks (down to 60 %) before it gives up; a block
+// that only clears the face outside both bands (e.g. above the head) shrinks too, and the
+// largest size that lands in a band wins. The renderer lays out all items
 // once, in time order, before the first frame.
 // How much the active word grows with highlight "scale" (layout reserves this room).
 const SCALE_GROWTH = 0.12;
@@ -31,10 +33,13 @@ function reflow(words, states) {
 
 function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, position, t0, t1 }) {
   let L = null;
+  let clear = null; // the largest attempt clear of the face, in no band
   for (const k of [1, 0.85, 0.72, 0.6]) {
     L = attempt(ctx, env, texts, { px: px * k, role, maxLines, position, t0, t1 });
-    if (!L.overlapsFace && L.fits) break;
+    if (!L.overlapsFace && L.fits && L.band !== "other") break;
+    if (!L.overlapsFace && L.fits) clear = clear || L;
   }
+  if (L.overlapsFace || !L.fits || L.band === "other") L = clear || L;
   const m = L.reach;
   env.addBlock(t0, t1, [L.box[0] - m, L.box[1] - m, L.box[2] + m, L.box[3] + m]);
   return L;
@@ -65,7 +70,7 @@ function attempt(ctx, env, texts, { px, role, maxLines, position, t0, t1 }) {
   const grow = Math.ceil((scaleRoom / 2) * Math.max(fit.lineHeight, ...fit.widths));
   // How far drawing can reach outside the box (transition bleed + word growth).
   const reach = bleed + grow;
-  const { box, overlapsFace, overlapsBlock } = placeBlock({
+  const { box, overlapsFace, overlapsBlock, band } = placeBlock({
     size,
     safe,
     w,
@@ -87,7 +92,7 @@ function attempt(ctx, env, texts, { px, role, maxLines, position, t0, t1 }) {
       x += fit.widths[i] + fit.space;
     }
   });
-  return { ...fit, style: cs.style, role, box, grow, reach, fits, overlapsFace, overlapsBlock, words };
+  return { ...fit, style: cs.style, role, box, band, grow, reach, fits, overlapsFace, overlapsBlock, words };
 }
 
 // Draw a laid-out block `t` seconds into a life of `dur` seconds. `wordState(i)`

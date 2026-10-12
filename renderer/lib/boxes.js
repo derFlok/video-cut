@@ -13,17 +13,22 @@ class BoxCollector {
     this.items = new Map();
   }
 
-  // Record that item `key` ({scene, t0, t1}) drew inside `box` on some frame.
-  add(key, meta, box) {
+  // Record that item `key` ({scene, t0, t1}) drew inside `box` at output time `t`.
+  add(key, meta, box, t) {
     if (!box) return;
     const prev = this.items.get(key);
-    this.items.set(key, { ...meta, box: union(prev && prev.box, box) });
+    const drawn = Number.isFinite(t)
+      ? [Math.min(t, prev && prev.drawn ? prev.drawn[0] : t), Math.max(t, prev && prev.drawn ? prev.drawn[1] : t)]
+      : prev && prev.drawn;
+    this.items.set(key, { ...meta, box: union(prev && prev.box, box), drawn });
   }
 
-  // Integer boxes clipped to the frame, in first-drawn order.
+  // Integer boxes clipped to the frame, in first-drawn order; `drawn` is the first and the
+  // last output time anything was drawn (when the times were given).
   list() {
     const [w, h] = this.size;
-    return [...this.items.values()].map(({ scene, t0, t1, box }) => ({
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    return [...this.items.values()].map(({ scene, t0, t1, box, drawn }) => ({
       scene,
       t0,
       t1,
@@ -33,6 +38,7 @@ class BoxCollector {
         Math.min(w, Math.ceil(box[2])),
         Math.min(h, Math.ceil(box[3])),
       ],
+      ...(drawn ? { drawn: drawn.map(r3) } : {}),
     }));
   }
 }

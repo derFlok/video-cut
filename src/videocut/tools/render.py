@@ -13,7 +13,10 @@
     overlay  work/overlay.mov (transparent, `videocut tool overlays`) newer than edl.json is
              (and than overlays.json) is composited over the cut video (alpha; preview:
              scaled), recorded as "overlay": true in render.json; an older one is
-             ignored with a warning
+             ignored with a warning. When the end card needs it (_plates: it starts
+             after the last spoken word), the reel gets a held tail: the last frame
+             repeats under the card, the audio is padded with silence after loudnorm
+             (render.json "tail_s"; output_duration includes it)
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
 
@@ -36,6 +39,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from ..edl import EdlError, load
+from . import _plates
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed
@@ -206,6 +210,11 @@ def render(args) -> dict:
     if preview:
         ow, oh = max(2, ow // 4 * 2), max(2, oh // 4 * 2)
     plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh))
+    overlay = work / "overlay.mov"
+    ov_json = work / "overlays.json"
+    use_overlay = is_fresh([overlay], [edl_path] + ([ov_json] if ov_json.is_file() else []))
+    if use_overlay and plan.frames:  # the end card's held tail (same schedule as overlays)
+        plan = plan_mod.with_tail(plan, _plates.for_job(job, edl, plan.duration).tail_frames)
     audio_args, audio_in, audio_from = _audio_input(job, src, edl.source, info)
     video_in = f"0:{info['video_index']}"
     inputs = ["-i", str(src), *audio_args]
@@ -228,9 +237,6 @@ def render(args) -> dict:
         measured = None  # single pass
     graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info))
     warnings, v_out = [], "[v]"
-    overlay = work / "overlay.mov"
-    ov_json = work / "overlays.json"
-    use_overlay = is_fresh([overlay], [edl_path] + ([ov_json] if ov_json.is_file() else []))
     if use_overlay:
         graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
@@ -313,13 +319,15 @@ def render(args) -> dict:
         )
     report = {
         "edl_sha256": hashlib.sha256(raw).hexdigest(),
-        "output_duration": round(edl.output_duration(), 3),
+        "output_duration": round(edl.output_duration() + float(plan.tail / plan.fps), 3),
         "cuts": [round(t, 3) for t in edl.cut_points()[1:-1]],
         "loudness": loud,
         "preview": preview,
     }
     if use_overlay:
         report["overlay"] = True
+    if plan.tail:
+        report["tail_s"] = round(float(plan.tail / plan.fps), 3)
     if loud["integrated_lufs"] is None:
         warnings.append("the reel is silent")
     elif abs(off := loud["integrated_lufs"] - plan_mod.TARGET_I) > 1:

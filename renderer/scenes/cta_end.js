@@ -5,12 +5,16 @@
 // the plate is fully opaque, so a logo never sits directly over video. Logo rules
 // that are numbers (logo.min_width_px, logo.clear_space as a share of the logo
 // height) are respected; logo.placement "none" means no logo.
+// A plate scene (`plate`): the renderer draws no caption while it is on screen, and
+// `videocut tool overlays` starts it only after the last spoken word (extending the reel
+// with a held last frame when needed).
 // Colours, fonts and motion come only from env.tokens.
 
 const style = require("../lib/style");
 const card = require("../lib/card");
 
 const name = "cta_end";
+const plate = true;
 
 const textOf = (item) => String((item.props && item.props.text) || "").trim();
 const isDark = (item) => String((item.props && item.props.plate) || "").toLowerCase() === "dark";
@@ -58,9 +62,6 @@ function layout(ctx, item, env) {
       : null;
     const h = (logo ? logo.h + (text ? logo.gap : 0) : 0) + (text ? text.height : 0);
     const top = Math.round(area[1] + (ah - h) / 2);
-    // Register the content (logo + text) so captions laid out after it keep clear of it.
-    const m = style.bleed(px);
-    if (h > 0) env.addBlock(item.t0, item.t1, [area[0], top - m, area[2], top + h + m]);
     return {
       px,
       area,
@@ -110,4 +111,4 @@ function draw(ctx, t, item, env) {
   return [0, 0, size[0], size[1]];
 }
 
-module.exports = { name, assets, layout, draw, logoRef };
+module.exports = { name, plate, assets, layout, draw, logoRef };
