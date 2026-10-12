@@ -194,3 +194,192 @@ def filler_clip(folder: Path) -> tuple[Path, list[dict]]:
     )
     layout_file.write_text(json.dumps(layout, ensure_ascii=False, indent=1))
     return out, layout
+
+
+# Product-demo pair: a camera clip and a synthetic screen recording carrying the same voice
+# (the screen recorder's microphone), the screen started `offset` seconds earlier, so
+# screen_time = camera_time + offset. Both have their own leading/trailing content and noise.
+DEMO_TEXT = (
+    "Ich zeige Ihnen heute, wie die Übersicht funktioniert. "
+    "[[slnc 500]] Links sehen Sie die Liste mit allen Einträgen. "
+    "Wenn ich hier klicke, öffnet sich rechts das Detail. "
+    "[[slnc 700]] Oben können Sie filtern, zum Beispiel nach Datum. "
+    "Die Zahlen unten aktualisieren sich sofort. "
+    "[[slnc 600]] Zum Schluss speichere ich die Ansicht, und fertig ist der Bericht."
+)
+CAMERA_LEAD, CAMERA_TAIL, SCREEN_TAIL = 1.5, 2.0, 3.0
+SCREEN_SIZE = (2880, 1800)
+
+
+def _say_wav(folder: Path, name: str, text: str):
+    import numpy as np
+
+    wav = folder / f"{name}.wav"
+    if not wav.is_file():
+        aiff = folder / f"{name}.aiff"
+        subprocess.run(["say", "-v", "Anna", "-o", str(aiff), text], check=True)
+        _ff("-i", str(aiff), "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(wav))
+    return _read_wav(wav)
+
+
+def _read_wav(path: Path):
+    import wave
+
+    import numpy as np
+
+    with wave.open(str(path), "rb") as f:
+        return np.frombuffer(f.readframes(f.getnframes()), "<i2").astype(np.float32) / 32768
+
+
+def _write_wav(path: Path, x) -> None:
+    import wave
+
+    import numpy as np
+
+    pcm = (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(48000)
+        f.writeframes(pcm)
+
+
+def _screen_video(folder: Path, size: tuple[int, int], seconds: float, wav, vfr: bool, out: Path):
+    """Fake app recording: window chrome, a sidebar list that scrolls, text-like bars, a
+    moving cursor and click highlights; neutral greys only. Static parts are drawn once
+    into images, so only the moving parts are filtered per frame."""
+    w, h = size
+    u = w / 2880  # every coordinate is designed for 2880 px width
+
+    def px(v: float) -> int:
+        return max(2, int(v * u))
+
+    still, rows = folder / f"ui-{w}x{h}.png", folder / f"ui-rows-{w}x{h}.png"
+    if not still.is_file():
+        boxes = [
+            f"drawbox=x=0:y=0:w={w}:h={px(70)}:color=gray:t=fill",  # menu bar
+            f"drawbox=x={px(160)}:y={px(160)}:w={px(2560)}:h={px(1500)}:color=white:t=fill",
+            f"drawbox=x={px(160)}:y={px(160)}:w={px(2560)}:h={px(90)}:color=0x707070:t=fill",
+        ]
+        for i in range(18):  # detail pane "text"
+            bw = px(1500 - (i * 97) % 600)
+            boxes.append(
+                f"drawbox=x={px(960)}:y={px(320 + i * 60)}:w={bw}:h={px(12)}:color=black:t=fill"
+            )
+        _ff("-f", "lavfi", "-i", f"color=c=0x303030:s={w}x{h}", "-vf", ",".join(boxes),
+            "-frames:v", "1", str(still))  # fmt: skip
+        list_h = px(2 * 1300)  # two copies of the list, so a crop can scroll endlessly
+        boxes = []
+        for i in range(28):
+            y = px(i * 100)
+            boxes.append(f"drawbox=x={px(40)}:y={y}:w={px(560)}:h={px(14)}:color=black:t=fill")
+            boxes.append(
+                f"drawbox=x={px(40)}:y={y + px(26)}:w={px(360)}:h={px(10)}:color=gray:t=fill"
+            )
+        _ff("-f", "lavfi", "-i", f"color=c=0xD0D0D0:s={px(700)}x{list_h}", "-vf",
+            ",".join(boxes), "-frames:v", "1", str(rows))  # fmt: skip
+    cx = f"{px(1000)}+{px(700)}*sin(t/3)"
+    cy = f"{px(800)}+{px(400)}*cos(t/4)"
+    moving = [
+        f"[1:v]crop=w=iw:h={px(1300)}:x=0:y='mod(t*{px(40)}\\,{px(1300)})'[list]",
+        f"[0:v][list]overlay=x={px(160)}:y={px(300)}",
+    ]
+    for t0 in range(3, int(seconds), 6):  # click highlights
+        moving.append(
+            f"drawbox=x='{cx}-{px(40)}':y='{cy}-{px(40)}':w={px(80)}:h={px(80)}"
+            f":color=yellow@0.6:t=fill:enable='between(t\\,{t0}\\,{t0 + 0.4})'"
+        )
+    moving.append(f"drawbox=x='{cx}':y='{cy}':w={px(24)}:h={px(36)}:color=black:t=fill")
+    if vfr:  # keep every 4th frame between 5 and 9 s, like a recorder writing changes only
+        moving.append("select='not(between(t\\,5\\,9))+not(mod(n\\,4))'")
+    graph = moving[0] + ";" + moving[1] + "," + ",".join(moving[2:]) + "[v]"
+    audio_in = ["-i", str(wav)] if wav else []
+    audio_out = ["-map", "2:a", "-c:a", "aac"] if wav else []
+    _ff(
+        "-loop", "1", "-framerate", str(FPS), "-i", str(still),
+        "-loop", "1", "-framerate", str(FPS), "-i", str(rows),
+        *audio_in, "-filter_complex", graph, "-map", "[v]", *audio_out,
+        *(["-fps_mode", "vfr"] if vfr else []),
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        "-t", f"{seconds:.3f}", str(out),
+    )  # fmt: skip
+
+
+def screen_pair(
+    folder: Path,
+    offset: float = 3.27,
+    drift: float = 0.0,
+    screen_audio: bool = True,
+    size: tuple[int, int] = SCREEN_SIZE,
+    vfr: bool = True,
+) -> tuple[Path, Path, dict]:
+    """Camera clip (portrait, 30 fps) and screen recording (`size`, .mov) of DEMO_TEXT.
+
+    `offset` (s): screen_time = camera_time + offset for the speech start. `drift`: the
+    screen clock runs fast by this fraction (0.001 = +1000 ppm), i.e. the screen copy of the
+    speech is stretched by 1 + drift. `vfr` drops frames in a stretch like a screen
+    recorder that only writes changed frames. Returns (camera, screen, meta) with meta
+    {"offset", "drift_ppm", "speech": [camera_t0, camera_t1], "camera_duration",
+    "screen_duration"}."""
+    import json
+
+    import numpy as np
+
+    rate = 48000
+    folder.mkdir(parents=True, exist_ok=True)
+    tag = f"o{offset:+.3f}-d{drift * 1e6:.0f}-a{int(screen_audio)}-{size[0]}x{size[1]}-v{int(vfr)}"
+    cam, scr, meta_file = (
+        folder / f"cam-{tag}.mp4",
+        folder / f"screen-{tag}.mov",
+        folder / f"pair-{tag}.json",
+    )
+    if cam.is_file() and scr.is_file() and meta_file.is_file():
+        return cam, scr, json.loads(meta_file.read_text())
+    speech = _say_wav(folder, "demo-speech", DEMO_TEXT)
+    cam_intro = _say_wav(folder, "demo-cam-intro", "Läuft?")
+    scr_intro = _say_wav(folder, "demo-screen-intro", "Aufnahme startet.")
+    rng = np.random.default_rng(7)
+
+    def noise(n: int, level: float):
+        return (rng.standard_normal(n) * level).astype(np.float32)
+
+    lead = int(CAMERA_LEAD * rate)
+    cam_a = np.concatenate([noise(lead, 0.002), speech, noise(int(CAMERA_TAIL * rate), 0.002)])
+    cam_a[: len(cam_intro)] += cam_intro[:lead] * 0.5 if len(cam_intro) > lead else 0
+    cam_a += noise(len(cam_a), 0.003)
+    # Screen copy of the speech: another microphone (low-passed, quieter), its own clock.
+    s = speech
+    if drift:
+        n = int(round(len(s) * (1 + drift)))
+        s = np.interp(np.arange(n) / (1 + drift), np.arange(len(s)), s).astype(np.float32)
+    s = np.convolve(s, np.ones(6, np.float32) / 6, mode="same") * 0.7
+    scr_lead = int(round((CAMERA_LEAD + offset) * rate))
+    if scr_lead < 0:
+        raise ValueError("offset must not start the screen after the speech")
+    scr_a = np.concatenate([noise(scr_lead, 0.004), s, noise(int(SCREEN_TAIL * rate), 0.004)])
+    k = min(len(scr_intro), max(scr_lead - rate // 2, 0))
+    scr_a[:k] += scr_intro[:k] * 0.6
+    scr_a += noise(len(scr_a), 0.004)
+    cam_wav, scr_wav = folder / f"cam-{tag}.wav", folder / f"screen-{tag}.wav"
+    _write_wav(cam_wav, cam_a)
+    _write_wav(scr_wav, scr_a)
+    cam_dur, scr_dur = len(cam_a) / rate, len(scr_a) / rate
+    w, h = SIZES["portrait"]
+    _ff(
+        "-f", "lavfi", "-i", f"testsrc2=size={w}x{h}:rate={FPS}:duration={cam_dur:.3f}",
+        "-i", str(cam_wav),
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-shortest", str(cam),
+    )  # fmt: skip
+    _screen_video(folder, size, scr_dur, scr_wav if screen_audio else None, vfr, scr)
+    cam_wav.unlink()
+    scr_wav.unlink()
+    meta = {
+        "offset": offset,
+        "drift_ppm": drift * 1e6,
+        "speech": [CAMERA_LEAD, CAMERA_LEAD + len(speech) / rate],
+        "camera_duration": cam_dur,
+        "screen_duration": scr_dur,
+    }
+    meta_file.write_text(json.dumps(meta))
+    return cam, scr, meta
