@@ -273,12 +273,13 @@ def verify(args) -> dict:
 
     vdir = job / "out" / "verify"
     vdir.mkdir(parents=True, exist_ok=True)
-    for old in vdir.glob("cut_*.jpg"):
-        old.unlink()
-    cut_docs = []
+    cut_docs, bad_cuts = [], []
     for i, t in enumerate(render["cuts"], 1):
         t = float(t)
         k = int(round(t * fps))
+        if not 1 <= k < n:
+            bad_cuts.append({"cut": i, "t": t})
+            continue
         name = f"cut_{i:02d}.jpg"
         vis, aud = visual_numbers(frames, k), audio_numbers(audio, t)
         idx = cut_image(reel, v, t, k, vdir, name)
@@ -312,6 +313,10 @@ def verify(args) -> dict:
         "size": _check((v["width"], v["height"]) == TARGET_SIZE, size=[v["width"], v["height"]]),
         "black_or_frozen": _check(not stretches, stretches=stretches),
     }
+    for old in vdir.glob("cut_*.jpg"):
+        if f"out/verify/{old.name}" not in {c["image"] for c in cut_docs}:
+            old.unlink()
+    checks["cuts_in_range"] = _check(not bad_cuts, outside=bad_cuts)
     flagged = [{"cut": c["cut"], "t": c["t"], "flags": c["flags"]} for c in cut_docs if c["flags"]]
     failed = [k for k, c in checks.items() if not c["ok"]]
     ok = not failed and not flagged

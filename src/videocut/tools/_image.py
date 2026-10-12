@@ -18,8 +18,7 @@ from ..paths import tool_env
 from .common import ToolError, binary, run
 
 # Image budget (docs/BRIEF.md §6): sheets stay within 1080x1920 (portrait) or 1920x1080
-# (landscape), never more than 2000 px on a side.
-MAX_SIDE = 2000
+# (landscape), so never more than 2000 px on a side.
 TILE_BOX = (360, 640)  # portrait tile; landscape is the transposed box
 WAVE_COLOR = "0x4db8ff"
 MARK_COLOR = "red"
@@ -100,7 +99,7 @@ def tile_size(width: int, height: int) -> tuple[int, int]:
 
 
 def probe_video(path: Path) -> dict:
-    """Display size, fps, frame count and duration of the first video stream."""
+    """Stored size (our proxies and reels are upright), fps, frames, duration of video 0."""
     out = run(
         [
             binary("ffprobe"),
@@ -132,17 +131,6 @@ def probe_video(path: Path) -> dict:
         "frames": frames,
         "duration": duration,
     }
-
-
-def audio_duration(path: Path) -> float:
-    out = run(
-        [binary("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"]
-        + [str(path)]
-    )
-    try:
-        return float(out.stdout.strip())
-    except ValueError:
-        raise ToolError(f"cannot read the duration of {path.name}") from None
 
 
 def wave_filter(width: int, height: int, mark: float | None = None) -> str:

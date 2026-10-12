@@ -85,11 +85,12 @@ def contact(args) -> dict:
         f"tile={COLS}x{COLS}:padding=0:margin=0[out]"
     )
     sheets_dir = _sheets_dir(job)
-    for old in sheets_dir.glob("contact_*.jpg"):
-        old.unlink()
     files = im.render_jpegs(
         [["-i", str(proxy)]], graph, sheets_dir, lambda k: f"contact_{k:02d}.jpg"
     )
+    for old in sheets_dir.glob("contact_*.jpg"):
+        if old not in files:
+            old.unlink()
     per = COLS * COLS
     listing = []
     for k, f in enumerate(files):
@@ -225,7 +226,6 @@ def timeline(args) -> dict:
             f"window is {t1 - t0:.0f}s; timeline sheets take at most {MAX_TIMELINE_S:.0f}s"
         )
     span = t1 - t0
-    px = STRIP_W / span
 
     def x(t: float) -> int:
         return int(round((min(max(t, t0), t1) - t0) * px))
@@ -237,6 +237,7 @@ def timeline(args) -> dict:
     tw = STRIP_W // n_tiles // 2 * 2
     th = max(2, round(tw * v["height"] / v["width"] / 2) * 2)
     strip_w = tw * n_tiles
+    px = strip_w / span
     font = im.find_font()
 
     words_doc = _load(job / "work" / "words.json")

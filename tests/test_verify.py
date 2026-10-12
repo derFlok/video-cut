@@ -123,3 +123,9 @@ def test_missing_render_json_is_an_error(capsys, reel):
     (job / "out" / "render.json").unlink()
     code, s, _ = run_tool(capsys, "verify", "--job", str(job))
     assert code == 1 and s["ok"] is False and "render.json" in s["error"]
+
+
+def test_cut_outside_the_reel_is_a_failed_check(capsys, reel):
+    job = _job(capsys, reel, [1.0, 9.0])
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and "cuts_in_range" in s["failed"] and s["cuts"] == 1
