@@ -229,3 +229,5 @@
   overlays 117 s / 15 / ≈ $0.44. The 25.8 s reel has four `screenshot_frame` steps zooming
   across the screen, with the e-mail line redacted in every frame, plus a `cta_end` with logo.
   Verify is ok.
+- Phase 2 accepted by the speaker on 2026-10-12: all three brand reels (brand-a, brand-b,
+  brand-c) approved as they are after the calm caption pacing; no further corrections.
