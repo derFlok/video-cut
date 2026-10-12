@@ -13,6 +13,13 @@
   local transcription with word timestamps → face model → transparent overlay (ProRes 4444) →
   cut and join with fades.
 - `uninstall.sh`.
+- Claude runner (`agent.py`): official `claude` headless with the bundled plugin, exactly five
+  tools, no MCP/web, Bash limited to `videocut tool *`, file access limited to the job folder,
+  `dontAsk` permissions. Auth modes: own sign-in (`--setting-sources project`) or API key from
+  the keychain (`--bare`). `videocut auth local|key|status`.
+- `videocut ui`: local web app (127.0.0.1 only, per-session token, host check) with a
+  connection check: one click starts Claude, progress streams live (server-sent events).
+  Verified end to end: 9 s, 5 turns, ~USD 0.06 equivalent.
 
 ### Observed
 - Whisper large-v3-turbo dropped all three filler words ("äh", "ähm") from the synthetic test

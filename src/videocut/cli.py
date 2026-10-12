@@ -29,6 +29,19 @@ def main(argv: list[str] | None = None) -> int:
     pull = msub.add_parser("pull", help="download an optional model")
     pull.add_argument("name")
 
+    u = sub.add_parser("ui", help="start the local app")
+    u.add_argument("--port", type=int, default=4300)
+    u.add_argument("--no-open", action="store_true", help="do not open the browser")
+    auth = sub.add_parser("auth", help="choose how Video Cut connects to Claude")
+    asub = auth.add_subparsers(dest="auth_cmd", required=True)
+    asub.add_parser("local", help="use your own Claude Code sign-in (personal use)")
+    asub.add_parser("key", help="store an Anthropic API key in the keychain and use it")
+    asub.add_parser("status", help="show the current mode")
+
+    t = sub.add_parser("tool", help="pipeline commands used by Claude inside a job")
+    tsub = t.add_subparsers(dest="tool_cmd", required=True)
+    tsub.add_parser("hello", help="connectivity check")
+
     a = p.parse_args(argv)
     _use_installed_tools()
     if a.cmd == "setup":
@@ -59,6 +72,31 @@ def main(argv: list[str] | None = None) -> int:
             print(f"unknown model {a.name}; known: {', '.join(manifest.models())}")
             return 2
         install.install_model(a.name)
+        return 0
+    if a.cmd == "ui":
+        from . import web
+
+        web.serve(a.port, open_browser=not a.no_open)
+        return 0
+    if a.cmd == "auth":
+        from . import settings
+
+        if a.auth_cmd == "local":
+            settings.save(auth="local")
+        elif a.auth_cmd == "key":
+            import getpass
+
+            key = getpass.getpass("Anthropic API key (input hidden): ").strip()
+            if not key.startswith("sk-ant-"):
+                print("That does not look like an Anthropic API key.", file=sys.stderr)
+                return 1
+            settings.set_api_key(key)
+            settings.save(auth="apikey")
+        mode = settings.load()["auth"]
+        print("Mode: " + ("API key (keychain)" if mode == "apikey" else "own Claude Code sign-in"))
+        return 0
+    if a.cmd == "tool" and a.tool_cmd == "hello":
+        print(f"videocut {__version__} ready in {os.getcwd()}")
         return 0
     return 2
 
