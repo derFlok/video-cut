@@ -91,6 +91,7 @@ def test_color_only_tonemaps_hdr():
     chain = _color.to_sdr(hlg)
     assert "tin=arib-std-b67" in chain and "min=bt2020nc" in chain and "bt709" in chain
     assert "-color_trc" in _color.output_tags(hlg)
+    assert ":npl=203" in chain and "tonemap=tonemap=mobius:desat=0" in chain
 
 
 def test_audio_stream_is_picked_deliberately():

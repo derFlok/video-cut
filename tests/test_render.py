@@ -206,8 +206,10 @@ def test_hdr_source_is_tonemapped_to_bt709(capsys, clip_dir):
                 assert v["pix_fmt"] == "yuv420p"
                 tags = (v["color_primaries"], v["color_transfer"], v["color_space"])
                 assert tags == ("bt709", "bt709", "bt709"), f.name
-    # Tonemapped HLG keeps roughly the SDR brightness (not washed out, not crushed).
-    assert abs(means["hlg"] - means["sdr"]) < 25, means
+    # Tonemapped HLG stays in the SDR range (not washed out, not crushed). The pattern is SDR
+    # content wrapped as HLG, i.e. mapped to 100 nits; with 203 nit reference white it comes out
+    # darker than the SDR original, so the tolerance is wider than for real footage.
+    assert abs(means["hlg"] - means["sdr"]) < 45, means
 
 
 def _vfr_sync_clip(folder: Path) -> Path:
