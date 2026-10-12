@@ -1,0 +1,22 @@
+name: selftest-macos
+
+# Full install + self-test on Apple Silicon. macOS minutes are expensive on private
+# repositories, so this runs on release tags and on demand only.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: install + self-test (fresh machine)
+        env:
+          VIDEOCUT_HOME: ${{ runner.temp }}/VideoCut
+        run: ./start.sh --selftest

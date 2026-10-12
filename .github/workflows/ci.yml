@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    # Linux is enough for lint + unit tests (no MLX, no models) and costs 1/10 of macOS minutes.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.0"
+      - name: ruff
+        run: |
+          uvx ruff@0.17.0 check src tests
+          uvx ruff@0.17.0 format --check src tests
+      - name: shellcheck
+        run: shellcheck start.sh uninstall.sh .githooks/pre-commit
+      - name: unit tests
+        env:
+          PYTHONPATH: src
+        run: uv run --no-project --python 3.12 --with pytest python -m pytest -q

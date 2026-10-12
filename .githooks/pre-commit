@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Rejects commits that add words from a personal, never-committed list
+# (.git/info/forbidden-words: one word per line, case-insensitive, # for comments),
+# e.g. company or customer names that must stay out of this neutral project.
+# Also runs gitleaks on staged changes when it is installed.
+set -euo pipefail
+
+list="$(git rev-parse --git-dir)/info/forbidden-words"
+if [[ -s "$list" ]]; then
+  added="$(git diff --cached --no-color -U0 | grep -E '^\+' | grep -vE '^\+\+\+ ' || true)"
+  names="$(git diff --cached --name-only)"
+  while IFS= read -r word; do
+    [[ -z "$word" || "$word" == \#* ]] && continue
+    if grep -qiF -- "$word" <<<"$added$names"; then
+      echo "pre-commit: staged changes contain a forbidden word from $list." >&2
+      echo "            Remove it, or edit the list if it is a false positive." >&2
+      exit 1
+    fi
+  done < "$list"
+fi
+
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --no-banner --redact
+fi

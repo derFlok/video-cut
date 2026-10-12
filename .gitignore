@@ -1,0 +1,26 @@
+# Installed by start.sh
+/.tools/
+/.venv/
+renderer/node_modules/
+
+# Never commit user material (it lives in ~/VideoCut anyway)
+/jobs/
+/brands/*
+!/brands/_example/
+*.mov
+*.mp4
+*.m4a
+*.wav
+
+# Local, personal settings
+.env
+.env.*
+!.env.example
+/.local/
+
+# OS / tooling
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

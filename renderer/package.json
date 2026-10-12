@@ -1,0 +1,10 @@
+{
+  "name": "videocut-renderer",
+  "private": true,
+  "description": "Deterministic frame-by-frame overlay renderer (canvas in headless Chromium, piped to ffmpeg).",
+  "license": "Apache-2.0",
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$comment": "Neutral placeholder so the app runs before any brand is uploaded. Not a design recommendation.",
+  "name": "Example (neutral)",
+  "colors": {
+    "bg": "#F4F4F4",
+    "surface": "#FFFFFF",
+    "text": "#141414",
+    "muted": "#6B6B6B",
+    "accent": "#141414",
+    "accent_usage": "sparsam"
+  },
+  "fonts": { "display": "system-ui", "body": "system-ui", "weights": [400, 600, 800] },
+  "logo": { "light": null, "dark": null, "placement": "none" },
+  "captions": { "style": "box", "case": "normal", "highlight": "underline", "position": "center" },
+  "motion": { "character": "ruhig", "spring": { "w": 13, "z": 0.9 }, "transitions": "blur" },
+  "icons": "none",
+  "voice": { "address": "du", "tone": "neutral", "forbidden_words": [], "cta": "" },
+  "music": { "mood": "neutral", "max_bpm": 110 },
+  "legal": { "footer": "" }
+}
