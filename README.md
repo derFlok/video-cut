@@ -46,10 +46,10 @@ cd video-cut
 
 Your brands, projects and downloaded models live in `~/VideoCut` (change with `VIDEOCUT_HOME`), never inside the repository.
 
-## Usage (command line, Phase 1)
+## Usage (command line)
 
 ```bash
-.venv/bin/videocut run ~/Movies/take.mov --type thought --brief "one idea, strong first sentence"
+.venv/bin/videocut run ~/Movies/take.mov --type thought --brand my-brand --brief "one idea, strong first sentence"
 ```
 
 1. **Prep** (local, no Claude): job folder in `~/VideoCut/jobs/<id>`, noise reduction,
@@ -61,13 +61,26 @@ Your brands, projects and downloaded models live in `~/VideoCut` (change with `V
 4. **Cut:** Claude writes the edit list, renders a preview, checks every cut (clicks, jumps,
    loudness), fixes up to three rounds and renders `out/reel.mp4` (1080×1920, −14 LUFS).
    `work/cut_report.md` lists what changed and any open doubts.
+5. **Captions and overlays** (with `--brand`): Claude adds captions and a few overlays (key
+   words, numbers, questions, screenshots) in your brand's look, using only what you say.
+   Nothing on the face or in the app's UI zones, which is checked automatically. Then it
+   renders the final reel. `work/overlay_report.md` lists the overlays.
 
-Options: `--approve` (no prompt), `--replan`, `--max-turns N`. Time, turns, cost and tokens of
+Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--asset FILE` (a
+screenshot for a new job), `--max-turns N`. Time, turns, cost and tokens of
 every Claude run are logged in `work/runs.jsonl`.
 
 ## Brands
 
 Video Cut ships without any branding. You upload your own (logo, colours, fonts, optionally a brand guide and example posts) and every video adapts to it. You can keep several brands side by side and pick one per video. See [`docs/BRIEF.md`](docs/BRIEF.md) §9.
+
+A brand is a folder `~/VideoCut/brands/<id>/` with a `brand.json` and its font and logo
+files (start from `brands/_example`).
+
+```bash
+.venv/bin/videocut tool brand check my-brand   # validate; contrast table (caption colours ≥ WCAG AA)
+.venv/bin/videocut tool brand sheet my-brand   # preview sheet of every scene → brands/my-brand/preview.jpg
+```
 
 ## Privacy
 

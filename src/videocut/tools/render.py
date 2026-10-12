@@ -10,6 +10,13 @@
     loudness loudnorm two-pass to -14 LUFS / -1 dBTP / LRA 11 (preview: single pass);
              the finished file is measured again
     colour   HDR sources (HLG/PQ) are tonemapped to SDR BT.709 and tagged so (_color.py)
+    overlay  work/overlay.mov (transparent, `videocut tool overlays`) newer than edl.json is
+             (and than overlays.json) is composited over the cut video (alpha; preview:
+             scaled), recorded as "overlay": true in render.json; an older one is
+             ignored with a warning. When the end card needs it (_plates: it starts
+             after the last spoken word), the reel gets a held tail: the last frame
+             repeats under the card, the audio is padded with silence after loudnorm
+             (render.json "tail_s"; output_duration includes it)
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
 
@@ -28,11 +35,14 @@ import hashlib
 import json
 import math
 import re
+from fractions import Fraction
 from pathlib import Path
 
 from ..edl import EdlError, load
+from . import _plates
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
+from ._geometry import framed
 from .common import (
     ToolError,
     binary,
@@ -45,7 +55,6 @@ from .common import (
     run_tool,
     write_json,
 )
-from .face import face_crops, load_face
 from .ingest import probe
 from .job import PROJECT, is_approved
 
@@ -138,6 +147,34 @@ def _duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
+def overlay_matrix(info: dict) -> str:
+    """YUV matrix of the cut video the overlay is blended into: BT.709 after a tonemap and
+    for untagged sources (what players assume for HD), else the source's own matrix."""
+    space = info.get("color_space")
+    if is_hdr(info) or space not in ("bt709", "smpte170m", "bt470bg"):
+        return "bt709"
+    return space
+
+
+def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709") -> str:
+    """Filter lines that lay input `index` (the transparent overlay.mov) over [v] as [vo]:
+    same fps, scaled to `size`, converted from the overlay's BT.709 to `matrix` (the cut
+    video's), alpha blended in 4:4:4 so thin overlay edges keep their colour; the video
+    decides the length (a shorter overlay just ends). Both inputs are put on the same
+    frame grid first (pts = frame number), so overlay frame n lands on reel frame n even
+    when the joined segments carry rounded timestamps."""
+    w, h = size
+    tb = f"{Fraction(fps).denominator}/{Fraction(fps).numerator}"
+    return (
+        f";\n[{index}:v]setpts=PTS-STARTPTS,fps={fps},settb={tb},setpts=N,"
+        f"scale={w}:{h}:flags=lanczos:in_color_matrix=bt709:in_range=tv:"
+        f"out_color_matrix={matrix}:out_range=tv,format=yuva444p[ov];\n"
+        f"[v]settb={tb},setpts=N,format=yuv444p[base];\n"
+        "[base][ov]overlay=0:0:format=yuv444:eof_action=pass:shortest=0,"
+        "format=yuv420p[vo]\n"
+    )
+
+
 def render(args) -> dict:
     job = resolve_job(args.job)
     if not is_approved(job):  # the human gate: no cut, not even a preview, before approval
@@ -166,14 +203,20 @@ def render(args) -> dict:
         ) from None
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
-    face = load_face(job, edl.source)
-    edl, followed = face_crops(edl, face)
+    edl, followed, face = framed(job, edl)
 
     preview = bool(args.preview)
     ow, oh = edl.size
     if preview:
         ow, oh = max(2, ow // 4 * 2), max(2, oh // 4 * 2)
     plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh))
+    overlay = work / "overlay.mov"
+    ov_json = work / "overlays.json"
+    # words.json too: the end card's tail is computed from it (_plates), like overlays did.
+    ov_inputs = [p for p in (ov_json, work / "words.json") if p.is_file()]
+    use_overlay = is_fresh([overlay], [edl_path, *ov_inputs])
+    if use_overlay and plan.frames:  # the end card's held tail (same schedule as overlays)
+        plan = plan_mod.with_tail(plan, _plates.for_job(job, edl, plan.duration).tail_frames)
     audio_args, audio_in, audio_from = _audio_input(job, src, edl.source, info)
     video_in = f"0:{info['video_index']}"
     inputs = ["-i", str(src), *audio_args]
@@ -194,8 +237,24 @@ def render(args) -> dict:
         measured = "silent"
     elif preview:
         measured = None  # single pass
+    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info))
+    warnings, v_out = [], "[v]"
+    if use_overlay:
+        graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh), overlay_matrix(info))
+        inputs += ["-i", str(overlay)]
+        v_out = "[vo]"
+    elif overlay.is_file():
+        warnings.append(
+            "work/overlay.mov is older than edl.json, overlays.json or words.json and was left "
+            "out; run `videocut tool overlays` again"
+        )
+    elif edl.captions or edl.overlays:
+        warnings.append(
+            "the EDL has captions/overlays but there is no work/overlay.mov; run "
+            "`videocut tool overlays` first"
+        )
     graph_file = work / "render_filter.txt"
-    _write_graph(graph_file, plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info)))
+    _write_graph(graph_file, graph)
 
     dst = out / ("preview.mp4" if preview else "reel.mp4")
     print(f"rendering {dst.name}: {len(edl.segments)} segments, {len(plan.ranges)} ranges")
@@ -205,7 +264,7 @@ def render(args) -> dict:
         "-/filter_complex",
         str(graph_file),
         "-map",
-        "[v]",
+        v_out,
         "-map",
         "[a]",
         "-r",
@@ -255,7 +314,6 @@ def render(args) -> dict:
 
     loud = measure(dst)
     min_w = plan.min_crop_width()
-    warnings = []
     if min_w < plan_mod.SHARP_MIN_WIDTH:
         warnings.append(
             f"crop is only {min_w} px wide (< {plan_mod.SHARP_MIN_WIDTH}); the reel will look soft"
@@ -263,11 +321,15 @@ def render(args) -> dict:
         )
     report = {
         "edl_sha256": hashlib.sha256(raw).hexdigest(),
-        "output_duration": round(edl.output_duration(), 3),
+        "output_duration": round(edl.output_duration() + float(plan.tail / plan.fps), 3),
         "cuts": [round(t, 3) for t in edl.cut_points()[1:-1]],
         "loudness": loud,
         "preview": preview,
     }
+    if use_overlay:
+        report["overlay"] = True
+    if plan.tail:
+        report["tail_s"] = round(float(plan.tail / plan.fps), 3)
     if loud["integrated_lufs"] is None:
         warnings.append("the reel is silent")
     elif abs(off := loud["integrated_lufs"] - plan_mod.TARGET_I) > 1:
@@ -295,6 +357,7 @@ def render(args) -> dict:
         "audio_from": audio_from,
         "default_crop": "face" if face and face.get("median") else "centre",
         "face_follow_segments": followed,
+        "overlay": use_overlay,
         "warnings": warnings,
     }
 

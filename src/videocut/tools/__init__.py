@@ -8,7 +8,20 @@ the parsed handler, so adding or extending a tool never touches cli.py or this f
 import argparse
 from importlib import import_module
 
-MODULES = ["hello", "job", "ingest", "transcribe", "sheets", "edl", "render", "verify", "face"]
+MODULES = [
+    "hello",
+    "job",
+    "ingest",
+    "transcribe",
+    "sheets",
+    "edl",
+    "render",
+    "verify",
+    "face",
+    "brand",
+    "captions",
+    "overlays",
+]
 
 
 def register_all(subparsers: argparse._SubParsersAction) -> None:

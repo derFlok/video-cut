@@ -7,6 +7,7 @@ import clips
 import pytest
 from helpers import run_tool
 
+from videocut.tools import overlays as overlays_mod
 from videocut.tools import verify
 
 pytestmark = pytest.mark.skipif(clips.ffmpeg() is None, reason="needs ffmpeg")
@@ -173,3 +174,125 @@ def test_reframe_at_a_cut_is_info_not_a_flag():
     edl = from_dict({"fps": 30, "size": [1080, 1920], "source": "input/a.mp4", "segments": segs})
     assert verify.reframes(edl) == [True, False, True]
     assert verify.cut_notes(_vis(30.0), QUIET, 8.0, reframe=True) == ([], ["jump_cut", "reframe"])
+
+
+FACE = [{"t": t / 10, "box": [400, 600, 680, 900]} for t in range(30)]  # output px
+
+
+def test_overlay_boxes_flag_safe_zone_and_face():
+    boxes = [
+        {"scene": "caption", "t0": 0.0, "t1": 1.0, "box": [100, 1000, 980, 1100]},  # fine
+        {"scene": "keyword", "t0": 0.0, "t1": 1.0, "box": [100, 200, 980, 300]},  # top zone
+        {"scene": "caption", "t0": 1.0, "t1": 2.0, "box": [30, 1000, 500, 1100]},  # side zone
+        {"scene": "number_card", "t0": 1.0, "t1": 1.5, "box": [600, 850, 900, 1000]},  # face
+        {"scene": "lower_third", "t0": 1.0, "t1": 2.0, "box": [100, 1500, 980, 1600]},  # bottom
+        # overlaps the face box but only while no face sample is visible
+        {"scene": "cta_end", "t0": 3.5, "t1": 4.0, "box": [400, 600, 680, 900]},
+        # touches the face box by under 2 % of its area
+        {"scene": "keyword", "t0": 0.0, "t1": 1.0, "box": [100, 895, 980, 1000]},
+    ]
+    out = verify.overlay_checks(boxes, FACE, (1080, 1920))
+    assert [o["flags"] for o in out] == [
+        [], ["overlay_in_safe_zone"], ["overlay_in_safe_zone"], ["overlay_on_face"],
+        ["overlay_in_safe_zone"], [], [],
+    ]  # fmt: skip
+    assert out[3]["face_overlap"] == round(80 * 50 / (280 * 300), 3) and out[3]["face_t"] == 1.0
+    assert 0 < out[6]["face_overlap"] <= verify.FACE_OVERLAP_MAX
+
+
+def test_caption_times_one_per_change_snapped_and_unique():
+    caps = [{"t0": 0.0, "t1": 1.0}, {"t0": 1.0, "t1": 1.1}, {"t0": 1.0, "t1": 1.1}]
+    caps.append({"t0": 2.95, "t1": 3.5})  # its frame lies beyond the reel
+    # settle time after the change, at most the middle of a short group, on the frame grid
+    assert verify.caption_times(caps, 30, 3.0) == [4 / 30, 32 / 30]
+
+
+def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
+    job = _job(capsys, reel, [])
+    src = json.loads((job / "job.json").read_text())["source"]
+    caps = [{"t0": i * 0.6, "t1": i * 0.6 + 0.6, "words": []} for i in range(5)]
+    edl = {"fps": 30, "size": [1080, 1920], "source": src, "segments": [{"in": 0, "out": 3}]}
+    ovs = [{"scene": "keyword", "t0": 1.0, "t1": 2.0, "props": {"text": "x"}}]
+    (job / "work" / "edl.json").write_text(json.dumps({**edl, "captions": caps, "overlays": ovs}))
+    (job / "work" / "overlays.json").write_text(
+        json.dumps({"size": [1080, 1920], "fps": 30, "duration": 3.0, "face": FACE})
+    )
+    boxes = [
+        {"scene": "caption", "t0": 0.0, "t1": 3.0, "box": [100, 1000, 980, 1100]},
+        {"scene": "keyword", "t0": 1.0, "t1": 2.0, "box": [450, 650, 650, 850]},
+    ]
+    (job / "work" / "overlay_boxes.json").write_text(json.dumps(boxes))
+    (job / "work" / "overlay.mov").write_bytes(b"mov")
+    overlays_mod.write_record(job)  # as `videocut tool overlays` does after its render
+    stale = job / "out" / "verify" / "captions_09.jpg"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"x")
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0, s
+    assert s["ok"] is False and s["failed"] == []
+    assert s["overlay_flagged"] == [
+        {"scene": "keyword", "t0": 1.0, "t1": 2.0, "flags": ["overlay_on_face"]}
+    ]
+    assert any("no overlay composited" in w for w in s["warnings"])
+    assert not stale.exists() and "out/verify/captions_01.jpg" in s["images"]
+    doc = json.loads((job / "out" / "verify.json").read_text())
+    assert len(doc["caption_times"]) == 5
+    assert doc["caption_sheets"] == ["out/verify/captions_01.jpg"]
+    assert doc["overlay_times"] == [1.5] and s["overlay_sheets"] == ["out/verify/overlays_01.jpg"]
+    out = subprocess.run(
+        [clips.ffprobe(), "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0"]
+        + [str(job / "out" / "verify" / "captions_01.jpg")],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == "1080,1920"  # 3x3 tiles of 360x640
+
+    # Boxes edited after the tool wrote them (the agent may write work/) are not trusted.
+    (job / "work" / "overlay_boxes.json").write_text(json.dumps(boxes[:1]))
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and s["ok"] is False
+    assert s["overlay_flagged"][0]["flags"] == ["overlay_boxes_untrusted"]
+    assert any("work/overlay_boxes.json" in w for w in s["warnings"])
+    # ... nor is an overlay.mov whose boxes file was removed
+    (job / "work" / "overlay_boxes.json").unlink()
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and s["ok"] is False
+    assert s["overlay_flagged"][0]["flags"] == ["overlay_boxes_untrusted"]
+
+
+def test_full_frame_end_card_is_not_flagged():
+    face = [{"t": 1.0, "box": [400, 600, 700, 1000]}]
+    boxes = [
+        {"scene": "cta_end", "t0": 0.0, "t1": 2.0, "box": [0, 0, 1080, 1920]},
+        {"scene": "keyword", "t0": 0.0, "t1": 2.0, "box": [0, 0, 1080, 1920]},
+    ]
+    out = verify.overlay_checks(boxes, face, (1080, 1920))
+    assert out[0]["flags"] == []
+    assert out[1]["flags"] == ["overlay_in_safe_zone", "overlay_on_face"]
+
+
+def test_overlay_covering_a_caption_is_flagged():
+    boxes = [
+        {"scene": "caption", "t0": 1.0, "t1": 2.0, "box": [300, 300, 780, 480]},
+        {"scene": "keyword", "t0": 1.5, "t1": 4.0, "box": [350, 320, 730, 500]},
+        {"scene": "keyword", "t0": 2.0, "t1": 4.0, "box": [350, 1300, 730, 1450]},  # later, apart
+        {"scene": "cta_end", "t0": 2.5, "t1": 4.0, "box": [0, 0, 1080, 1920]},
+    ]
+    flags = [o["flags"] for o in verify.overlay_checks(boxes, [], (1080, 1920))]
+    assert flags == [[], ["overlay_overlap"], [], []]
+    assert verify.full_frame_spans([{"scene": "cta_end", "t0": 1, "t1": 2}, {"scene": "x"}]) == [
+        (1, 2)
+    ]
+
+
+def test_caption_on_the_end_card_and_end_card_over_speech_are_flagged():
+    plate = {"scene": "cta_end", "t0": 5.0, "t1": 7.0, "box": [0, 0, 1080, 1920]}
+    cap = {"scene": "caption", "t0": 4.0, "t1": 5.5, "box": [100, 1000, 980, 1100]}
+    # The renderer hides captions under the plate: drawn only until 4.97 s, not flagged.
+    hidden = {**cap, "drawn": [4.0, 4.967]}
+    out = verify.overlay_checks([plate, hidden], [], (1080, 1920), last_word=4.8)
+    assert [o["flags"] for o in out] == [[], []]
+    # A caption drawn over the plate, and a plate before the last word + 0.2 s.
+    out = verify.overlay_checks([{**plate, "drawn": [5.03, 7.0]}, cap], [], (1080, 1920), 4.9)
+    assert [o["flags"] for o in out] == [["plate_over_speech"], ["caption_on_plate"]]

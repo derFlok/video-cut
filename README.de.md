@@ -20,10 +20,10 @@ Voraussetzungen: macOS 14+ auf Apple Silicon, 16 GB RAM empfohlen, rund 15 GB fr
 
 Marken, Projekte und Modelle liegen in `~/VideoCut` (änderbar über `VIDEOCUT_HOME`), nie im Repository.
 
-## Benutzung (Kommandozeile, Phase 1)
+## Benutzung (Kommandozeile)
 
 ```bash
-.venv/bin/videocut run ~/Movies/aufnahme.mov --type thought --brief "eine These, starker erster Satz"
+.venv/bin/videocut run ~/Movies/aufnahme.mov --type thought --brand meine-marke --brief "eine These, starker erster Satz"
 ```
 
 1. **Vorbereitung** (lokal, ohne Claude): Projektordner in `~/VideoCut/jobs/<id>`,
@@ -35,13 +35,27 @@ Marken, Projekte und Modelle liegen in `~/VideoCut` (änderbar über `VIDEOCUT_H
 4. **Schnitt:** Claude schreibt die Schnittliste, rendert eine Vorschau, prüft jeden Schnitt
    (Knackser, Bildsprünge, Lautheit), korrigiert bis zu drei Runden und rendert
    `out/reel.mp4` (1080×1920, −14 LUFS). `work/cut_report.md` nennt Änderungen und offene Fragen.
+5. **Untertitel und Einblendungen** (mit `--brand`): Claude ergänzt Untertitel und wenige
+   Einblendungen (Schlagworte, Zahlen, Fragen, Screenshots) im Look deiner Marke, nur mit dem,
+   was du sagst. Nichts liegt im Gesicht oder in den UI-Zonen der App, das wird automatisch
+   geprüft. Danach rendert Claude das fertige Reel. `work/overlay_report.md` listet die
+   Einblendungen.
 
-Optionen: `--approve` (ohne Nachfrage), `--replan`, `--max-turns N`. Zeit, Turns, Kosten und
+Optionen: `--approve` (ohne Nachfrage), `--replan`, `--recut`, `--brand <id>`, `--asset DATEI`
+(Screenshot für einen neuen Auftrag), `--max-turns N`. Zeit, Turns, Kosten und
 Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
 
 ## Marken
 
 Video Cut bringt kein eigenes Branding mit. Du lädst deins hoch (Logo, Farben, Schriften, optional Brand-Guide und Beispielposts), und jedes Video passt sich daran an. Mehrere Marken nebeneinander sind möglich, pro Video wählst du eine.
+
+Eine Marke ist ein Ordner `~/VideoCut/brands/<id>/` mit `brand.json` und ihren Schrift- und
+Logodateien (Vorlage: `brands/_example`).
+
+```bash
+.venv/bin/videocut tool brand check meine-marke   # prüfen; Kontrasttabelle (Untertitel ≥ WCAG AA)
+.venv/bin/videocut tool brand sheet meine-marke   # Vorschau-Bogen aller Szenen → brands/meine-marke/preview.jpg
+```
 
 ## Lizenz
 

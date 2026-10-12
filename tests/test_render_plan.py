@@ -111,3 +111,16 @@ def test_zoom_keys_at_the_same_time_last_in_file_wins():
     seg = {"in": 0, "out": 2, "zoom_keys": [[1.0, 1.6], [1.0, 1.2]]}
     plan = rp.build(_edl([seg]), (1920, 1080), OUT)
     assert [r.zoom for r in plan.ranges] == [1.0, 1.2]
+
+
+def test_held_tail_repeats_the_last_frame_and_pads_silence_after_loudnorm():
+    plan = rp.build(_edl([{"in": 0, "out": 1}, {"in": 2, "out": 3}]), (1920, 1080), OUT)
+    assert plan.tail == 0 and "a=0,format=yuv420p" in rp.graph(plan, None, "0", "1:a")
+    long = rp.with_tail(plan, 24)
+    assert long.frames == plan.frames + 24 and long.tail == 24
+    assert rp.with_tail(long, 6).frames == plan.frames + 6  # replaces, never stacks
+    g = rp.graph(long, None, "0:0", "1:a")
+    assert "concat=n=2:v=1:a=0,tpad=stop_mode=clone:stop=24," in g
+    # silence goes on after loudnorm, so the spoken part's loudness does not change
+    assert g.index("apad=whole_dur=2.800000") > g.index("loudnorm=")
+    assert "apad=whole_dur=2.8" not in rp.measure_graph(long, "1:a")

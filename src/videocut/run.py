@@ -1,4 +1,4 @@
-"""`videocut run <video|job>`: the whole Phase 1 pipeline from the command line.
+"""`videocut run <video|job>`: the whole pipeline from the command line.
 
     prep     job new (when a file is given), then the deterministic tools: ingest --denoise,
              face (face track + blinks), transcribe (also writes candidates +
@@ -7,15 +7,24 @@
     approve  the human reads work/project.md and approves it (prompt; `--approve` skips it)
     cut      Claude run with the `cut` skill (resumes the plan session when the plan is
              unchanged) -> work/edl.json, out/reel.mp4, out/verify.json, work/cut_report.md
+    overlays Claude run with the `overlays` skill when the job has a brand (`--brand`):
+             captions + overlay scenes in the brand's look on the approved cut -> the same
+             outputs plus work/overlays.json, work/overlay.mov, work/overlay_report.md.
+             No second approval, but it only ever runs on an approved, finished cut, and
+             it must not change the cut (the EDL segments)
 
 Re-running is cheap: prep tools keep fresh outputs, an existing plan is offered for approval
-again instead of being re-planned (`--replan` forces a new one), and an approved plan goes
-straight to the cut. Every Claude run appends one line to work/runs.jsonl (wall time, turns,
-cost, tokens), and its raw event stream goes to work/claude-<phase>.jsonl.
+again instead of being re-planned (`--replan` forces a new one), an approved plan goes
+straight to the cut, and a finished cut of the approved plan is kept (`--recut` cuts again;
+job.json "cut" records which plan and segments it was). The overlay stage runs when
+`--brand` is given or when the brand's overlays are not done for the current cut. Every
+Claude run appends one line to work/runs.jsonl (wall time, turns, cost, tokens), and its raw
+event stream goes to work/claude-<phase>.jsonl.
 """
 
 import contextlib
 import functools
+import hashlib
 import io
 import json
 import re
@@ -29,7 +38,14 @@ from pathlib import Path
 from . import agent
 from .paths import ROOT
 from .tools.common import ToolError, read_job, resolve_job, update_job
-from .tools.job import approve_job, is_approved, project_sha, read_approval, revoke_approval
+from .tools.job import (
+    approve_job,
+    brand_id,
+    is_approved,
+    project_sha,
+    read_approval,
+    revoke_approval,
+)
 
 TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
 PREP = [["ingest", "--denoise"], ["face"], ["transcribe"], ["sheet", "contact"]]
@@ -41,6 +57,14 @@ PLAN_PROMPT = (
 CUT_PROMPT = (
     "The human approved work/project.md. Use the video-cut:cut skill to cut the Video Cut job "
     "in the current folder."
+)
+OVERLAYS_PROMPT = (
+    "The human approved work/project.md and the cut is rendered. Use the video-cut:overlays "
+    "skill to add captions and overlays to the Video Cut job in the current folder."
+)
+OVERLAYS_RECUT = (
+    " The cut changed since captions were last made: rebuild them with "
+    "`videocut tool captions --force`."
 )
 
 
@@ -72,13 +96,17 @@ def _main(main, argv: list[str]) -> int:
         return e.code if isinstance(e.code, int) else 2
 
 
-def new_job(video: Path, type_: str | None, brief: str | None) -> Path:
+def new_job(
+    video: Path, type_: str | None, brief: str | None, assets: list[str] | None = None
+) -> Path:
     from .cli import main
 
     buf = io.StringIO()
     argv = ["tool", "job", "new", str(video)]
     argv += ["--type", type_] if type_ else []
     argv += ["--brief", brief] if brief else []
+    for a in assets or []:
+        argv += ["--asset", a]
     with contextlib.redirect_stdout(buf):
         code = _main(main, argv)
     lines = buf.getvalue().strip().splitlines()
@@ -88,10 +116,14 @@ def new_job(video: Path, type_: str | None, brief: str | None) -> Path:
     return Path(s["job"])
 
 
-def open_job(ref: str, type_: str | None, brief: str | None) -> Path:
+def open_job(
+    ref: str, type_: str | None, brief: str | None, assets: list[str] | None = None
+) -> Path:
     p = Path(ref).expanduser()
     if p.is_file():
-        return new_job(p, type_, brief)
+        return new_job(p, type_, brief, assets)
+    if assets:
+        raise RunError("--asset only works when a new job is made from a recording")
     try:
         job = resolve_job(ref)
     except ToolError as e:
@@ -190,6 +222,91 @@ def _snapshot(folder: Path) -> dict:
     return {p: p.stat().st_mtime for p in folder.rglob("*") if p.is_file()}
 
 
+def segments_sha(job: Path) -> str | None:
+    """Hash of what makes the cut (source, fps, size, segments) in work/edl.json; captions
+    and overlays are not part of it."""
+    try:
+        edl = json.loads((job / "work" / "edl.json").read_text())
+        cut = {k: edl.get(k) for k in ("source", "fps", "size", "segments")}
+    except (OSError, ValueError, AttributeError):
+        return None
+    return hashlib.sha256(json.dumps(cut, sort_keys=True).encode()).hexdigest()
+
+
+def _final_verify(job: Path, started: float, phase: str) -> dict:
+    """out/verify.json of a full render made after `started`, or RunError."""
+    reel, vfile = job / "out" / "reel.mp4", job / "out" / "verify.json"
+    if not ((_mtime(reel) or 0) >= started and (_mtime(vfile) or 0) >= started):
+        raise RunError(f"the {phase} run did not finish with a final render and verify")
+    verify = json.loads(vfile.read_text())
+    if verify.get("preview") or verify.get("reel") != "out/reel.mp4":
+        raise RunError("the last verify checked a preview, not out/reel.mp4")
+    return verify
+
+
+def cut_done(job: Path) -> bool:
+    """Whether out/reel.mp4 is the finished cut of the approved plan. job.json "cut" (set by
+    `run` after a cut run) must match the approved plan and the EDL's segments; a job cut
+    before that record existed counts when its last verify checked out/reel.mp4 after the
+    last EDL change."""
+    approval = read_approval(job)
+    if not approval or not (job / "out" / "reel.mp4").is_file():
+        return False
+    rec = read_job(job).get("cut")
+    if isinstance(rec, dict):
+        return rec.get("project_sha256") == approval["project_sha256"] and rec.get(
+            "segments_sha256"
+        ) == segments_sha(job)
+    vfile = job / "out" / "verify.json"
+    try:
+        verify = json.loads(vfile.read_text())
+    except (OSError, ValueError):
+        return False
+    edl_t, verify_t = _mtime(job / "work" / "edl.json"), _mtime(vfile) or 0
+    approved_t = datetime.fromisoformat(approval["at"]).timestamp()
+    return (
+        verify.get("reel") == "out/reel.mp4"
+        and not verify.get("preview")
+        and edl_t is not None
+        and verify_t >= max(edl_t, approved_t)
+    )
+
+
+def record_cut(job: Path, approved_sha: str) -> None:
+    verify = json.loads((job / "out" / "verify.json").read_text())
+    update_job(
+        job,
+        cut={
+            "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "project_sha256": approved_sha,
+            "segments_sha256": segments_sha(job),
+            "verify_ok": bool(verify.get("ok")),
+        },
+        overlays=None,  # a new cut has no overlays yet
+    )
+
+
+def _file_sha(path: Path) -> str | None:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
+def overlays_done(job: Path, brand_id: str) -> bool:
+    """The brand's overlays are in the current reel: recorded for this brand and exactly this
+    EDL, verified ok, and the last render composited them."""
+    rec = read_job(job).get("overlays")
+    try:
+        composited = json.loads((job / "out" / "render.json").read_text()).get("overlay")
+    except (OSError, ValueError, AttributeError):
+        composited = False
+    return (
+        isinstance(rec, dict)
+        and rec.get("brand") == brand_id
+        and rec.get("edl_sha256") == _file_sha(job / "work" / "edl.json")
+        and rec.get("verify_ok") is True
+        and bool(composited)
+    )
+
+
 def ask_approval(job: Path, ask: Callable[[str], str] = input) -> bool:
     if not sys.stdin.isatty() and ask is input:
         return False
@@ -204,13 +321,18 @@ def run(
     approve: bool = False,
     max_turns: int = 60,
     replan: bool = False,
+    brand: str | None = None,
+    recut: bool = False,
+    assets: list[str] | None = None,
     say=print,
     ask: Callable[[str], str] = input,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
-    job = open_job(ref, type_, brief)
+    job = open_job(ref, type_, brief, assets)
     say(f"job: {job}")
+    if brand:
+        update_job(job, brand=brand_id(brand))
     project, edl = job / "work" / "project.md", job / "work" / "edl.json"
 
     say("prep:")
@@ -238,18 +360,56 @@ def run(
         approve_job(job)
         say("plan: approved")
 
-    resume = plan_session if plan_session and project_sha(job) == plan_sha else None
     approved_sha = read_approval(job)["project_sha256"]
-    started = time.time()
-    claude(job, "cut", CUT_PROMPT, max_turns, resume, say)
-    if project_sha(job) != approved_sha:
-        raise RunError("work/project.md changed during the cut run; approve it again")
-    reel, vfile = job / "out" / "reel.mp4", job / "out" / "verify.json"
-    if not ((_mtime(reel) or 0) >= started and (_mtime(vfile) or 0) >= started):
-        raise RunError("the cut run did not finish with a final render and verify")
-    verify = json.loads(vfile.read_text())
-    if verify.get("preview") or verify.get("reel") != "out/reel.mp4":
-        raise RunError("the last verify checked a preview, not out/reel.mp4")
+    if cut_done(job) and not recut and not plan_session:
+        say("cut: already done for the approved plan (--recut cuts again)")
+        if not isinstance(read_job(job).get("cut"), dict):
+            record_cut(job, approved_sha)  # a job cut before the record existed
+    else:
+        resume = plan_session if plan_session and project_sha(job) == plan_sha else None
+        started = time.time()
+        claude(job, "cut", CUT_PROMPT, max_turns, resume, say)
+        if project_sha(job) != approved_sha:
+            raise RunError("work/project.md changed during the cut run; approve it again")
+        _final_verify(job, started, "cut")
+        record_cut(job, approved_sha)
+
+    job_brand = read_job(job).get("brand")
+    if job_brand and (brand or not overlays_done(job, job_brand)):
+        cut_sha = segments_sha(job)
+        started = time.time()
+        prompt = OVERLAYS_PROMPT
+        old = read_job(job).get("overlays")
+        edl_caps = (json.loads(edl.read_text()).get("captions") if edl.is_file() else None) or []
+        if edl_caps and not (isinstance(old, dict) and old.get("segments_sha256") == cut_sha):
+            prompt += OVERLAYS_RECUT
+        claude(job, "overlays", prompt, max_turns, None, say)
+        if project_sha(job) != approved_sha:
+            raise RunError("work/project.md changed during the overlay run; approve it again")
+        if segments_sha(job) != cut_sha:
+            raise RunError(
+                "the overlay run changed the cut (EDL segments); it may only add overlays"
+            )
+        verify = _final_verify(job, started, "overlay")
+        render = json.loads((job / "out" / "render.json").read_text())
+        if not render.get("overlay"):
+            raise RunError("the final render of the overlay run has no overlay composited")
+        update_job(
+            job,
+            overlays={
+                "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "brand": job_brand,
+                "segments_sha256": cut_sha,
+                "edl_sha256": _file_sha(job / "work" / "edl.json"),
+                "verify_ok": bool(verify.get("ok")),
+            },
+        )
+    elif job_brand:
+        say(f"overlays: already done for brand {job_brand} (--brand {job_brand} redoes them)")
+    else:
+        say("overlays: skipped, the job has no brand (--brand <id>)")
+
+    verify = json.loads((job / "out" / "verify.json").read_text())
     say("\nout/:")
     for p in sorted((job / "out").iterdir()):
         if p.is_file():
@@ -268,6 +428,9 @@ def main(args) -> int:
             approve=args.approve,
             max_turns=args.max_turns,
             replan=args.replan,
+            brand=args.brand,
+            recut=args.recut,
+            assets=args.asset,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

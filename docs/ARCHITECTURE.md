@@ -9,13 +9,15 @@
 | `start.sh` | entry point: platform checks, bootstraps `uv`, syncs Python, runs `videocut setup` + `doctor` |
 | `manifest/tools.json` | pinned downloads: version, URL, SHA-256, licence |
 | `src/videocut/` | Python package and CLI (`setup`, `doctor`, `selftest`, `models pull`, `ui`, `auth`, `run`, `tool`) |
-| `src/videocut/run.py` | `videocut run`: prep → plan run → human approval → cut run |
+| `src/videocut/run.py` | `videocut run`: prep → plan run → human approval → cut run → overlay run |
+| `src/videocut/brand.py` | brand profiles: load, validate, resolve `brand.json` into design tokens |
 | `src/videocut/agent.py` | the restricted `claude` runner (see `SECURITY.md`) |
-| `claude-plugin/` | Claude Code plugin `video-cut` with the skills `ping`, `plan`, `cut` |
+| `claude-plugin/` | Claude Code plugin `video-cut` with the skills `ping`, `plan`, `cut`, `overlays` |
 | `src/videocut/tools/` | `videocut tool <name>`: one module per pipeline tool, used by Claude inside a job |
 | `src/videocut/edl.py` | EDL schema (dataclasses), validation with JSON paths, load/save |
 | `tests/clips.py` | generated test clips (macOS `say` + ffmpeg test pattern), no third-party media |
-| `renderer/` | Node + `playwright-core`: canvas frames in headless Chromium, piped to FFmpeg |
+| `renderer/` | overlay renderer: `render.js`, `lib/`, `scenes/` (Node + `playwright-core`, headless Chromium → FFmpeg) |
+| `brands/_example/` | the only bundled brand: neutral |
 | `.tools/` (ignored) | installed tools: `bin/`, managed Python, Node, Chromium, caches |
 | `~/VideoCut/` | user data: `models/`, `brands/`, `jobs/`, `music/`, `selftest/` (`VIDEOCUT_HOME`) |
 
@@ -31,7 +33,10 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--id]`, `job show [job]`, `job approve [job]` | `job.py` |
+| `job new <video> [--type] [--brief] [--brand] [--asset FILE]… [--id]`, `job show [job]`, `job approve [job]`, `job brand <id>` | `job.py` |
+| `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]` | `brand.py` |
+| `captions [--force]` | `captions.py` |
+| `overlays [--no-render]` | `overlays.py` |
 | `ingest [--denoise]` | `ingest.py` |
 | `face` | `face.py` |
 | `transcribe [--model turbo\|parakeet] [--language]`, `candidates` | `transcribe.py` |
@@ -42,13 +47,16 @@
 
 Helpers: `_transcribe_energy.py` (pauses, voiced gaps), `_transcribe_pack.py`
 (`takes_packed.md`), `_image.py` (ffmpeg-drawn pictures, peak-normalised waveforms),
-`_render_plan.py` (frame grid, crop windows, filter graph), `_color.py` (HDR → SDR).
+`_render_plan.py` (frame grid, filter graph), `_geometry.py` (crop windows, face-centred
+framing, face track in output px, safe zones; shared by render, overlays and verify),
+`_color.py` (HDR → SDR).
 
 ## Job folder (`$VIDEOCUT_HOME/jobs/<id>/`)
 
 ```
-job.json   id, created, source (relative), type, brief, status, approval
-input/     source recording, hard-linked (copied across volumes), never moved
+job.json   id, created, source (relative), type, brief, status, approval, brand, assets,
+           cut / overlays (what `videocut run` finished: plan and segments hashes, brand)
+input/     source recording and assets (screenshots), hard-linked or copied
 work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4        ingest
            face.json                                                             face
            words.json, transcribe.json, candidates.json, takes_packed.md         transcribe
@@ -56,9 +64,10 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            contract.md (reel contract of the type, copied by `run` if one exists)
            project.md                                                            plan run
            edl.json, render_filter.txt, cut_report.md                            cut run
+           overlays.json, overlay.mov, overlay_boxes.json, overlay_report.md     overlay run
            runs.jsonl, claude-plan.jsonl, claude-cut.jsonl                       videocut run
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
-           verify.json, verify/cut_NN.jpg                                        verify
+           verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg      verify
 ```
 
 Lifecycle (`status` in job.json): `new` → `ingested` (ingest) → `approved` (`job approve`, by a
@@ -73,13 +82,14 @@ compensation (`-D`) so cleaned audio stays in sync with the picture. Transcribe 
 
 ## Skills and `videocut run`
 
-Claude only ever sees the job folder and `videocut tool *`. Two skills, two runs, a human in
-between (BRIEF §5):
+Claude only ever sees the job folder and `videocut tool *`. Three skills, three runs, a human
+between plan and cut (BRIEF §5):
 
 | Skill | Reads | Writes | Images |
 |---|---|---|---|
 | `plan` | `takes_packed.md`, `job.json`, `contract.md`, 1–2 contact sheets | `work/project.md`: hook, core message, target length, keep/cut list in source time, emphasis words, risks | ≤ 4 |
-| `cut` | `project.md` (must be approved), `words.json`, flagged verify pictures | `work/edl.json`, renders, `work/cut_report.md` | ~8, only at doubts |
+| `cut` | `project.md` (must be approved), `words.json`, flagged verify pictures | `work/edl.json` (segments), renders, `work/cut_report.md` | ~8, only at doubts |
+| `overlays` | `project.md` overlay ideas, `edl.json`, `brand show`, overlay/caption sheets | `captions` + `overlays` in `work/edl.json`, overlay render, renders, `work/overlay_report.md` | ≤ 4 |
 
 `videocut run <video|job>`:
 
@@ -93,7 +103,16 @@ between (BRIEF §5):
 4. **cut run**: `claude -p` with the `cut` skill; resumes the plan session when the plan was
    approved unchanged in the same invocation, otherwise starts fresh. Loop inside the skill:
    `edl check` → `render --preview` → `verify` → fix, max. 3 rounds → `render` → `verify`.
-5. prints `out/`. Exit code 0 when verify is ok, 3 when not approved, 4 when verify is not ok.
+   A finished cut of the approved plan is kept on a re-run (`--recut` cuts again); job.json
+   `cut` records the plan and segments hashes.
+5. **overlay run** (when the job has a brand; `--brand <id>` sets it and always redoes the
+   stage): `claude -p` with the `overlays` skill. No second approval, but it only runs after an
+   approved, finished cut, and fails when it changes the EDL segments, when it does not end with
+   a fresh full render + verify, or when that render has no overlay composited. job.json
+   `overlays` records brand, segments and EDL hashes and the verify result; a re-run skips the
+   stage only when the same brand's overlays verified ok on exactly this EDL and the last
+   render composited them. A new cut clears the record.
+6. prints `out/`. Exit code 0 when verify is ok, 3 when not approved, 4 when verify is not ok.
 
 Every Claude run appends `{phase, wall_s, turns, cost_usd, usage, duration_ms, session_id,
 resumed, auth}` to `work/runs.jsonl` (the token and runtime log of BRIEF §11).
@@ -127,12 +146,66 @@ when no face was found); `edl check` warns (never fails) for an `in`/`out` insid
 flags `blink_at_cut` when one of the two output frames on either side of a cut maps (via the
 EDL) into a blink, and uses the same face crops to tell reframes from jump cuts.
 
+## Brands (`brand.py`, `tools/brand.py`)
+
+A brand is a folder `$VIDEOCUT_HOME/brands/<id>/` with `brand.json` (BRIEF §9) plus its font
+and logo files; the bundled `brands/_example` is the only one in the repository. `load(id)`
+validates and returns the **resolved tokens** every scene reads: absolute asset paths
+(relative ones must stay inside the brand folder), enums resolved from free text (an ambiguous
+one warns), `fonts.files` per weight (from `display`/`body` files when only those are given),
+default spring (13, 0.8) and `caption_colors` {text, box, highlight}, each ≥ 4.5:1 (WCAG AA)
+against the box — a colour that misses is darkened or lightened until it passes, and the
+derivation is reported. `brand check` prints the contrast table and advisory warnings
+(logo variants, sparing accent). `brand sheet` renders every installed scene with neutral
+sample content on the brand background (one labelled tile per scene) as the preview sheet.
+Fonts are never fetched from the network; a family name without a file falls back to the
+system UI font.
+
+## Overlays and captions (step 8)
+
+`captions` maps `work/words.json` through the segments to output time (a word cut to less
+than half is dropped, so removed fillers never show), groups words into phrase blocks paced by the brand
+token `captions.pace` (`calm`, the default: 1–2 lines of ~5–8 words, ≥ 1.0 s on screen, broken
+at punctuation and pauses ≥ 0.25 s, held across gaps < 0.6 s so nothing flickers; `normal`;
+`fast` = the earlier ≤ 3 words / 18 characters), the active word highlight moving inside the
+block, and marks emphasis from zoom keys or
+`work/emphasis.json`. `overlays` writes `work/overlays.json` (size, fps, duration, resolved
+tokens, safe zones, the face track mapped to output px through the same crop windows render
+uses, captions, overlays) and runs the renderer; render composites `work/overlay.mov` when it
+is newer than the EDL. Full-frame plates (`cta_end`) start no earlier than the last spoken
+word + 0.2 s; `overlays` shifts an earlier one and render appends a held last frame with
+silence for the plate. Captions are hidden under plates. Captions sit in the `center` or
+`lower` band (chest, below the face) per `captions.position`, falling back to the other band.
+`overlays` records SHA-256 of `overlay.mov`, `overlay_boxes.json` and `overlays.json` in
+`$VIDEOCUT_HOME/state/<job>/overlay_render.json`, outside the agent-writable job folder;
+verify flags `overlay_boxes_untrusted` when they do not match.
+
+Renderer (`renderer/render.js`): one headless Chromium page, a canvas with a pure `draw(t)`
+per scene, frames piped as PNG to FFmpeg → ProRes 4444 with alpha, BT.709 limited range and
+tagged; `--boxes` (what every item really drew, per frame span), `--still`, `--sheet`,
+`--blur N` (motion-blur subframes). Every item is laid out once, in time order, before the
+first frame: away from the face over its lifetime, from blocks placed earlier, and outside
+the safe zones (organic: top 250 px, bottom 350 px, 6 % at the sides), shrinking to 60 %
+before it gives up. Scenes read only tokens (a lint test keeps colour and font literals out).
+Scene images (`screenshot_frame`, logos) are read on the Node side only from the job folder
+(`VIDEOCUT_JOB_DIR`) or the brands folders; redactions are burnt into a private copy before
+any frame is drawn.
+
+Composite: the overlay is converted from BT.709 to the cut video's matrix and both streams are
+put on the same frame grid (pts = frame number), so overlay frame n is reel frame n. Measured:
+brand colours survive into the yuv420p H.264 reel at ΔE ≈ 1 (CIE76, read as BT.709).
+
 ## Verify
 
 Per inner cut: a luma jump score, audio click numbers and a picture. A jump cut in a talking
 head is expected: a clear jump is info `jump_cut` (plus `reframe` when the EDL changes crop or
 zoom at that cut). The flag `visual_jump` is raised only for a jump ≥ 3× (and ≥ 8) the median jump score
-of the reel's other cuts without a reframe; `click` for an audio step. Global checks: duration,
+of the reel's other cuts without a reframe; `click` for an audio step. Overlays: per drawn box
+(`work/overlay_boxes.json`) `overlay_in_safe_zone` and `overlay_on_face` (> 2 % of the face
+box at any face sample while visible) and `overlay_overlap` (an overlay and a caption on
+screen together share > 10 % of the smaller box); the full-frame `cta_end` plate is exempt
+from these and from the frozen check. Pictures: `captions_NN.jpg` (one tile per caption
+group change) and `overlays_NN.jpg` (one tile per overlay, at its middle). Global checks: duration,
 loudness, true peak, size, black/frozen stretches. After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
 

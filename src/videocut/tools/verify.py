@@ -22,12 +22,30 @@ Numbers per cut
     blink    flag `blink_at_cut` when one of the two output frames on either side of the cut
              shows a blink: the frames are mapped to source time via the EDL and looked up
              in the blink intervals of a current work/face.json
+Overlays (when work/overlay_boxes.json from `videocut tool overlays` exists; boxes and face
+track are in the output px of work/overlays.json)
+    flag `overlay_in_safe_zone` when a box reaches into the organic safe zones (top 250 px,
+    bottom 350 px, 6 % at the sides, docs/BRIEF.md §8); flag `overlay_on_face` when a box
+    covers more than 2 % of the face box at any face sample (output time) while it is
+    visible; flag `overlay_overlap` when an overlay and a caption on screen at the same time
+    share more than 10 % of the smaller box (one hides the other: there was no free room).
+    A full-frame end card (`cta_end`) is exempt from these and from the frozen check: it
+    hides the video on purpose and keeps its own content inside the safe area. But flag
+    `caption_on_plate` when a caption was drawn while the end card was on screen, and
+    `plate_over_speech` when the end card starts before the last spoken word + 0.2 s
+    (_plates; `videocut tool overlays` moves it there).
+    Trust: the boxes are only believed when work/overlay.mov, overlay_boxes.json and
+    overlays.json are exactly what `videocut tool overlays` recorded outside the job folder
+    (overlays.check_record); otherwise one entry with flag `overlay_boxes_untrusted`.
+    out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
+    out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s. A preview is
 checked at its half size, and its loudness (single-pass) is reported but not judged.
 
-The summary line has `ok` (all global checks pass and no cut is flagged), `flagged` (cuts with
-their flags), `info` (cuts with info notes such as `jump_cut`) and `failed` (global checks).
+The summary line has `ok` (all global checks pass and no cut or overlay is flagged),
+`flagged` (cuts with their flags), `overlay_flagged` (overlay boxes with their flags),
+`info` (cuts with info notes such as `jump_cut`) and `failed` (global checks).
 The exit code is 0 whenever the checks ran.
 """
 
@@ -42,7 +60,18 @@ import numpy as np
 from ..edl import Edl, EdlError, load
 from ..paths import tool_env
 from . import _image as im
-from .common import ToolError, binary, job_parent, resolve_job, run_tool, write_json
+from . import _plates
+from . import overlays as overlays_mod
+from ._geometry import overlap, safe_zones
+from .common import (
+    ToolError,
+    binary,
+    is_fresh,
+    job_parent,
+    resolve_job,
+    run_tool,
+    write_json,
+)
 from .face import face_crops, in_blink, load_face
 
 RATE = 48000
@@ -58,6 +87,11 @@ CLICK_PEAK_MAX, HF_SPIKE_DB_MAX = 12.0, 15.0
 CLICK_HALF_S, BASE_S, BLOCK = 0.010, 0.100, 240
 FLOOR = 1e-4  # about -80 dBFS: keeps ratios finite next to digital silence
 STRIP_TILES, TILE_W, WAVE_H = 5, 216, 140
+FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
+CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
+BLOCK_OVERLAP_MAX = 0.1  # share of the smaller box an overlay and a caption may share
+FULL_FRAME_SCENES = _plates.PLATE_SCENES  # the end card: an opaque full-frame plate, by design
+CAPTION_COLS = 3
 
 
 # ---------------------------------------------------------------- decoding
@@ -245,6 +279,173 @@ def cut_image(
     return idx
 
 
+# ---------------------------------------------------------------- overlays
+
+
+def _drawn(b: dict) -> tuple[float, float]:
+    """First and last output time the item drew (renderer "drawn"), else its life."""
+    d = b.get("drawn")
+    if isinstance(d, list) and len(d) == 2 and all(map(_num, d)):
+        return d[0], d[1]
+    return b["t0"], b["t1"]
+
+
+def overlay_checks(
+    boxes: list[dict], face: list[dict], size: tuple[int, int], last_word: float | None = None
+) -> list[dict]:
+    """Per drawn box (renderer --boxes): flags `overlay_in_safe_zone` / `overlay_on_face`,
+    `overlay_overlap`, `caption_on_plate`, `plate_over_speech` (end card before
+    `last_word` + _plates.AFTER_SPEECH_S), the worst face overlap (share of the face box)
+    and when it happens (output s)."""
+    w, h = size
+    safe = safe_zones(size)
+    lo_x, hi_x, lo_y, hi_y = safe["side"], w - safe["side"], safe["top"], h - safe["bottom"]
+    plates = [_drawn(b) for b in boxes if b.get("scene") in FULL_FRAME_SCENES]
+    out = []
+    for b in boxes:
+        x0, y0, x1, y1 = b["box"]
+        flags = []
+        if b.get("scene") in FULL_FRAME_SCENES:  # a full-frame plate covers everything on purpose
+            if last_word is not None and b["t0"] < last_word + _plates.AFTER_SPEECH_S - 1e-3:
+                flags.append("plate_over_speech")
+        elif x0 < lo_x or x1 > hi_x or y0 < lo_y or y1 > hi_y:
+            flags.append("overlay_in_safe_zone")
+        if b.get("scene") == "caption":
+            c0, c1 = _drawn(b)
+            if any(c0 <= p1 and c1 >= p0 for p0, p1 in plates):
+                flags.append("caption_on_plate")
+        worst, at = 0.0, None
+        for f in face:
+            if b["t0"] <= f["t"] <= b["t1"]:
+                fb = f["box"]
+                area = (fb[2] - fb[0]) * (fb[3] - fb[1])
+                share = overlap(b["box"], fb) / area if area > 0 else 0.0
+                if share > worst:
+                    worst, at = share, f["t"]
+        if worst > FACE_OVERLAP_MAX and b.get("scene") not in FULL_FRAME_SCENES:
+            flags.append("overlay_on_face")
+        if b.get("scene") not in ("caption", *FULL_FRAME_SCENES) and any(
+            c.get("scene") == "caption"
+            and c["t0"] < b["t1"]
+            and c["t1"] > b["t0"]
+            and overlap(b["box"], c["box"])
+            > BLOCK_OVERLAP_MAX * min(_area(b["box"]), _area(c["box"]))
+            for c in boxes
+        ):
+            flags.append("overlay_overlap")
+        out.append(
+            {
+                "scene": b.get("scene"),
+                "t0": b["t0"],
+                "t1": b["t1"],
+                "box": b["box"],
+                "face_overlap": round(worst, 3),
+                "face_t": at,
+                "flags": flags,
+            }
+        )
+    return out
+
+
+def _area(b: list[float]) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def full_frame_spans(overlays: list[dict]) -> list[tuple[float, float]]:
+    return [
+        (o["t0"], o["t1"])
+        for o in overlays
+        if isinstance(o, dict) and o.get("scene") in FULL_FRAME_SCENES
+        and _num(o.get("t0")) and _num(o.get("t1"))
+    ]  # fmt: skip
+
+
+def _num(v) -> bool:
+    return isinstance(v, int | float) and not isinstance(v, bool)
+
+
+def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, int], list[str]]:
+    """(boxes or None without work/overlay_boxes.json, face track, overlay size, warnings)."""
+    path = job / "work" / "overlay_boxes.json"
+    if not path.is_file():
+        return None, [], TARGET_SIZE, []
+    warnings = []
+    edl_path = job / "work" / "edl.json"
+    if edl_path.is_file() and not is_fresh([path], [edl_path]):
+        warnings.append("work/overlay_boxes.json is older than edl.json; the boxes may be stale")
+    try:
+        raw = json.loads(path.read_text())
+    except ValueError:
+        return None, [], TARGET_SIZE, ["work/overlay_boxes.json is not valid JSON; not checked"]
+    boxes = [
+        b
+        for b in (raw if isinstance(raw, list) else [])
+        if isinstance(b, dict)
+        and _num(b.get("t0"))
+        and _num(b.get("t1"))
+        and isinstance(b.get("box"), list)
+        and len(b["box"]) == 4
+        and all(map(_num, b["box"]))
+    ]
+    if not isinstance(raw, list) or len(boxes) != len(raw):
+        warnings.append("work/overlay_boxes.json has malformed entries; they were skipped")
+    face, size = [], TARGET_SIZE
+    try:
+        doc = json.loads((job / "work" / "overlays.json").read_text())
+        size = (int(doc["size"][0]), int(doc["size"][1]))
+        face = [
+            f
+            for f in doc.get("face", [])
+            if _num(f.get("t"))
+            and isinstance(f.get("box"), list)
+            and len(f["box"]) == 4
+            and all(map(_num, f["box"]))
+        ]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        warnings.append("work/overlays.json is missing or malformed; face overlap not checked")
+    return boxes, face, size, warnings
+
+
+def caption_times(captions: list[dict], fps: float, duration: float) -> list[float]:
+    """One output time per caption group change: CAPTION_SETTLE_S after its start (at most
+    its middle), snapped to a frame, unique, inside the reel."""
+    times = []
+    for c in captions:
+        t = im.snap(min(c["t0"] + CAPTION_SETTLE_S, (c["t0"] + c["t1"]) / 2), fps)
+        if 0 <= t < duration and t not in times:
+            times.append(t)
+    return sorted(times)
+
+
+def overlay_times(overlays: list[dict], fps: float, duration: float) -> list[float]:
+    """One output time per overlay (not caption): its middle, when entry animations and a
+    screenshot zoom have played; snapped, unique, inside the reel."""
+    times = []
+    for o in overlays:
+        t0, t1 = o.get("t0"), o.get("t1")
+        if not (_num(t0) and _num(t1)) or t1 <= t0:
+            continue
+        t = im.snap((t0 + t1) / 2, fps)
+        if 0 <= t < duration and t not in times:
+            times.append(t)
+    return sorted(times)
+
+
+def caption_sheets(
+    reel: Path, v: dict, times: list[float], dest: Path, prefix: str = "captions"
+) -> list[Path]:
+    """3x3 contact sheets of the frames at `times`: out/verify/<prefix>_NN.jpg."""
+    tw, th = im.tile_size(v["width"], v["height"])
+    font = im.find_font()
+    label = "," + im.drawtext(font, im.label_expr(v["fps"]), "4", "h-th-4", 22) if font else ""
+    n = CAPTION_COLS
+    graph = (
+        f"[0:v]select='{im.select_times(times, v['fps'])}',scale={tw}:{th}{label},"
+        f"tile={n}x{n}:padding=0:margin=0[out]"
+    )
+    return im.render_jpegs([["-i", str(reel)]], graph, dest, lambda k: f"{prefix}_{k:02d}.jpg")
+
+
 # ---------------------------------------------------------------- global checks
 
 
@@ -380,7 +581,18 @@ def verify(args) -> dict:
         )
 
     loud = loudness(reel)
-    stretches = bad_stretches(reel, video_dur)
+    # The end card as `videocut tool overlays` scheduled it (after the last word, over the
+    # held tail). A static end card is not a frozen picture (one frame of slack each end).
+    sched = _plates.for_job(job, edl, edl.output_duration()) if edl is not None else None
+    plates = full_frame_spans(sched.overlays) if sched is not None else []
+    stretches = [
+        s
+        for s in bad_stretches(reel, video_dur)
+        if not (
+            s["kind"] == "frozen"
+            and any(a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in plates)
+        )
+    ]
     want = float(render["output_duration"])
     want_size = tuple(x // 4 * 2 for x in TARGET_SIZE) if preview else TARGET_SIZE
     lufs, peak = loud["integrated_lufs"], loud["true_peak_dbtp"]
@@ -404,10 +616,50 @@ def verify(args) -> dict:
         if f"out/verify/{old.name}" not in {c["image"] for c in cut_docs}:
             old.unlink()
     checks["cuts_in_range"] = _check(not bad_cuts, outside=bad_cuts)
+
+    boxes, face_track, ov_size, ov_warn = _load_boxes(job)
+    warnings += ov_warn
+    last_word = sched.last_word if sched is not None else None
+    overlay_docs = (
+        overlay_checks(boxes, face_track, ov_size, last_word) if boxes is not None else []
+    )
+    if boxes is not None and not render.get("overlay"):
+        warnings.append("this render has no overlay composited; boxes checked anyway")
+    # Checked whenever there is an overlay at all: a missing or broken boxes file next to an
+    # overlay.mov (or a render with one composited) is no excuse to skip the record.
+    has_overlay = (job / "work" / "overlay.mov").is_file() or bool(render.get("overlay"))
+    untrusted = overlays_mod.check_record(job) if boxes is not None or has_overlay else None
+    if untrusted:
+        warnings.append(f"overlay boxes not trusted: {untrusted}")
+    times = caption_times(edl.captions, fps, video_dur) if edl is not None else []
+    sheets = caption_sheets(reel, v, times, vdir) if times else []
+    for old in vdir.glob("captions_*.jpg"):
+        if old not in sheets:
+            old.unlink()
+    ov_times = overlay_times(sched.overlays, fps, video_dur) if sched is not None else []
+    ov_sheets = caption_sheets(reel, v, ov_times, vdir, "overlays") if ov_times else []
+    for old in vdir.glob("overlays_*.jpg"):
+        if old not in ov_sheets:
+            old.unlink()
+    overlay_flagged = [
+        {"scene": o["scene"], "t0": o["t0"], "t1": o["t1"], "flags": o["flags"]}
+        for o in overlay_docs
+        if o["flags"]
+    ]
+    if untrusted:  # run `videocut tool overlays` again; never edit its outputs
+        overlay_flagged.insert(
+            0,
+            {
+                "scene": None,
+                "t0": 0.0,
+                "t1": round(video_dur, 3),
+                "flags": ["overlay_boxes_untrusted"],
+            },
+        )
     flagged = [{"cut": c["cut"], "t": c["t"], "flags": c["flags"]} for c in cut_docs if c["flags"]]
     info = [{"cut": c["cut"], "t": c["t"], "info": c["info"]} for c in cut_docs if c["info"]]
     failed = [k for k, c in checks.items() if not c["ok"]]
-    ok = not failed and not flagged
+    ok = not failed and not flagged and not overlay_flagged
     doc = {
         "ok": ok,
         "reel": f"out/{reel_name}",
@@ -417,11 +669,19 @@ def verify(args) -> dict:
         "cuts": cut_docs,
         "flagged": flagged,
         "info": info,
+        "overlays": overlay_docs,
+        "overlay_flagged": overlay_flagged,
+        "caption_sheets": [str(p.relative_to(job)) for p in sheets],
+        "caption_times": times,
+        "overlay_sheets": [str(p.relative_to(job)) for p in ov_sheets],
+        "overlay_times": ov_times,
         "warnings": warnings,
     }
     write_json(job / "out" / "verify.json", doc)
     for c in flagged:
         print(f"cut {c['cut']} at {c['t']}s: {', '.join(c['flags'])}")
+    for o in overlay_flagged:
+        print(f"overlay {o['scene'] or '(all)'} {o['t0']}-{o['t1']}s: {', '.join(o['flags'])}")
     for k in failed:
         print(f"check failed: {k} {checks[k]}")
     return {
@@ -431,9 +691,11 @@ def verify(args) -> dict:
         "cuts": len(cut_docs),
         "flagged": flagged,
         "info": info,
+        "overlay_flagged": overlay_flagged,
         "failed": failed,
         "warnings": warnings,
-        "images": [c["image"] for c in cut_docs],
+        "images": [c["image"] for c in cut_docs] + [str(p.relative_to(job)) for p in sheets],
+        "overlay_sheets": [str(p.relative_to(job)) for p in ov_sheets],
     }
 
 

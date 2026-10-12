@@ -99,3 +99,133 @@
 - The reel came out at 23.8 s, below the 30–45 s target for type 1 (the material did not
   carry more). The island name is never spoken in the kept parts, so the plan proposes a text
   overlay (Phase 2).
+
+### Added — Phase 2: overlays, captions and brand profiles
+- Brand profiles (BRIEF §9) as validated design tokens with WCAG-AA caption colours; `videocut
+  tool brand list|check|show`; `job new --brand` / `job brand <id>`.
+- `videocut tool captions` (output-time caption groups, cut words never appear, emphasis from
+  zoom keys / emphasis.json); `videocut tool overlays` (overlays.json + transparent overlay
+  render); render composites the overlay; verify flags overlay_in_safe_zone / overlay_on_face and
+  writes caption-change sheets; shared crop/face geometry (_geometry.py).
+- Overlay renderer renderer/render.js: transparent ProRes 4444, --boxes/--still/--sheet/--blur N,
+  brand fonts via FontFace; lib (closed-form spring, text fitting, face- and safe-zone-aware
+  placement); scenes caption + keyword; node + pytest tests.
+- Scene library: number_card, list_item, chat_bubble, screenshot_frame (zoom focus + redaction
+  burnt in before first visible frame), split_compare, bar_chart, lower_third, cta_end (logo end
+  card); asset access limited to the job folder.
+- `videocut tool brand sheet <id>`: the brand's preview sheet (BRIEF §9), every installed scene
+  with neutral sample content on the brand background → `~/VideoCut/brands/<id>/preview.jpg`.
+  The renderer's `--sheet` takes fixed times, labels and a background from `overlays.json`.
+- Verify writes `out/verify/overlays_NN.jpg`, one tile per overlay at its middle, so the agent
+  checks overlays with one or two pictures. A new flag, `overlay_overlap`, marks an overlay and
+  a caption that cover each other: when the face fills the frame, there is only one free strip.
+  The full-frame `cta_end` card is exempt from the safe-zone, face and frozen-picture checks.
+- Step 8 for Claude: the `plan` skill proposes overlay ideas (scene, time, spoken words, why;
+  brand address du/sie, never a brand forbidden word); new `overlays` skill: captions → overlays
+  in `work/edl.json` (output time, one at a time, text only from what is spoken) → overlay
+  render → preview → verify (fix overlay_on_face / overlay_in_safe_zone) → final render →
+  `work/overlay_report.md`. No new tool permissions: the renderer is only reached through
+  `videocut tool overlays`.
+- `videocut run --brand <id>` runs the overlay stage after the approved cut, with no second
+  approval. It never runs before the cut is approved and fails when the overlay run changes the
+  cut (the EDL segments). A finished cut of the approved plan is kept on a re-run (`--recut`
+  cuts again), and `job.json` records `cut` and `overlays`. `--asset FILE` and `job new --asset`
+  add screenshots or images to a new job (`input/`, listed in `job.json` `assets`).
+
+### Changed — Phase 2
+- Removed `brand scaffold-test-brands`: invented colours do not belong in shipped code.
+- Overlay colour path: the renderer encodes the overlay as BT.709 limited range and tags it,
+  and render converts it to the matrix of the cut video. Before, the untagged BT.601 conversion
+  shifted brand colours in players; an accent read back as BT.709 was off by ΔE ≈ 100. Now the
+  drawn brand colours survive in the H.264 reel at ΔE ≈ 1 (CIE76).
+- Overlay composite on an exact frame grid: overlay frame n lands on reel frame n. The joined
+  segments' rounded timestamps used to show captions one frame late.
+- Caption style `plain` draws a soft halo in the derived box colour. With only a shadow, white
+  text on bright video measured a median of 4.3:1 against its surroundings (worst ≈ 1.8:1);
+  with the halo it measures ≥ 16:1. Covered by an end-to-end test (real renderer → render →
+  verify, ΔE and drawn contrast). The halo uses shadows only: a canvas blur filter made a
+  24 s overlay take 164 s instead of 15 s.
+- A word scaled by the `scale` highlight pushes its line apart instead of covering the space to
+  its neighbours. SVG logos without width/height are sized from their viewBox. `cta_end`
+  registers its content, so captions keep clear of the end card.
+- Brand module review: malformed sections, non-finite numbers and invalid weights are errors,
+  not crashes. `display`/`body` font files are registered when `files` is missing. Ambiguous
+  free-text enums warn. The default spring is BRIEF's (13, 0.8). Folders whose names are not
+  valid ids are not listed. `job brand` takes ids only and refuses inside an agent run.
+- Review of the whole diff:
+  - A recut clears the overlay record, so the overlays are made again. The record names the
+    exact EDL and needs a verify that passed, so a failed overlay verify is retried.
+  - The overlay prompt asks for `captions --force` after a changed cut.
+  - `brand sheet` is refused inside agent runs; its `--out` could overwrite job files.
+  - Logos load from a brand given as a folder path.
+  - Asset paths such as `..name.png` are accepted, and font `file://` URLs are percent-decoded.
+- Layout also scans the whole allowed height for a free spot between several obstacles.
+
+- End card after the speech: `cta_end` (any full-frame plate scene) starts at the last spoken
+  word + 0.2 s. `videocut tool overlays` moves an earlier one there, keeping its length; when
+  it then runs past the cut, the reel gets a held tail: the last frame repeats under the card
+  and the audio is padded with silence after loudnorm, so the loudness is unchanged
+  (`render.json` `tail_s`). Chosen over rejecting the EDL because it always succeeds, also
+  when the recording ends right on the last word. overlays, render and verify compute the
+  same schedule from the EDL and the transcript (`_plates.py`).
+- No caption is drawn while a plate is on screen. `cta_end` no longer registers its content
+  for caption layout. Boxes carry the drawn times. verify flags `caption_on_plate` and
+  `plate_over_speech`.
+- Caption bands: `center` and `lower` (chest area, below the face, above the bottom safe zone).
+  `tokens.captions.position` picks the first one, and the other is the fallback. Both win over
+  the strip above the head, which close-ups used to get. A block shrinks before it leaves both
+  bands.
+- Verify trusts the overlay files only as written: `videocut tool overlays` records the
+  sha256 of `overlay.mov`, `overlay_boxes.json` and `overlays.json` in
+  `$VIDEOCUT_HOME/state/<job id>/overlay_render.json`. That folder is outside the job folder,
+  like the approvals. A mismatch is flagged `overlay_boxes_untrusted`.
+
+- Calmer captions: phrase blocks instead of 3-word flashes. New optional brand token
+  `captions.pace` = `calm` (the default), `normal` or `fast`. `fast` behaves as before.
+  `calm` makes blocks of 1–2 lines, at most 8 words / 38 characters, and breaks at sentence
+  ends. A full block breaks at its last comma or short pause. Each block is on screen for at
+  least 1.0 s: short blocks merge with a neighbour, or share words with it. A block is held
+  across gaps under 0.6 s and hidden in longer pauses. The spoken word moves through the
+  block (karaoke). The caption scene allows at most 2 lines. On the 23.8 s test cut the
+  pace gives:
+
+  | Pace | Blocks per minute | Median block duration |
+  |---|---|---|
+  | `calm` | 35 | 1.48 s |
+  | `fast` | 78 | 0.70 s |
+
+### Observed — Phase 2
+- Phase 2 acceptance on the Phase 1 recording (the approved 23.8 s cut, reused unchanged):
+  `videocut run <job> --brand <id>` once per brand, each reel with 31 caption groups. Verify ok
+  with no flags for all three brands. Overlay stage per run with the speaker's own sign-in:
+
+  | Brand | Overlays | Wall | Turns | API-price equivalent |
+  |---|---|---|---|---|
+  | brand-a (dark, plain upper-case captions) | 2 × keyword, cta_end | 265 s | 21 | ≈ $0.54 |
+  | brand-b (light, box captions) | cta_end | 187 s | 18 | ≈ $0.54 |
+  | brand-c (the user's own brand, local only) | keyword | 247 s | 22 | ≈ $0.52 |
+
+  brand-b dropped its two keyword cards because `overlay_overlap` showed they covered
+  captions: in this close-up the face fills the frame, and the only free strip is above the
+  head. Earlier attempts found the static end card failing the frozen check, the end card
+  failing the safe-zone check, and the slow caption halo; all three are fixed above.
+- Re-run after the end card, caption band, trust and pacing fixes (same cut, `calm` pace).
+  Verify is ok with no flags for all three brands. Each reel has 14 caption blocks: 35 per
+  minute of speech, median 1.48 s (was 31 groups, median 0.70 s). Each agent placed the end
+  card at about 21.4 s, before the last word at 23.73 s. The tool moved it to 23.93 s and
+  added a held tail of 2.43–2.60 s, at -14.0 LUFS. No caption sits on the end card.
+
+  In this extreme close-up the face box reaches y ≈ 1250–1460 of 1920, so 11 of 14 blocks fit
+  the lower band for brand-b and brand-c. For brand-a, with large upper-case text, 6 of 14
+  fit; the rest fall back above the head.
+
+  | Brand | Overlays | Wall | Turns |
+  |---|---|---|---|
+  | brand-a | `cta_end` | 156 s | 21 |
+  | brand-b | 2 × `keyword`, `cta_end` | 172 s | 19 |
+  | brand-c | 2 × `keyword`, `cta_end` | 136 s | 17 |
+- Type 6 end to end on a generated walkthrough clip with a generated, neutral UI mock as the
+  asset (`--asset`, brand-b): plan 69 s / 11 turns / ≈ $0.36, cut 60 s / 9 / ≈ $0.52,
+  overlays 117 s / 15 / ≈ $0.44. The 25.8 s reel has four `screenshot_frame` steps zooming
+  across the screen, with the e-mail line redacted in every frame, plus a `cta_end` with logo.
+  Verify is ok.

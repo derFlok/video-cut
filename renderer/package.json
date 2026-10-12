@@ -6,5 +6,9 @@
   "engines": { "node": ">=24" },
   "dependencies": {
     "playwright-core": "1.63.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "render": "node render.js"
   }
 }

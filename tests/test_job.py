@@ -98,3 +98,52 @@ def test_agent_runs_cannot_approve(capsys, tmp_path, videocut_home, monkeypatch)
     code, s, _ = run_tool(capsys, "job", "approve", "ag")
     assert code == 1 and "human" in s["error"]
     assert run_tool(capsys, "job", "show", "ag")[1]["approved"] is False
+    code, s, _ = run_tool(capsys, "job", "brand", "_example", "--job", "ag")
+    assert code == 1 and "human" in s["error"]
+
+
+def test_new_with_assets(capsys, tmp_path, videocut_home):
+    shot = tmp_path / "screen.png"
+    shot.write_bytes(b"png")
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(_video(tmp_path)), "--id", "a", "--asset", str(shot)
+    )
+    assert code == 0 and s["assets"] == ["input/screen.png"], s
+    assert (videocut_home / "jobs/a/input/screen.png").read_bytes() == b"png"
+    assert json.loads((videocut_home / "jobs/a/job.json").read_text())["assets"] == s["assets"]
+    bad = tmp_path / "notes.txt"
+    bad.write_text("x")
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(_video(tmp_path)), "--id", "b", "--asset", str(bad)
+    )
+    assert code == 1 and "must be one of" in s["error"]
+    assert not (videocut_home / "jobs/b").exists()
+
+
+def test_new_with_brand_and_job_brand_switch(capsys, tmp_path, videocut_home):
+    from test_brand import make_brand
+
+    make_brand(videocut_home, "one")
+    make_brand(videocut_home, "two")
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(_video(tmp_path)), "--id", "j", "--brand", "one"
+    )
+    assert code == 0 and s["brand"] == "one"
+    assert json.loads((videocut_home / "jobs/j/job.json").read_text())["brand"] == "one"
+    code, s, _ = run_tool(capsys, "job", "brand", "two", "--job", "j")
+    assert code == 0 and s["brand"] == "two"
+    assert json.loads((videocut_home / "jobs/j/job.json").read_text())["brand"] == "two"
+    code, s, _ = run_tool(capsys, "job", "brand", "_example", "--job", "j")
+    assert code == 0 and s["brand"] == "_example"
+
+
+def test_unknown_or_invalid_brand_is_refused(capsys, tmp_path, videocut_home):
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(_video(tmp_path)), "--id", "j", "--brand", "ghost"
+    )
+    assert code == 1 and "no brand" in s["error"]
+    assert not (videocut_home / "jobs/j").exists()
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "k")
+    code, s, _ = run_tool(capsys, "job", "brand", "ghost", "--job", "k")
+    assert code == 1
+    assert "brand" not in json.loads((videocut_home / "jobs/k/job.json").read_text())

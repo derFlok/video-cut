@@ -23,7 +23,8 @@ the result and fix it. Workflow after browser-use/video-use (MIT).
 ## 1. Write `work/edl.json`
 
 Read `work/project.md` (the keep list is the cut) and `work/words.json`
-(`{"words": [{"w", "t0", "t1", "conf"}]}`, source seconds). Phase 1 uses **segments only**:
+(`{"words": [{"w", "t0", "t1", "conf"}]}`, source seconds). The cut uses **segments only**;
+captions and overlays are added after it by the `overlays` skill, not in this run:
 
 ```json
 {

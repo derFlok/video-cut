@@ -38,13 +38,18 @@ def main(argv: list[str] | None = None) -> int:
     asub.add_parser("key", help="store an Anthropic API key in the keychain and use it")
     asub.add_parser("status", help="show the current mode")
 
-    r = sub.add_parser("run", help="cut a recording: prep, plan, your approval, cut")
+    r = sub.add_parser("run", help="cut a recording: prep, plan, your approval, cut, overlays")
     r.add_argument("target", help="a recording (creates a job) or an existing job folder/id")
     r.add_argument("--type", help="video type, e.g. thought (thought of the day)")
     r.add_argument("--brief", help="free-text instruction for Claude")
     r.add_argument("--approve", action="store_true", help="approve the plan without asking")
     r.add_argument("--replan", action="store_true", help="plan again even if a plan exists")
     r.add_argument("--max-turns", type=int, default=60, help="turn limit per Claude run")
+    r.add_argument("--brand", help="brand id: captions and overlays in this brand's look")
+    r.add_argument("--recut", action="store_true", help="cut again even if the cut is done")
+    r.add_argument(
+        "--asset", action="append", metavar="FILE", help="extra input image for a new job"
+    )
 
     t = sub.add_parser("tool", help="pipeline commands used by Claude inside a job")
     tsub = t.add_subparsers(dest="tool_cmd", required=True)

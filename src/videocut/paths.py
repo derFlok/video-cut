@@ -29,3 +29,10 @@ def tool_env() -> dict[str, str]:
     env["PLAYWRIGHT_BROWSERS_PATH"] = str(BROWSERS)
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
     return env
+
+
+def state_dir() -> Path:
+    """Records the tools keep about a job outside every job folder (agent runs, which may
+    write only below the job's work/, cannot reach them). Read at call time, like
+    VIDEOCUT_HOME in tests."""
+    return Path(os.environ.get("VIDEOCUT_HOME", Path.home() / "VideoCut")) / "state"
