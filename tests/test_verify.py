@@ -244,3 +244,14 @@ def test_verify_checks_overlays_and_writes_caption_sheets(capsys, reel):
         check=True,
     )
     assert out.stdout.strip() == "1080,1920"  # 3x3 tiles of 360x640
+
+
+def test_full_frame_end_card_is_not_flagged():
+    face = [{"t": 1.0, "box": [400, 600, 700, 1000]}]
+    boxes = [
+        {"scene": "cta_end", "t0": 0.0, "t1": 2.0, "box": [0, 0, 1080, 1920]},
+        {"scene": "keyword", "t0": 0.0, "t1": 2.0, "box": [0, 0, 1080, 1920]},
+    ]
+    out = verify.overlay_checks(boxes, face, (1080, 1920))
+    assert out[0]["flags"] == []
+    assert out[1]["flags"] == ["overlay_in_safe_zone", "overlay_on_face"]

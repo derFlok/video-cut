@@ -198,3 +198,9 @@ def test_ambiguous_enum_warns_and_odd_folders_are_not_listed(videocut_home):
     assert any("accent+scale" in w for w in warnings)
     make_brand(videocut_home, "my brand")
     assert "my brand" not in brand.list_ids()
+
+
+def test_brand_sheet_is_refused_inside_an_agent_run(capsys, monkeypatch):
+    monkeypatch.setenv("VIDEOCUT_AGENT", "1")
+    code, s, _ = run_tool(capsys, "brand", "sheet", "_example", "--out", "job.json")
+    assert code == 1 and "agent" in s["error"]

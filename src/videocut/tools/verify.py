@@ -27,8 +27,10 @@ track are in the output px of work/overlays.json)
     flag `overlay_in_safe_zone` when a box reaches into the organic safe zones (top 250 px,
     bottom 350 px, 6 % at the sides, docs/BRIEF.md §8); flag `overlay_on_face` when a box
     covers more than 2 % of the face box at any face sample (output time) while it is
-    visible. out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
-    out/verify/overlays_NN.jpg: one tile per overlay, once its entry animation is over.
+    visible. A full-frame end card (`cta_end`) is exempt from both: it hides the video on
+    purpose and keeps its own content inside the safe area.
+    out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
+    out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s. A preview is
 checked at its half size, and its loudness (single-pass) is reported but not judged.
@@ -77,7 +79,7 @@ FLOOR = 1e-4  # about -80 dBFS: keeps ratios finite next to digital silence
 STRIP_TILES, TILE_W, WAVE_H = 5, 216, 140
 FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
 CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
-OVERLAY_SETTLE_S = 0.6  # overlay tiles show this long after the overlay starts
+FULL_FRAME_SCENES = {"cta_end"}  # end card: an opaque plate over the whole frame, by design
 CAPTION_COLS = 3
 
 
@@ -279,7 +281,9 @@ def overlay_checks(boxes: list[dict], face: list[dict], size: tuple[int, int]) -
     for b in boxes:
         x0, y0, x1, y1 = b["box"]
         flags = []
-        if x0 < lo_x or x1 > hi_x or y0 < lo_y or y1 > hi_y:
+        if b.get("scene") in FULL_FRAME_SCENES:  # a full-frame plate covers everything on purpose
+            pass
+        elif x0 < lo_x or x1 > hi_x or y0 < lo_y or y1 > hi_y:
             flags.append("overlay_in_safe_zone")
         worst, at = 0.0, None
         for f in face:
@@ -289,7 +293,7 @@ def overlay_checks(boxes: list[dict], face: list[dict], size: tuple[int, int]) -
                 share = overlap(b["box"], fb) / area if area > 0 else 0.0
                 if share > worst:
                     worst, at = share, f["t"]
-        if worst > FACE_OVERLAP_MAX:
+        if worst > FACE_OVERLAP_MAX and b.get("scene") not in FULL_FRAME_SCENES:
             flags.append("overlay_on_face")
         out.append(
             {
@@ -363,14 +367,14 @@ def caption_times(captions: list[dict], fps: float, duration: float) -> list[flo
 
 
 def overlay_times(overlays: list[dict], fps: float, duration: float) -> list[float]:
-    """One output time per overlay (not caption): OVERLAY_SETTLE_S after its start (at most
-    its middle), when its entry animation is over; snapped, unique, inside the reel."""
+    """One output time per overlay (not caption): its middle, when entry animations and a
+    screenshot zoom have played; snapped, unique, inside the reel."""
     times = []
     for o in overlays:
         t0, t1 = o.get("t0"), o.get("t1")
         if not (_num(t0) and _num(t1)) or t1 <= t0:
             continue
-        t = im.snap(min(t0 + OVERLAY_SETTLE_S, (t0 + t1) / 2), fps)
+        t = im.snap((t0 + t1) / 2, fps)
         if 0 <= t < duration and t not in times:
             times.append(t)
     return sorted(times)

@@ -12,7 +12,7 @@ const MAX_BYTES = 50 * 1024 * 1024;
 
 const inside = (file, dir) => {
   const rel = path.relative(dir, file);
-  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 };
 
 const real = (p) => {

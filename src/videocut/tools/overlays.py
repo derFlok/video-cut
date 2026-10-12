@@ -91,11 +91,11 @@ def build(job: Path) -> dict:
     }
 
 
-def run_renderer(argv: list[str], job: Path) -> dict:
+def run_renderer(argv: list[str], job: Path, extra_env: dict | None = None) -> dict:
     """Run renderer/render.js with `argv` for the job folder `job` (the only place scene
     images may come from, VIDEOCUT_JOB_DIR); returns its JSON summary line, raises on
     failure."""
-    env = {**tool_env(), "VIDEOCUT_JOB_DIR": str(job)}
+    env = {**tool_env(), "VIDEOCUT_JOB_DIR": str(job), **(extra_env or {})}
     r = subprocess.run(renderer_cmd() + argv, capture_output=True, text=True, env=env, cwd=job)
     lines = r.stdout.strip().splitlines()
     try:

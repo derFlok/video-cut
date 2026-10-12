@@ -62,6 +62,10 @@ OVERLAYS_PROMPT = (
     "The human approved work/project.md and the cut is rendered. Use the video-cut:overlays "
     "skill to add captions and overlays to the Video Cut job in the current folder."
 )
+OVERLAYS_RECUT = (
+    " The cut changed since captions were last made: rebuild them with "
+    "`videocut tool captions --force`."
+)
 
 
 class RunError(RuntimeError):
@@ -278,15 +282,28 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "segments_sha256": segments_sha(job),
             "verify_ok": bool(verify.get("ok")),
         },
+        overlays=None,  # a new cut has no overlays yet
     )
 
 
+def _file_sha(path: Path) -> str | None:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+
+
 def overlays_done(job: Path, brand_id: str) -> bool:
+    """The brand's overlays are in the current reel: recorded for this brand and exactly this
+    EDL, verified ok, and the last render composited them."""
     rec = read_job(job).get("overlays")
+    try:
+        composited = json.loads((job / "out" / "render.json").read_text()).get("overlay")
+    except (OSError, ValueError, AttributeError):
+        composited = False
     return (
         isinstance(rec, dict)
         and rec.get("brand") == brand_id
-        and rec.get("segments_sha256") == segments_sha(job)
+        and rec.get("edl_sha256") == _file_sha(job / "work" / "edl.json")
+        and rec.get("verify_ok") is True
+        and bool(composited)
     )
 
 
@@ -361,14 +378,19 @@ def run(
     if job_brand and (brand or not overlays_done(job, job_brand)):
         cut_sha = segments_sha(job)
         started = time.time()
-        claude(job, "overlays", OVERLAYS_PROMPT, max_turns, None, say)
+        prompt = OVERLAYS_PROMPT
+        old = read_job(job).get("overlays")
+        edl_caps = (json.loads(edl.read_text()).get("captions") if edl.is_file() else None) or []
+        if edl_caps and not (isinstance(old, dict) and old.get("segments_sha256") == cut_sha):
+            prompt += OVERLAYS_RECUT
+        claude(job, "overlays", prompt, max_turns, None, say)
         if project_sha(job) != approved_sha:
             raise RunError("work/project.md changed during the overlay run; approve it again")
         if segments_sha(job) != cut_sha:
             raise RunError(
                 "the overlay run changed the cut (EDL segments); it may only add overlays"
             )
-        _final_verify(job, started, "overlay")
+        verify = _final_verify(job, started, "overlay")
         render = json.loads((job / "out" / "render.json").read_text())
         if not render.get("overlay"):
             raise RunError("the final render of the overlay run has no overlay composited")
@@ -378,6 +400,8 @@ def run(
                 "at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "brand": job_brand,
                 "segments_sha256": cut_sha,
+                "edl_sha256": _file_sha(job / "work" / "edl.json"),
+                "verify_ok": bool(verify.get("ok")),
             },
         )
     elif job_brand:

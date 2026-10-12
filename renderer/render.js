@@ -258,7 +258,7 @@ function readFonts(tokens, baseDir) {
         if (!m) throw new Error(`font ${weight}: only base64 data URIs are supported`);
         return { weight, b64: m[1] };
       }
-      const file = ref.startsWith("file://") ? new URL(ref).pathname : path.resolve(baseDir, ref);
+      const file = ref.startsWith("file://") ? decodeURIComponent(new URL(ref).pathname) : path.resolve(baseDir, ref);
       return { weight, b64: fs.readFileSync(file).toString("base64") };
     });
 }
@@ -397,7 +397,7 @@ async function main() {
   const home = process.env.VIDEOCUT_HOME || path.join(require("os").homedir(), "VideoCut");
   const assets = require("./lib/assets").collectAssets(list, sceneMods, spec.tokens, {
     job: path.resolve(process.env.VIDEOCUT_JOB_DIR || path.dirname(path.resolve(args.input))),
-    brands: [path.join(home, "brands"), path.join(ROOT, "brands")],
+    brands: [path.join(home, "brands"), path.join(ROOT, "brands"), ...(process.env.VIDEOCUT_BRAND_DIR ? [process.env.VIDEOCUT_BRAND_DIR] : [])],
   });
   const face = (spec.face || []).filter((f) => Number.isFinite(f.t) && Array.isArray(f.box)).sort((a, b) => a.t - b.t);
   const summary = { tool: TOOL, ok: true, size, fps, duration: spec.duration, items: list.length };

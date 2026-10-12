@@ -36,11 +36,15 @@ brand's look, render, check and fix. **You never change the cut.**
 
 ## 2. Captions
 
-`videocut tool captions` writes the caption groups into `work/edl.json` in **output** time
+`videocut tool captions --force` writes the caption groups into `work/edl.json` in **output** time
 from the transcript (cut words never appear; emphasised words come from the zoom keys).
-Captions already in the EDL are kept; `--force` rebuilds them (after the cut changed).
+`--force` replaces captions already in the EDL (they may belong to an earlier cut); they
+are deterministic, so rebuilding is always safe.
 
-For `screenshot_frame`, look at each image in `job.json` `assets` once (it counts toward the
+For `screenshot_frame`: the zoom factor is about 1 / (focus width) and 1 / (focus height),
+whichever is smaller, so a full-width focus box never zooms; give a box around the part
+being talked about (e.g. `[0.05, 0.12, 0.6, 0.26]`). The zoom plays from ~1 s into the item,
+so keep such an item ≥ 2.5 s. Look at each image in `job.json` `assets` once (it counts toward the
 image budget) to choose `focus` and to `redact` anything personal (names, e-mail
 addresses, phone numbers, other people's faces).
 
@@ -88,6 +92,7 @@ another.
      text, or use a smaller scene (a `keyword` instead of a `number_card`).
    - `overlay_in_safe_zone` → shorter text (fewer lines), or drop the overlay.
    - a flagged `caption` group cannot be moved; note it in the report.
+   - `cta_end` is a full-frame end card and is never flagged.
 4. Look only at `out/verify/overlays_NN.jpg` (one tile per overlay) and, if a caption is in
    doubt, one `out/verify/captions_NN.jpg`. Check: readable, not on the face, brand look.
 

@@ -86,7 +86,8 @@ class FakeClaude:
         self.overlay_segments = None  # set to make the overlay run change the cut
 
     def __call__(self, prompt, job_dir, on_event, resume=None, log=None, max_turns=60):
-        phase = {run.PLAN_PROMPT: "plan", run.OVERLAYS_PROMPT: "overlays"}.get(prompt, "cut")
+        phase = "plan" if prompt == run.PLAN_PROMPT else "cut"
+        phase = "overlays" if prompt.startswith(run.OVERLAYS_PROMPT) else phase
         self.calls.append((phase, resume, max_turns))
         work, out = job_dir / "work", job_dir / "out"
         if phase == "plan":
@@ -296,3 +297,30 @@ def test_overlays_never_run_before_approval_or_change_the_cut(fake, videocut_hom
         run.run(job.name, approve=True, say=lines.append)
     with pytest.raises(job_tool.ToolError, match="no brand"):
         run.run(job.name, brand="nope", say=lines.append)
+
+
+def test_recut_clears_the_overlay_record_so_overlays_run_again(fake, videocut_home):
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), approve=True, brand="_example", say=lines.append) == 0
+    job = Path(lines[0].split("job: ")[1])
+    assert run.run(job.name, recut=True, say=lines.append) == 0
+    assert [c[0] for c in claude.calls] == ["plan", "cut", "overlays", "cut", "overlays"]
+
+
+def test_failed_overlay_verify_is_not_recorded_as_done(fake, videocut_home, monkeypatch):
+    claude, video = fake
+    lines = []
+    real = claude.__call__
+
+    def bad_verify(prompt, job_dir, *a, **k):
+        res = real(prompt, job_dir, *a, **k)
+        if prompt.startswith(run.OVERLAYS_PROMPT):
+            (job_dir / "out" / "verify.json").write_text('{"ok": false, "reel": "out/reel.mp4"}')
+        return res
+
+    monkeypatch.setattr(run.agent, "run", bad_verify)
+    assert run.run(str(video), approve=True, brand="_example", say=lines.append) == 4
+    job = Path(lines[0].split("job: ")[1])
+    assert run.run(job.name, say=lines.append) == 4
+    assert [c[0] for c in claude.calls].count("overlays") == 2  # retried, not "already done"

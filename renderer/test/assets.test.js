@@ -21,3 +21,14 @@ test("percent sizes are replaced, absolute sizes kept", () => {
   assert.equal(sizedSvg(fixed), fixed);
   assert.deepEqual(size(sizedSvg("<svg/>")), ["1024", "1024"]);
 });
+
+test("a file whose name starts with two dots is inside the job folder", () => {
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+  const { readAsset } = require("../lib/assets");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "assets-"));
+  fs.writeFileSync(path.join(dir, "..shot.png"), "x");
+  assert.equal(readAsset({ ref: "..shot.png", root: "job" }, { job: dir }).mime, "image/png");
+  assert.throws(() => readAsset({ ref: "../x.png", root: "job" }, { job: dir }));
+});

@@ -7,6 +7,7 @@ neutral sample content, in the brand's look.
 """
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -15,6 +16,7 @@ from .. import brand
 from ..paths import RENDERER
 from ._geometry import safe_zones
 from .common import ToolError, binary, run_tool, write_json
+from .job import AGENT_ENV
 
 SHEET_SIZE = (1080, 1920)
 SHEET_FPS = 30
@@ -147,6 +149,8 @@ def sheet_spec(tokens: dict, scenes: list[str]) -> dict:
 def sheet_cmd(args) -> dict:
     from .overlays import run_renderer
 
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("brand sheet is for humans (not available inside an agent run)")
     tokens, errors, _ = _tokens(args.brand)
     if errors:
         raise ToolError(f"{args.brand}: " + "; ".join(errors))
@@ -164,7 +168,9 @@ def sheet_cmd(args) -> dict:
         doc = Path(tmp) / "overlays.json"
         write_json(doc, spec)
         sample_screen(Path(tmp) / SAMPLE_IMAGE)
-        result = run_renderer([str(doc), "--sheet", str(out)], Path(tmp))
+        # A brand given as a folder path may take its logo from there.
+        extra = {"VIDEOCUT_BRAND_DIR": tokens["dir"]}
+        result = run_renderer([str(doc), "--sheet", str(out)], Path(tmp), extra)
     if not out.is_file():
         raise ToolError(f"renderer reported success but wrote no {out}")
     shown = spec["sheet"]["labels"]
