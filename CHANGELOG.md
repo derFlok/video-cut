@@ -116,8 +116,10 @@
 - `videocut tool brand sheet <id>`: the brand's preview sheet (BRIEF §9), every installed scene
   with neutral sample content on the brand background → `~/VideoCut/brands/<id>/preview.jpg`.
   The renderer's `--sheet` takes fixed times, labels and a background from `overlays.json`.
-- Verify writes `out/verify/overlays_NN.jpg`, one tile per overlay once it has settled, so the
-  agent checks overlays with one or two pictures.
+- Verify writes `out/verify/overlays_NN.jpg`, one tile per overlay at its middle, so the agent
+  checks overlays with one or two pictures. A new flag, `overlay_overlap`, marks an overlay and
+  a caption that cover each other: when the face fills the frame, there is only one free strip.
+  The full-frame `cta_end` card is exempt from the safe-zone, face and frozen-picture checks.
 - Step 8 for Claude: the `plan` skill proposes overlay ideas (scene, time, spoken words, why;
   brand address du/sie, never a brand forbidden word); new `overlays` skill: captions → overlays
   in `work/edl.json` (output time, one at a time, text only from what is spoken) → overlay
@@ -141,7 +143,8 @@
 - Caption style `plain` draws a soft halo in the derived box colour. With only a shadow, white
   text on bright video measured a median of 4.3:1 against its surroundings (worst ≈ 1.8:1);
   with the halo it measures ≥ 16:1. Covered by an end-to-end test (real renderer → render →
-  verify, ΔE and drawn contrast).
+  verify, ΔE and drawn contrast). The halo uses shadows only: a canvas blur filter made a
+  24 s overlay take 164 s instead of 15 s.
 - A word scaled by the `scale` highlight pushes its line apart instead of covering the space to
   its neighbours. SVG logos without width/height are sized from their viewBox. `cta_end`
   registers its content, so captions keep clear of the end card.
@@ -149,3 +152,32 @@
   not crashes. `display`/`body` font files are registered when `files` is missing. Ambiguous
   free-text enums warn. The default spring is BRIEF's (13, 0.8). Folders whose names are not
   valid ids are not listed. `job brand` takes ids only and refuses inside an agent run.
+- Review of the whole diff:
+  - A recut clears the overlay record, so the overlays are made again. The record names the
+    exact EDL and needs a verify that passed, so a failed overlay verify is retried.
+  - The overlay prompt asks for `captions --force` after a changed cut.
+  - `brand sheet` is refused inside agent runs; its `--out` could overwrite job files.
+  - Logos load from a brand given as a folder path.
+  - Asset paths such as `..name.png` are accepted, and font `file://` URLs are percent-decoded.
+- Layout also scans the whole allowed height for a free spot between several obstacles.
+
+### Observed — Phase 2
+- Phase 2 acceptance on the Phase 1 recording (the approved 23.8 s cut, reused unchanged):
+  `videocut run <job> --brand <id>` once per brand, each reel with 31 caption groups. Verify ok
+  with no flags for all three brands. Overlay stage per run with the speaker's own sign-in:
+
+  | Brand | Overlays | Wall | Turns | API-price equivalent |
+  |---|---|---|---|---|
+  | brand-a (dark, plain upper-case captions) | 2 × keyword, cta_end | 265 s | 21 | ≈ $0.54 |
+  | brand-b (light, box captions) | cta_end | 187 s | 18 | ≈ $0.54 |
+  | brand-c (the user's own brand, local only) | keyword | 247 s | 22 | ≈ $0.52 |
+
+  brand-b dropped its two keyword cards because `overlay_overlap` showed they covered
+  captions: in this close-up the face fills the frame, and the only free strip is above the
+  head. Earlier attempts found the static end card failing the frozen check, the end card
+  failing the safe-zone check, and the slow caption halo; all three are fixed above.
+- Type 6 end to end on a generated walkthrough clip with a generated, neutral UI mock as the
+  asset (`--asset`, brand-b): plan 69 s / 11 turns / ≈ $0.36, cut 60 s / 9 / ≈ $0.52,
+  overlays 117 s / 15 / ≈ $0.44. The 25.8 s reel has four `screenshot_frame` steps zooming
+  across the screen, with the e-mail line redacted in every frame, plus a `cta_end` with logo.
+  Verify is ok.

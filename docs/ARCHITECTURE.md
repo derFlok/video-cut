@@ -109,7 +109,9 @@ between plan and cut (BRIEF §5):
    stage): `claude -p` with the `overlays` skill. No second approval, but it only runs after an
    approved, finished cut, and fails when it changes the EDL segments, when it does not end with
    a fresh full render + verify, or when that render has no overlay composited. job.json
-   `overlays` records brand and segments, so a re-run skips a done stage.
+   `overlays` records brand, segments and EDL hashes and the verify result; a re-run skips the
+   stage only when the same brand's overlays verified ok on exactly this EDL and the last
+   render composited them. A new cut clears the record.
 6. prints `out/`. Exit code 0 when verify is ok, 3 when not approved, 4 when verify is not ok.
 
 Every Claude run appends `{phase, wall_s, turns, cost_usd, usage, duration_ms, session_id,
@@ -191,8 +193,10 @@ head is expected: a clear jump is info `jump_cut` (plus `reframe` when the EDL c
 zoom at that cut). The flag `visual_jump` is raised only for a jump ≥ 3× (and ≥ 8) the median jump score
 of the reel's other cuts without a reframe; `click` for an audio step. Overlays: per drawn box
 (`work/overlay_boxes.json`) `overlay_in_safe_zone` and `overlay_on_face` (> 2 % of the face
-box at any face sample while visible); pictures `captions_NN.jpg` (one tile per caption group
-change) and `overlays_NN.jpg` (one tile per overlay once settled). Global checks: duration,
+box at any face sample while visible) and `overlay_overlap` (an overlay and a caption on
+screen together share > 10 % of the smaller box); the full-frame `cta_end` plate is exempt
+from these and from the frozen check. Pictures: `captions_NN.jpg` (one tile per caption
+group change) and `overlays_NN.jpg` (one tile per overlay, at its middle). Global checks: duration,
 loudness, true peak, size, black/frozen stretches. After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
 
