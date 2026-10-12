@@ -3,6 +3,7 @@ end-to-end prep -> hand-written EDL -> render -> verify on a generated clip (no 
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -22,7 +23,7 @@ REAL_MODELS = Path(os.environ.get("VIDEOCUT_HOME", Path.home() / "VideoCut")) / 
 # ---------------------------------------------------------------- agent command
 
 
-@pytest.mark.parametrize("prompt", [run.PLAN_PROMPT, run.CUT_PROMPT])
+@pytest.mark.parametrize("prompt", [run.PLAN_PROMPT, run.CUT_PROMPT, run.OVERLAYS_PROMPT])
 def test_plan_and_cut_runs_are_restricted(monkeypatch, prompt):
     monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/local/bin/claude")
     monkeypatch.setattr(settings, "load", lambda: {"auth": "local", "model": None})
@@ -38,9 +39,8 @@ def test_plan_and_cut_runs_are_restricted(monkeypatch, prompt):
 
     assert values("-p") == [prompt]
     assert values("--plugin-dir") == [str(agent.PLUGIN)]
-    assert (
-        agent.PLUGIN / "skills" / ("plan" if "plan" in prompt else "cut") / "SKILL.md"
-    ).is_file()
+    skill = re.search(r"video-cut:(\w+) skill", prompt).group(1)
+    assert (agent.PLUGIN / "skills" / skill / "SKILL.md").is_file()
     assert values("--tools") == ["Bash,Read,Write,Edit,Skill"]
     assert values("--allowedTools") == agent.ALLOWED
     assert [a for a in agent.ALLOWED if a.startswith("Bash")] == ["Bash(videocut tool *)"]
@@ -63,6 +63,16 @@ def test_skills_name_their_tools_and_the_gate():
     assert '"approved": true' in cut and "work/cut_report.md" in cut
     for cmd in ("render --preview", "verify", "edl check", "sheet burst"):
         assert f"videocut tool {cmd}" in cut
+    assert "## Overlay ideas" in plan and "forbidden_words" in plan
+    ov = (agent.PLUGIN / "skills" / "overlays" / "SKILL.md").read_text()
+    assert ov.startswith("---\nname: overlays\n") and '"approved": true' in ov
+    for cmd in ("captions", "overlays", "render --preview", "verify", "edl check", "brand show"):
+        assert f"videocut tool {cmd}" in ov
+    assert "work/overlay_report.md" in ov and "forbidden_words" in ov
+    # every command a skill names is reachable through the one allowed Bash pattern
+    for text in (plan, cut, ov):
+        for cmd in re.findall(r"`(videocut [^`]*)`", text):
+            assert cmd.startswith("videocut tool "), cmd
 
 
 # ---------------------------------------------------------------- orchestration
@@ -73,16 +83,24 @@ class FakeClaude:
 
     def __init__(self):
         self.calls = []
+        self.overlay_segments = None  # set to make the overlay run change the cut
 
     def __call__(self, prompt, job_dir, on_event, resume=None, log=None, max_turns=60):
-        phase = "plan" if prompt == run.PLAN_PROMPT else "cut"
+        phase = {run.PLAN_PROMPT: "plan", run.OVERLAYS_PROMPT: "overlays"}.get(prompt, "cut")
         self.calls.append((phase, resume, max_turns))
+        work, out = job_dir / "work", job_dir / "out"
         if phase == "plan":
-            (job_dir / "work" / "project.md").write_text("# Plan: test\n")
+            (work / "project.md").write_text("# Plan: test\n")
         else:
             assert job_tool.is_approved(job_dir)
-            (job_dir / "out" / "reel.mp4").write_bytes(b"x")
-            (job_dir / "out" / "verify.json").write_text('{"ok": true, "reel": "out/reel.mp4"}')
+            edl = {"fps": 30, "source": "input/take.mov", "segments": [{"in": 0, "out": 1}]}
+            if phase == "overlays":
+                edl["segments"] = self.overlay_segments or edl["segments"]
+                edl["captions"] = [{"t0": 0, "t1": 1, "words": []}]
+            (work / "edl.json").write_text(json.dumps(edl))
+            (out / "render.json").write_text(json.dumps({"overlay": phase == "overlays"}))
+            (out / "reel.mp4").write_bytes(b"x")
+            (out / "verify.json").write_text('{"ok": true, "reel": "out/reel.mp4"}')
         usage = {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 100}
         return agent.Result(True, "done", f"s-{phase}", 0.12, 7, "local", usage, 3000)
 
@@ -243,3 +261,38 @@ def test_changed_brief_revokes_approval_and_stale_contract_goes(fake, monkeypatc
     run.open_job(job.name, "../thought", None)
     REAL_PREP(job, steps=[])
     assert not (job / "work" / "contract.md").exists()
+
+
+def test_brand_runs_overlays_after_the_cut_and_reruns_skip_done_stages(fake, videocut_home):
+    claude, video = fake
+    lines = []
+    code = run.run(str(video), approve=True, brand="_example", say=lines.append)
+    assert code == 0, lines
+    assert [c[0] for c in claude.calls] == ["plan", "cut", "overlays"]
+    job = Path(lines[0].split("job: ")[1])
+    data = json.loads((job / "job.json").read_text())
+    assert data["brand"] == "_example"
+    assert data["cut"]["segments_sha256"] == data["overlays"]["segments_sha256"]
+    # nothing left to do: neither the cut nor the overlays run again
+    code = run.run(job.name, say=lines.append)
+    assert code == 0 and len(claude.calls) == 3
+    assert any("cut: already done" in x for x in lines)
+    assert any("overlays: already done" in x for x in lines)
+    # an explicit --brand redoes only the overlays
+    code = run.run(job.name, brand="_example", say=lines.append)
+    assert code == 0 and [c[0] for c in claude.calls][3:] == ["overlays"]
+    runs = [json.loads(x) for x in (job / "work" / "runs.jsonl").read_text().splitlines()]
+    assert [r["phase"] for r in runs] == ["plan", "cut", "overlays", "overlays"]
+
+
+def test_overlays_never_run_before_approval_or_change_the_cut(fake, videocut_home):
+    claude, video = fake
+    lines = []
+    code = run.run(str(video), brand="_example", say=lines.append, ask=lambda _: "no")
+    assert code == 3 and [c[0] for c in claude.calls] == ["plan"]
+    job = Path(lines[0].split("job: ")[1])
+    claude.overlay_segments = [{"in": 0, "out": 0.5}]
+    with pytest.raises(run.RunError, match="changed the cut"):
+        run.run(job.name, approve=True, say=lines.append)
+    with pytest.raises(job_tool.ToolError, match="no brand"):
+        run.run(job.name, brand="nope", say=lines.append)

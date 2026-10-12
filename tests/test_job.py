@@ -98,6 +98,26 @@ def test_agent_runs_cannot_approve(capsys, tmp_path, videocut_home, monkeypatch)
     code, s, _ = run_tool(capsys, "job", "approve", "ag")
     assert code == 1 and "human" in s["error"]
     assert run_tool(capsys, "job", "show", "ag")[1]["approved"] is False
+    code, s, _ = run_tool(capsys, "job", "brand", "_example", "--job", "ag")
+    assert code == 1 and "human" in s["error"]
+
+
+def test_new_with_assets(capsys, tmp_path, videocut_home):
+    shot = tmp_path / "screen.png"
+    shot.write_bytes(b"png")
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(_video(tmp_path)), "--id", "a", "--asset", str(shot)
+    )
+    assert code == 0 and s["assets"] == ["input/screen.png"], s
+    assert (videocut_home / "jobs/a/input/screen.png").read_bytes() == b"png"
+    assert json.loads((videocut_home / "jobs/a/job.json").read_text())["assets"] == s["assets"]
+    bad = tmp_path / "notes.txt"
+    bad.write_text("x")
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(_video(tmp_path)), "--id", "b", "--asset", str(bad)
+    )
+    assert code == 1 and "must be one of" in s["error"]
+    assert not (videocut_home / "jobs/b").exists()
 
 
 def test_new_with_brand_and_job_brand_switch(capsys, tmp_path, videocut_home):

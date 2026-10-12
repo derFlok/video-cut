@@ -108,6 +108,9 @@ def _default_id(video: Path, now: datetime) -> str:
     return f"{now:%Y%m%d-%H%M%S}-{stem}"
 
 
+ASSET_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+
+
 def _link_or_copy(src: Path, dst: Path) -> str:
     try:
         os.link(src, dst)
@@ -117,7 +120,7 @@ def _link_or_copy(src: Path, dst: Path) -> str:
         return "copy"
 
 
-def _brand_id(ref: str) -> str:
+def brand_id(ref: str) -> str:
     """Id of a brand that loads without errors; anything else fails the command. Only ids
     (`tool brand list`) are stored, since job.json keeps the id, never a folder path."""
     if ref not in brand.list_ids():
@@ -132,7 +135,17 @@ def new(args) -> dict:
     video = Path(args.video).expanduser()
     if not video.is_file():
         raise ToolError(f"video not found: {args.video}")
-    brand_id = _brand_id(args.brand) if args.brand else None
+    brand_ref = brand_id(args.brand) if args.brand else None
+    assets = [Path(a).expanduser() for a in (args.asset or [])]
+    names = [video.name]
+    for a in assets:
+        if not a.is_file():
+            raise ToolError(f"asset not found: {a}")
+        if a.suffix.lower() not in ASSET_EXT:
+            raise ToolError(f"asset {a.name}: must be one of {', '.join(sorted(ASSET_EXT))}")
+        if a.name in names:
+            raise ToolError(f"two inputs are named {a.name}; rename one")
+        names.append(a.name)
     now = datetime.now().astimezone()
     job_id = args.id or _default_id(video, now)
     if not ID_RE.fullmatch(job_id):
@@ -144,6 +157,8 @@ def new(args) -> dict:
         for d in ("input", "work", "out"):
             (job / d).mkdir(parents=True)
         how = _link_or_copy(video.resolve(), job / "input" / video.name)
+        for a in assets:
+            _link_or_copy(a.resolve(), job / "input" / a.name)
     except OSError as e:  # e.g. disk full: leave no half-made job that blocks a retry
         shutil.rmtree(job, ignore_errors=True)
         raise ToolError(f"could not import {video.name}: {e}") from None
@@ -155,8 +170,10 @@ def new(args) -> dict:
         "brief": args.brief,
         "status": "new",
     }
-    if brand_id:
-        data["brand"] = brand_id
+    if brand_ref:
+        data["brand"] = brand_ref
+    if assets:
+        data["assets"] = [f"input/{a.name}" for a in assets]
     write_json(job / JOB_FILE, data)
     print(job)
     return {
@@ -164,7 +181,8 @@ def new(args) -> dict:
         "id": job_id,
         "source": data["source"],
         "imported": how,
-        "brand": brand_id,
+        "brand": brand_ref,
+        "assets": data.get("assets", []),
     }
 
 
@@ -172,10 +190,10 @@ def set_brand(args) -> dict:
     if os.environ.get(AGENT_ENV):
         raise ToolError("only a human picks the brand of a job (not available inside an agent run)")
     job = resolve_job(args.job)
-    brand_id = _brand_id(args.brand)
-    update_job(job, brand=brand_id)
-    print(f"{job.name}: brand {brand_id}")
-    return {"job": str(job), "id": job.name, "brand": brand_id}
+    brand_ref = brand_id(args.brand)
+    update_job(job, brand=brand_ref)
+    print(f"{job.name}: brand {brand_ref}")
+    return {"job": str(job), "id": job.name, "brand": brand_ref}
 
 
 def show(args) -> dict:
@@ -212,6 +230,12 @@ def register(subparsers) -> None:
     n.add_argument("--brief", help="free-text instruction from the user")
     n.add_argument("--brand", help="brand id (see `tool brand list`)")
     n.add_argument("--id", help="job id (default: timestamp + file name)")
+    n.add_argument(
+        "--asset",
+        action="append",
+        metavar="FILE",
+        help="extra input such as a screenshot (png/jpg/webp), repeatable",
+    )
     n.set_defaults(handler=run_tool("job new", new))
     s = sub.add_parser(
         "show", help="print job.json and which artefacts exist", parents=[job_parent()]

@@ -22,7 +22,9 @@ approves the plan before anything is cut. Workflow after browser-use/video-use (
 ## Steps
 
 1. **Prerequisites** (each tool keeps fresh outputs, so re-running is cheap):
-   `videocut tool job show` → read `type`, `brief` and which artefacts exist. If one is
+   `videocut tool job show` → read `type`, `brief`, `brand` and which artefacts exist. When a
+   `brand` is set, `videocut tool brand show <brand>` → note `voice` (`address` du/sie,
+   `tone`, `forbidden_words`, `cta`); the overlay ideas follow it. If one is
    missing, run in this order: `videocut tool ingest --denoise`, `videocut tool transcribe`
    (writes words, candidates and the packed transcript), `videocut tool sheet contact`.
 2. **Read `work/takes_packed.md` completely.** It is the phrase-level transcript in source
@@ -53,6 +55,24 @@ approves the plan before anything is cut. Workflow after browser-use/video-use (
   They become punch-in zooms later — at most one every 2–4 s of output.
 - Use only time ranges that exist in `takes_packed.md`; give them in source seconds.
 
+## Overlay ideas
+
+Overlays are added after the cut (the `overlays` skill); the plan proposes them so the human
+sees them before approving. Propose **2–4** for 30–60 s (none is fine when nothing fits):
+
+- **Scene** — one of: `keyword` (one word or short phrase, the thesis), `number_card` (a
+  spoken number with a short label), `list_item` (numbered points, type "three tips"),
+  `chat_bubble` (a question the speaker answers), `lower_third` (name/topic, once, early),
+  `cta_end` (last seconds), `screenshot_frame` (only when the job has an image in `input/`).
+  Captions are always on and are not an overlay idea.
+- **When** — the source time of the words it belongs to, inside a kept range; at most one
+  overlay at a time, never during the first 1.5 s of the hook, at least ~6 s apart.
+- **What** — the exact words or number **spoken in the transcript** (shortened, never
+  reworded into a new claim). Never invent figures, names, promises or results.
+- **Voice** — address the viewer as the brand says (`du` or `sie`); never use a word from the
+  brand's `forbidden_words`; a CTA uses the brand's `cta` when it has one.
+- **Why** — one line: what it makes clearer or more memorable.
+
 ## `work/project.md` format
 
 ```markdown
@@ -74,6 +94,11 @@ Type: <type> · Target length: <n> s · Estimated length of the keep list: <n> s
 
 ## Emphasis words (zoom candidates)
 - "<word>" at <t> s — why
+
+## Overlay ideas (output order, at most one at a time)
+| # | Source | Scene | Content (spoken words) | Why |
+|---|---|---|---|---|
+| 1 | 021.30–023.10 | keyword | "<2–4 spoken words>" | the thesis |
 
 ## Risks and doubts
 - <cut points that may be hard (word run-ons, breaths, looking away), unclear retakes,
