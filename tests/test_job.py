@@ -62,3 +62,15 @@ def test_show_outside_a_job_fails(capsys, tmp_path, monkeypatch):
     code, s, _ = run_tool(capsys, "job", "show")
     assert code == 1 and "not inside a job" in s["error"]
     assert run_tool(capsys, "job", "show", "nope")[0] == 1
+
+
+def test_failed_import_leaves_no_job(capsys, tmp_path, monkeypatch, videocut_home):
+    from videocut.tools import job as job_mod
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(job_mod, "_link_or_copy", boom)
+    code, s, _ = run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "f1")
+    assert code == 1 and "disk full" in s["error"]
+    assert not (videocut_home / "jobs" / "f1").exists()

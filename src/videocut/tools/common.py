@@ -149,3 +149,14 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def ffmpeg(*args: str) -> None:
     run([binary("ffmpeg"), "-hide_banner", "-nostdin", "-y", "-loglevel", "error", *args])
+
+
+def ffmpeg_to(dst: Path, *args: str) -> None:
+    """ffmpeg with `dst` as last argument, written via a temp file so a failed or
+    interrupted run never leaves a fresh-looking partial output behind."""
+    part = dst.with_name(f"{dst.stem}.part{dst.suffix}")
+    try:
+        ffmpeg(*args, str(part))
+        part.replace(dst)
+    finally:
+        part.unlink(missing_ok=True)

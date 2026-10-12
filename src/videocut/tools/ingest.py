@@ -20,7 +20,7 @@ from pathlib import Path
 from .common import (
     ToolError,
     binary,
-    ffmpeg,
+    ffmpeg_to,
     is_fresh,
     job_parent,
     read_job,
@@ -88,7 +88,7 @@ def probe(src: Path) -> dict:
 
 
 def _extract_audio(src: Path, dst: Path) -> None:
-    ffmpeg("-i", str(src), "-vn", "-ac", "1", "-ar", str(RATE), "-c:a", "pcm_s16le", str(dst))
+    ffmpeg_to(dst, "-i", str(src), "-vn", "-ac", "1", "-ar", str(RATE), "-c:a", "pcm_s16le")
 
 
 def _denoise(raw: Path, dst: Path) -> None:
@@ -105,7 +105,8 @@ def _denoise(raw: Path, dst: Path) -> None:
 def _proxy(src: Path, dst: Path) -> None:
     s = PROXY_SHORT_SIDE
     scale = f"scale='if(gt(iw,ih),-2,{s})':'if(gt(iw,ih),{s},-2)'"
-    ffmpeg(
+    ffmpeg_to(
+        dst,
         "-i",
         str(src),
         "-vf",
@@ -126,7 +127,6 @@ def _proxy(src: Path, dst: Path) -> None:
         "1",
         "-movflags",
         "+faststart",
-        str(dst),
     )
 
 
@@ -158,6 +158,7 @@ def ingest(args) -> dict:
         audio.unlink(missing_ok=True)
 
     def make_audio() -> None:
+        meta.unlink(missing_ok=True)  # written last: marks audio.wav as complete
         if args.denoise:
             _denoise(raw, audio)
         else:

@@ -65,9 +65,13 @@ def new(args) -> dict:
     job = jobs_root() / job_id
     if job.exists():
         raise ToolError(f"job {job_id} already exists")
-    for d in ("input", "work", "out"):
-        (job / d).mkdir(parents=True)
-    how = _link_or_copy(video.resolve(), job / "input" / video.name)
+    try:
+        for d in ("input", "work", "out"):
+            (job / d).mkdir(parents=True)
+        how = _link_or_copy(video.resolve(), job / "input" / video.name)
+    except OSError as e:  # e.g. disk full: leave no half-made job that blocks a retry
+        shutil.rmtree(job, ignore_errors=True)
+        raise ToolError(f"could not import {video.name}: {e}") from None
     data = {
         "id": job_id,
         "created": now.isoformat(timespec="seconds"),
