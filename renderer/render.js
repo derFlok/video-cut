@@ -5,6 +5,10 @@
 //   node render.js <overlays.json> [--out <overlay.mov>] [--boxes <boxes.json>]
 //                  [--still <t> <png>] [--sheet <jpg>] [--blur <subframes>]
 //
+// Image files scenes ask for (screenshots, logos) are read only from inside the job
+// folder: $VIDEOCUT_JOB_DIR, else the folder of overlays.json. Logos may also come
+// from the brands folders ($VIDEOCUT_HOME/brands, the bundled brands/).
+//
 // Deterministic: frame i depends only on overlays.json and i (no clock, no randomness).
 // Prints whatever it wants, then exactly one JSON summary line last; exits 0 or 1.
 
@@ -96,6 +100,7 @@ window.__load = (id) => __require("", id);
 // Runs inside the page. Everything it needs arrives as data; no clock, no randomness.
 function pageMain(spec) {
   const { size, fps, safe, face, tokens, items, sceneNames, fontFamily } = spec;
+  const images = window.__images || {};
   const { faceAt, faceDuring } = window.__load("lib/layout");
   const { step } = window.__load("lib/spring");
   const scenes = {};
@@ -128,6 +133,10 @@ function pageMain(spec) {
     // Blocks already placed that are on screen at some point in [t0, t1].
     blocksDuring: (t0, t1) => blocks.filter((b) => b.t0 < t1 && b.t1 > t0).map((b) => b.box),
     addBlock: (t0, t1, box) => blocks.push({ t0, t1, box }),
+    // Decoded image for an asset reference a scene declared (null when not loaded),
+    // and an offscreen canvas for scenes that prepare images once (redaction).
+    image: (ref) => images[ref] || null,
+    canvas: mk,
   };
 
   // Lay out every item once, in time order, so placement never depends on which
@@ -246,6 +255,20 @@ function readFonts(tokens, baseDir) {
     });
 }
 
+// Decode the scenes' image assets in the page before the first layout.
+async function loadImages(page, assets) {
+  return page.evaluate(async (assets) => {
+    window.__images = {};
+    for (const a of assets) {
+      const img = new Image();
+      img.src = `data:${a.mime};base64,${a.b64}`;
+      await img.decode();
+      window.__images[a.ref] = img;
+    }
+    return Object.keys(window.__images).length;
+  }, assets);
+}
+
 async function loadFonts(page, fonts) {
   return page.evaluate(
     async ({ fonts, family }) => {
@@ -358,6 +381,12 @@ async function main() {
   const sceneNames = fs.readdirSync(path.join(__dirname, "scenes")).filter((f) => f.endsWith(".js")).map((f) => f.slice(0, -3)).sort();
   const { list, skipped } = items(spec, sceneNames);
   const fonts = readFonts(spec.tokens, path.dirname(path.resolve(args.input)));
+  const sceneMods = Object.fromEntries(sceneNames.map((n) => [n, require(`./scenes/${n}`)]));
+  const home = process.env.VIDEOCUT_HOME || path.join(require("os").homedir(), "VideoCut");
+  const assets = require("./lib/assets").collectAssets(list, sceneMods, spec.tokens, {
+    job: path.resolve(process.env.VIDEOCUT_JOB_DIR || path.dirname(path.resolve(args.input))),
+    brands: [path.join(home, "brands"), path.join(ROOT, "brands")],
+  });
   const face = (spec.face || []).filter((f) => Number.isFinite(f.t) && Array.isArray(f.box)).sort((a, b) => a.t - b.t);
   const summary = { tool: TOOL, ok: true, size, fps, duration: spec.duration, items: list.length };
   if (skipped.length) summary.skipped_scenes = [...new Set(skipped)];
@@ -372,6 +401,7 @@ async function main() {
     const loaded = fonts.length ? await loadFonts(page, fonts) : 0;
     if (loaded < fonts.length) throw new Error(`brand fonts: ${loaded} of ${fonts.length} files loaded`);
     summary.fonts = { files: fonts.length, loaded, fallback: fonts.length === 0 };
+    if (assets.length) summary.images = await loadImages(page, assets);
     const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
     await page.evaluate(pageMain, {
       size, fps, safe: spec.safe || {}, face, tokens: spec.tokens, items: list, sceneNames, fontFamily,
