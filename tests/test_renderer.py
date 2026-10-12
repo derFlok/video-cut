@@ -4,7 +4,6 @@ Renders a 3 s overlays.json (caption groups + a keyword card) with the neutral b
 brand, and, when present on this machine, with a local test brand that ships font files.
 """
 
-import importlib
 import json
 import subprocess
 from pathlib import Path
@@ -12,6 +11,7 @@ from pathlib import Path
 import pytest
 from clips import ffmpeg, ffprobe
 
+from videocut import brand
 from videocut.paths import BIN, BROWSERS, RENDERER, ROOT, tool_env
 
 pytestmark = pytest.mark.media
@@ -41,24 +41,10 @@ needs_renderer = pytest.mark.skipif(
 
 
 def resolved_tokens(brand_dir: Path, monkeypatch) -> dict:
-    """Resolved brand tokens. Uses videocut.brand.load when it exists; until then the
-    raw brand.json with absolute font paths and caption colours taken from the brand."""
-    try:
-        load = importlib.import_module("videocut.brand").load
-    except (ImportError, AttributeError):
-        load = None
-    if load is not None:
-        if brand_dir.parent.name == "brands" and brand_dir.name != "_example":
-            monkeypatch.setenv("VIDEOCUT_HOME", str(brand_dir.parent.parent))
-        return load(brand_dir.name)
-    tokens = json.loads((brand_dir / "brand.json").read_text())
-    fonts = tokens.setdefault("fonts", {})
-    fonts["files"] = {
-        w: str((brand_dir / f).resolve()) for w, f in (fonts.get("files") or {}).items()
-    }
-    c = tokens.get("colors", {})
-    tokens["caption_colors"] = {"text": c["text"], "box": c["surface"], "highlight": c["accent"]}
-    return tokens
+    """Resolved tokens (videocut.brand.load) of a bundled or $VIDEOCUT_HOME brand folder."""
+    if brand_dir.name != brand.EXAMPLE_ID:
+        monkeypatch.setenv("VIDEOCUT_HOME", str(brand_dir.parent.parent))
+    return brand.load(brand_dir.name)
 
 
 def overlays(tokens: dict) -> dict:

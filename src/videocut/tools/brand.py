@@ -1,10 +1,9 @@
-"""`videocut tool brand list|check|show|scaffold-test-brands`: inspect brand profiles (BRIEF §9).
+"""`videocut tool brand list|check|show|sheet`: inspect brand profiles (BRIEF §9).
 
 `check` is the gate before a brand is used: it prints the contrast table and advisory
 warnings and exits 1 when brand.json has errors. `show` prints the resolved tokens the
-scenes receive. `scaffold-test-brands` writes two invented brands (brand-a, brand-b) into
-$VIDEOCUT_HOME/brands so look differences can be tried without a real brand; their fonts
-are referenced from the macOS system font folders, nothing is downloaded or copied.
+scenes receive. `sheet` renders the brand's preview sheet: every available scene with
+neutral sample content, in the brand's look.
 """
 
 import json
@@ -32,8 +31,6 @@ def list_cmd(args) -> dict:
 
 def check_cmd(args) -> dict:
     tokens, errors, warnings = _tokens(args.brand)
-    for e in errors:
-        print(f"error: {e}")
     if errors:
         raise ToolError(f"{args.brand}: {len(errors)} error(s): " + "; ".join(errors))
     table = brand.contrast_table(tokens)

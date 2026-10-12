@@ -21,15 +21,14 @@ import json
 import subprocess
 from pathlib import Path
 
+from .. import brand
 from ..edl import EdlError, load
-from ..paths import RENDERER, ROOT, tool_env
+from ..paths import RENDERER, tool_env
 from . import _render_plan as plan_mod
 from ._geometry import face_track, framed, safe_zones
 from .common import (
-    ID_RE,
     ToolError,
     binary,
-    home,
     job_parent,
     read_job,
     resolve_job,
@@ -38,34 +37,17 @@ from .common import (
 )
 from .ingest import probe
 
-DEFAULT_BRAND = "_example"
+DEFAULT_BRAND = brand.EXAMPLE_ID
 
 
-def brand_tokens(ref: str) -> dict:
-    """Resolved design tokens of brand `ref`. Uses videocut.brand.load when that module
-    exists; until then the raw brand.json (bundled _example or $VIDEOCUT_HOME/brands/<id>)."""
+def brand_tokens(ref) -> dict:
+    """Resolved design tokens of brand `ref` (videocut.brand.load)."""
     if not isinstance(ref, str):
         raise ToolError('job.json "brand" must be a brand id')
     try:
-        from .. import brand  # type: ignore[attr-defined]
-    except ImportError:
-        brand = None
-    if brand is not None and hasattr(brand, "load"):
-        try:
-            return brand.load(ref)
-        except (ValueError, OSError, getattr(brand, "BrandError", ValueError)) as e:
-            raise ToolError(f"brand {ref!r}: {e}") from None
-    if ref != DEFAULT_BRAND and not ID_RE.fullmatch(ref):
-        raise ToolError(f"brand id {ref!r} is not valid")
-    path = (
-        ROOT / "brands" / ref / "brand.json"
-        if ref == DEFAULT_BRAND
-        else home() / "brands" / ref / "brand.json"
-    )
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError) as e:
-        raise ToolError(f"brand {ref!r} could not be read: {e}") from None
+        return brand.load(ref)
+    except brand.BrandError as e:
+        raise ToolError(str(e)) from None
 
 
 def renderer_cmd() -> list[str]:

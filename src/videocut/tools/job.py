@@ -118,7 +118,10 @@ def _link_or_copy(src: Path, dst: Path) -> str:
 
 
 def _brand_id(ref: str) -> str:
-    """Id of a brand that loads without errors; anything else fails the command."""
+    """Id of a brand that loads without errors; anything else fails the command. Only ids
+    (`tool brand list`) are stored, since job.json keeps the id, never a folder path."""
+    if ref not in brand.list_ids():
+        raise ToolError(f"no brand {ref!r}; `videocut tool brand list` shows the brand ids")
     try:
         return brand.load(ref)["id"]
     except brand.BrandError as e:
@@ -166,6 +169,8 @@ def new(args) -> dict:
 
 
 def set_brand(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human picks the brand of a job (not available inside an agent run)")
     job = resolve_job(args.job)
     brand_id = _brand_id(args.brand)
     update_job(job, brand=brand_id)

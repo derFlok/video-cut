@@ -7,6 +7,7 @@ import clips
 import pytest
 from helpers import run_tool
 
+from videocut.paths import ROOT
 from videocut.tools import face as face_mod
 from videocut.tools import overlays
 
@@ -123,14 +124,14 @@ def test_brand_from_job_json(capsys, source, fake_renderer, videocut_home):
     job = _job(capsys, source)
     brand_dir = videocut_home / "brands" / "brand-a"
     brand_dir.mkdir(parents=True)
-    tokens = json.loads((overlays.ROOT / "brands" / "_example" / "brand.json").read_text())
+    tokens = json.loads((ROOT / "brands" / "_example" / "brand.json").read_text())
     (brand_dir / "brand.json").write_text(json.dumps({**tokens, "name": "brand-a"}))
     data = json.loads((job / "job.json").read_text())
     (job / "job.json").write_text(json.dumps({**data, "brand": "brand-a"}))
     code, s, _ = run_tool(capsys, "overlays", "--no-render", "--job", str(job))
     assert code == 0, s
     doc = json.loads((job / "work" / "overlays.json").read_text())
-    assert doc["tokens"]["name"] == "brand-a"
+    assert doc["tokens"]["name"] == "brand-a" and doc["tokens"]["caption_colors"]
 
 
 def test_bad_brand_and_edl_beyond_source_are_errors(capsys, source, fake_renderer):

@@ -12,6 +12,7 @@ Unknown fields are kept untouched (profiles grow); free-text values for enum fie
 """
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -53,6 +54,9 @@ DEFAULTS = {
 REQUIRED_COLORS = ("bg", "text", "accent")
 OPTIONAL_COLORS = ("surface", "muted")
 LOGO_KEYS = ("light", "dark", "icon_light", "icon_dark")
+DEFAULT_SPRING = {"w": 13, "z": 0.8}  # BRIEF §8, also renderer/lib/spring.js
+WEIGHT_RE = re.compile(r"[1-9][0-9]{0,3}")
+SECTIONS = ("colors", "fonts", "logo", "captions", "motion", "voice", "music", "legal")
 
 
 class BrandError(Exception):
@@ -135,16 +139,13 @@ def derive_caption_colors(colors: dict, style: str) -> tuple[dict, list[str]]:
 # --- validation --------------------------------------------------------------------
 
 
-def _enum(path: str, value, allowed: tuple[str, ...]) -> str | None:
-    """Canonical enum word for `value`, or None. Free text resolves to the first allowed
-    word it contains ("accent_underline" -> accent)."""
+def _enum_words(value, allowed: tuple[str, ...]) -> list[str]:
+    """Allowed enum words contained in `value`, in order of appearance (free text such as
+    "ruhig, präzise" or "accent_underline")."""
     if not isinstance(value, str):
-        return None
-    words = re.findall(r"[a-zäöüß]+", value.lower())
-    for w in words:
-        if w in allowed:
-            return w
-    return None
+        return []
+    found = [w for w in re.findall(r"[a-zäöüß]+", value.lower()) if w in allowed]
+    return list(dict.fromkeys(found))
 
 
 def _resolve_file(brand_dir: Path, value: str) -> Path:
@@ -172,14 +173,9 @@ def _check_asset(path: str, value, brand_dir: Path, allowed: set[str], errors: l
     return p.resolve()
 
 
-def _section(data: dict, key: str, errors: list[str]) -> dict:
+def _section(data: dict, key: str) -> dict:
     v = data.get(key)
-    if v is None:
-        return {}
-    if not isinstance(v, dict):
-        errors.append(f"$.{key}: expected an object, got {type(v).__name__}")
-        return {}
-    return v
+    return v if isinstance(v, dict) else {}
 
 
 def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
@@ -189,12 +185,18 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
     if not isinstance(data, dict):
         return {}, ["$: brand.json must be a JSON object"], []
     tokens = json.loads(json.dumps(data))  # deep copy; extra fields survive
+    # A section of the wrong type is an error; the tokens get an empty one, so validation
+    # goes on and reports every other problem too.
+    for sec in SECTIONS:
+        if sec in data and not isinstance(data[sec], dict):
+            errors.append(f"$.{sec}: expected an object, got {type(data[sec]).__name__}")
+            tokens[sec] = {}
 
     if not isinstance(data.get("name"), str) or not data["name"].strip():
         errors.append("$.name: required, a non-empty string")
 
     # colours
-    colors = _section(data, "colors", errors)
+    colors = _section(data, "colors")
     if "colors" not in data:
         errors.append("$.colors: required")
     hexes: dict[str, str] = {}
@@ -222,18 +224,19 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
         if raw is None:
             resolved_enums[dotted] = DEFAULTS[dotted]
             continue
-        hit = _enum(dotted, raw, allowed)
-        if hit is None:
+        hits = _enum_words(raw, allowed)
+        if not hits:
             errors.append(f"$.{sec}.{key}: {raw!r} is not one of {'|'.join(allowed)}")
-        else:
-            resolved_enums[dotted] = hit
+            continue
+        resolved_enums[dotted] = hits[0]
+        if len(hits) > 1:
+            warnings.append(f"$.{sec}.{key}: {raw!r} names {'+'.join(hits)}; using {hits[0]!r}")
     if "icons" in data:
-        hit = _enum("icons", data["icons"], SOFT_ENUMS["icons"])
-        if hit is None:
+        if not _enum_words(data["icons"], SOFT_ENUMS["icons"]):
             warnings.append(f"$.icons: {data['icons']!r} is not one of lucide|phosphor|none")
 
     # fonts
-    fonts = _section(data, "fonts", errors)
+    fonts = _section(data, "fonts")
     tokens.setdefault("fonts", {})
     font_files: dict[str, str] = {}
     for role in ("display", "body"):
@@ -252,17 +255,25 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
         errors.append("$.fonts.files: expected an object {weight: file}")
     elif files:
         for weight, v in files.items():
-            if not str(weight).isdigit():
-                errors.append(f"$.fonts.files.{weight}: weight must be a number such as 400")
+            if not WEIGHT_RE.fullmatch(str(weight)) or not 1 <= int(weight) <= 1000:
+                errors.append(f"$.fonts.files.{weight}: weight must be 1..1000, such as 400")
                 continue
             f = _check_asset(f"$.fonts.files.{weight}", v, brand_dir, FONT_EXT, errors)
             if f:
                 font_files[str(weight)] = str(f)
     weights = fonts.get("weights")
     if weights is not None and not (
-        isinstance(weights, list) and all(isinstance(w, int) for w in weights)
+        isinstance(weights, list) and all(type(w) is int and 1 <= w <= 1000 for w in weights)
     ):
-        errors.append("$.fonts.weights: expected a list of numbers such as [400, 700]")
+        errors.append("$.fonts.weights: expected a list of weights 1..1000 such as [400, 700]")
+        weights = None
+    if not font_files:
+        # Only display/body files (the §9 form): the renderer registers fonts per weight,
+        # so body takes the lightest declared weight and display the strongest.
+        ws = sorted(weights) if weights else [400, 700]
+        for role, w in (("body", ws[0]), ("display", ws[-1])):
+            if tokens["fonts"][f"{role}_file"]:
+                font_files[str(w)] = tokens["fonts"][f"{role}_file"]
     tokens["fonts"]["files"] = font_files
     if font_files and isinstance(weights, list):
         for w in weights:
@@ -270,7 +281,7 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
                 warnings.append(f"$.fonts.files: no file for declared weight {w}")
 
     # logo
-    logo = _section(data, "logo", errors)
+    logo = _section(data, "logo")
     tokens["logo"] = {**logo}
     for key in LOGO_KEYS:
         v = logo.get(key)
@@ -286,14 +297,18 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
     )
     if spring is not None:
         ok = isinstance(spring, dict) and all(
-            isinstance(spring.get(k), int | float) and spring[k] > 0 for k in ("w", "z")
+            type(spring.get(k)) in (int, float) and 0 < spring[k] < 1000 for k in ("w", "z")
         )
         if not ok:
             errors.append('$.motion.spring: expected {"w": number > 0, "z": number > 0}')
     else:
-        tokens.setdefault("motion", {})["spring"] = {"w": 13, "z": 0.9}
-    if not isinstance(data.get("voice", {}), dict):
-        errors.append("$.voice: expected an object")
+        tokens.setdefault("motion", {})["spring"] = dict(DEFAULT_SPRING)
+    voice = _section(data, "voice")
+    words = voice.get("forbidden_words")
+    if words is not None and not (
+        isinstance(words, list) and all(isinstance(w, str) for w in words)
+    ):
+        errors.append("$.voice.forbidden_words: expected a list of words")
 
     # resolved enums go into canonical places; the raw text stays under "<key>_text"
     for dotted, word in resolved_enums.items():
@@ -337,7 +352,9 @@ def list_ids() -> list[str]:
     root = brands_root()
     if root.is_dir():
         ids += sorted(
-            p.name for p in root.iterdir() if (p / BRAND_FILE).is_file() and p.name != EXAMPLE_ID
+            p.name
+            for p in root.iterdir()
+            if (p / BRAND_FILE).is_file() and p.name != EXAMPLE_ID and BRAND_ID_RE.fullmatch(p.name)
         )
     return ids
 
@@ -347,7 +364,9 @@ def inspect(ref: str) -> tuple[dict, list[str], list[str]]:
     complete when errors is empty."""
     d = brand_dir(ref)
     try:
-        data = json.loads((d / BRAND_FILE).read_text())
+        data = json.loads(
+            (d / BRAND_FILE).read_text(), parse_constant=_no_constant, parse_float=_finite
+        )
     except (OSError, ValueError) as e:
         return {}, [f"$: cannot read {BRAND_FILE}: {e}"], []
     tokens, errors, warnings = _validate(data, d)
@@ -356,6 +375,17 @@ def inspect(ref: str) -> tuple[dict, list[str], list[str]]:
         tokens["dir"] = str(d.resolve())
         warnings += _lint(tokens)
     return tokens, errors, warnings
+
+
+def _no_constant(name: str):
+    raise ValueError(f"{name} is not a valid JSON number")
+
+
+def _finite(text: str) -> float:
+    v = float(text)
+    if not math.isfinite(v):
+        raise ValueError(f"{text} is out of range")
+    return v
 
 
 def load(ref: str) -> dict:

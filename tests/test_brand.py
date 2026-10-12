@@ -160,3 +160,41 @@ def test_list_and_show(videocut_home, capsys):
     assert "t1\tTest\tok" in out
     code, summary, _ = run_tool(capsys, "brand", "show", "t1")
     assert code == 0 and summary["tokens"]["caption_colors"]["box"] == "#202020"
+
+
+def test_malformed_sections_are_errors_not_crashes(videocut_home):
+    make_brand(
+        videocut_home, colors="#fff", captions="box", fonts=[1], voice={"forbidden_words": "x"}
+    )
+    errs = errors_of("t1")
+    for path in ("$.colors:", "$.captions:", "$.fonts:", "$.voice.forbidden_words"):
+        assert any(e.startswith(path) for e in errs), (path, errs)
+
+
+def test_non_finite_numbers_and_bad_weights_are_errors(videocut_home):
+    d = make_brand(videocut_home)
+    (d / "brand.json").write_text((d / "brand.json").read_text().replace('"w": 20', '"w": 1e999'))
+    assert any("cannot read" in e for e in errors_of("t1"))
+    make_brand(videocut_home, "t2", fonts={"files": {"5000": "x.ttf"}, "weights": [True]})
+    errs = errors_of("t2")
+    assert any("$.fonts.files.5000" in e for e in errs) and any(
+        "$.fonts.weights" in e for e in errs
+    )
+
+
+def test_display_and_body_files_become_weighted_files(videocut_home):
+    make_brand(videocut_home, fonts={"display": "fonts/a.woff2", "weights": [400, 800]})
+    t = brand.load("t1")
+    assert t["fonts"]["files"] == {"800": t["fonts"]["display_file"]}
+    assert t["motion"]["spring"] == {"w": 20, "z": 0.9}
+    make_brand(videocut_home, "t2", motion={})
+    assert brand.load("t2")["motion"]["spring"] == brand.DEFAULT_SPRING
+
+
+def test_ambiguous_enum_warns_and_odd_folders_are_not_listed(videocut_home):
+    make_brand(videocut_home, captions={"highlight": "accent and scale"})
+    tokens, errors, warnings = brand.inspect("t1")
+    assert not errors and tokens["captions"]["highlight"] == "accent"
+    assert any("accent+scale" in w for w in warnings)
+    make_brand(videocut_home, "my brand")
+    assert "my brand" not in brand.list_ids()

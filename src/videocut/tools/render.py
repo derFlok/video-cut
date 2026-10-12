@@ -31,8 +31,8 @@ Both modes refuse unless a human approved the current work/project.md (job.is_ap
 import hashlib
 import json
 import math
-from fractions import Fraction
 import re
+from fractions import Fraction
 from pathlib import Path
 
 from ..edl import EdlError, load
@@ -232,9 +232,7 @@ def render(args) -> dict:
     ov_json = work / "overlays.json"
     use_overlay = is_fresh([overlay], [edl_path] + ([ov_json] if ov_json.is_file() else []))
     if use_overlay:
-        graph += composite_graph(
-            1 + len(audio_args) // 2, plan.fps, (ow, oh), overlay_matrix(info)
-        )
+        graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
         v_out = "[vo]"
     elif overlay.is_file():
