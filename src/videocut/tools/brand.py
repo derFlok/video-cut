@@ -7,13 +7,14 @@ neutral sample content, in the brand's look.
 """
 
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 
 from .. import brand
 from ..paths import RENDERER
 from ._geometry import safe_zones
-from .common import ToolError, run_tool, write_json
+from .common import ToolError, binary, run_tool, write_json
 
 SHEET_SIZE = (1080, 1920)
 SHEET_FPS = 30
@@ -21,16 +22,26 @@ SLOT_S = 2.0  # one scene per slot; the sheet tile is taken SHEET_AT_S into it
 SHEET_AT_S = 1.1
 # Neutral sample content per scene (no industry copy): the preview sheet shows the look,
 # never a message. A scene without an entry is shown with empty props.
+SAMPLE_IMAGE = "sample-screen.png"
 SAMPLES = {
     "keyword": {"text": "Keyword"},
     "number_card": {"value": "42 %", "label": "Sample label"},
-    "list_item": {"n": 2, "text": "Second point of a list", "total": 3},
-    "chat_bubble": {"text": "How does this work?", "from": "Question"},
-    "screenshot_frame": {},
-    "split_compare": {"left": "Before", "right": "After"},
-    "bar_chart": {"bars": [{"label": "A", "value": 3}, {"label": "B", "value": 5}]},
+    "list_item": {"index": 2, "text": "Second point of a list", "total": 3},
+    "chat_bubble": {"text": "How does this work?"},
+    "screenshot_frame": {
+        "file": SAMPLE_IMAGE,
+        "focus": [0.05, 0.05, 0.95, 0.55],
+        "redact": [[0.1, 0.7, 0.6, 0.76]],
+    },
+    "split_compare": {
+        "left": {"title": "Before", "text": "Sample text"},
+        "right": {"title": "After", "text": "Sample text"},
+    },
+    "bar_chart": {
+        "bars": [{"label": "A", "value": 3}, {"label": "B", "value": 5}, {"label": "C", "value": 8}]
+    },
     "lower_third": {"title": "First Last", "subtitle": "Role or topic"},
-    "cta_end": {"text": "Share this with someone who needs it"},
+    "cta_end": {"text": "Share this with someone", "logo": True},
 }
 SAMPLE_CAPTION = ["Sample", "caption", "words"]
 
@@ -78,6 +89,22 @@ def show_cmd(args) -> dict:
         raise ToolError(f"{args.brand}: " + "; ".join(errors))
     print(json.dumps(tokens, ensure_ascii=False, indent=2))
     return {"brand": args.brand, "tokens": tokens}
+
+
+def sample_screen(dst: Path) -> None:
+    """A neutral, made-up app screen (grey bars on white) for screenshot_frame."""
+    bars = "".join(
+        f",drawbox=x=60:y={y}:w={w}:h={h}:color=gray@{a}:t=fill"
+        for y, w, h, a in (
+            (60, 780, 120, 0.9), (260, 600, 40, 0.5), (330, 700, 40, 0.5), (400, 520, 40, 0.5),
+            (520, 780, 420, 0.3), (1020, 640, 40, 0.5), (1090, 700, 40, 0.5), (1400, 780, 120, 0.8),
+        )
+    )  # fmt: skip
+    subprocess.run(
+        [binary("ffmpeg"), "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=white:s=900x1600",
+         "-vf", bars[1:], "-frames:v", "1", str(dst)],
+        check=True, capture_output=True,
+    )  # fmt: skip
 
 
 def scene_names() -> list[str]:
@@ -136,6 +163,7 @@ def sheet_cmd(args) -> dict:
     with tempfile.TemporaryDirectory(prefix="videocut-sheet-") as tmp:
         doc = Path(tmp) / "overlays.json"
         write_json(doc, spec)
+        sample_screen(Path(tmp) / SAMPLE_IMAGE)
         result = run_renderer([str(doc), "--sheet", str(out)], Path(tmp))
     if not out.is_file():
         raise ToolError(f"renderer reported success but wrote no {out}")

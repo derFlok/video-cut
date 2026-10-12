@@ -9,6 +9,26 @@ const { fitText, placeBlock, allowedArea } = require("./layout");
 // laid out before it that share that time. When the face cannot be cleared or the
 // block does not fit the safe area, it shrinks (down to 60 %) before it gives up. The renderer lays out all items
 // once, in time order, before the first frame.
+// How much the active word grows with highlight "scale" (layout reserves this room).
+const SCALE_GROWTH = 0.12;
+
+// A scaled word pushes the other words of its line aside (half its growth each way),
+// so it never runs into its neighbours; the line stays centred. Returns the x shift
+// per word and the most any line grew on one side.
+function reflow(words, states) {
+  const dx = words.map(() => 0);
+  let spread = 0;
+  states.forEach((s, i) => {
+    if (!(s.scale > 0)) return;
+    const g = (SCALE_GROWTH * s.scale * words[i].width) / 2;
+    words.forEach((w, j) => {
+      if (w.y === words[i].y && j !== i) dx[j] += j < i ? -g : g;
+    });
+    spread = Math.max(spread, g);
+  });
+  return { dx, spread };
+}
+
 function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, position, t0, t1 }) {
   let L = null;
   for (const k of [1, 0.85, 0.72, 0.6]) {
@@ -26,7 +46,7 @@ function attempt(ctx, env, texts, { px, role, maxLines, position, t0, t1 }) {
   const bleed = style.bleed(px);
   const padX = cs.style === "box" ? Math.round(px * 0.45) : Math.round(px * 0.25);
   const padY = Math.round(px * 0.25);
-  const scaleRoom = cs.highlight.scale ? 0.12 : 0;
+  const scaleRoom = cs.highlight.scale ? SCALE_GROWTH : 0;
   const avail = size[0] - 2 * ((safe && safe.side) || 0) - 2 * bleed - 2 * padX;
   ctx.save();
   const fit = fitText(ctx, texts, {
@@ -78,12 +98,15 @@ function drawBlock(ctx, env, L, t, dur, wordState) {
   const a = style.appear(tokens, t, dur);
   if (a.p <= 0) return null;
   const colors = style.captionColors(tokens);
+  const states = L.words.map((_, i) => wordState(i));
+  const { dx, spread } = reflow(L.words, states);
   ctx.save();
   const drawn = style.enter(ctx, tokens, a, L.px, L.box);
   if (L.style === "box") {
     ctx.fillStyle = colors.box;
     ctx.beginPath();
-    ctx.roundRect(L.box[0], L.box[1], L.box[2] - L.box[0], L.box[3] - L.box[1], style.radius(tokens, L.px));
+    const [x0, y0, x1, y1] = [L.box[0] - spread, L.box[1], L.box[2] + spread, L.box[3]];
+    ctx.roundRect(x0, y0, x1 - x0, y1 - y0, style.radius(tokens, L.px));
     ctx.fill();
   }
   ctx.font = L.font;
@@ -91,11 +114,12 @@ function drawBlock(ctx, env, L, t, dur, wordState) {
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
   ctx.lineJoin = "round";
-  L.words.forEach((word, i) => {
-    const s = wordState(i);
+  L.words.forEach((w, i) => {
+    const s = states[i];
+    const word = { ...w, x: w.x + dx[i] };
     ctx.save();
     if (s.scale > 0) {
-      const k = 1 + 0.12 * s.scale;
+      const k = 1 + SCALE_GROWTH * s.scale;
       const cx = word.x + word.width / 2;
       ctx.translate(cx, word.y);
       ctx.scale(k, k);
@@ -134,4 +158,4 @@ function drawBlock(ctx, env, L, t, dur, wordState) {
   return [drawn[0] - L.grow, drawn[1] - L.grow, drawn[2] + L.grow, drawn[3] + L.grow];
 }
 
-module.exports = { layoutBlock, drawBlock };
+module.exports = { layoutBlock, drawBlock, reflow, SCALE_GROWTH };

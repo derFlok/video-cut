@@ -91,11 +91,12 @@ def build(job: Path) -> dict:
     }
 
 
-def run_renderer(argv: list[str], cwd: Path) -> dict:
-    """Run renderer/render.js with `argv`; returns its JSON summary line, raises on failure."""
-    r = subprocess.run(
-        renderer_cmd() + argv, capture_output=True, text=True, env=tool_env(), cwd=cwd
-    )
+def run_renderer(argv: list[str], job: Path) -> dict:
+    """Run renderer/render.js with `argv` for the job folder `job` (the only place scene
+    images may come from, VIDEOCUT_JOB_DIR); returns its JSON summary line, raises on
+    failure."""
+    env = {**tool_env(), "VIDEOCUT_JOB_DIR": str(job)}
+    r = subprocess.run(renderer_cmd() + argv, capture_output=True, text=True, env=env, cwd=job)
     lines = r.stdout.strip().splitlines()
     try:
         result = json.loads(lines[-1]) if lines else {}

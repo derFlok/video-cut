@@ -40,6 +40,10 @@ brand's look, render, check and fix. **You never change the cut.**
 from the transcript (cut words never appear; emphasised words come from the zoom keys).
 Captions already in the EDL are kept; `--force` rebuilds them (after the cut changed).
 
+For `screenshot_frame`, look at each image in `job.json` `assets` once (it counts toward the
+image budget) to choose `focus` and to `redact` anything personal (names, e-mail
+addresses, phone numbers, other people's faces).
+
 ## 3. Overlays
 
 Add `overlays` to `work/edl.json`, times in **output** seconds:
@@ -54,17 +58,20 @@ Add `overlays` to `work/edl.json`, times in **output** seconds:
   the first word the overlay belongs to, end 1.5–3.5 s later, at a word boundary.
 - At most **one overlay at a time** (captions are separate and always on), none in the first
   1.5 s, ~6 s or more between two, 2–4 for 30–60 s. Fewer is better than filler.
-- Follow the plan's overlay ideas; drop an idea whose words were cut.
+- Follow the plan's overlay ideas; drop an idea whose words were cut. A plan without that
+  section: pick 2–3 moments yourself from the core message and the spoken words.
 
 | Scene | props | Use |
 |---|---|---|
 | `keyword` | `text`: 1–4 spoken words | the thesis, a key term |
-| `number_card` | `value`: the spoken number (`"30 %"`), `label`: 1–3 spoken words | a figure |
-| `list_item` | `n`, `total`, `text`: the point in ≤ 6 spoken words | numbered tips |
-| `chat_bubble` | `text`: the question as spoken | a question being answered |
+| `number_card` | `value`: the spoken number (`"30 %"`, `"1,200"`), `label`: 1–3 spoken words | a figure |
+| `list_item` | `index`, `total`, `text`: the point in ≤ 6 spoken words | numbered tips |
+| `chat_bubble` | `text`: the question as spoken; `from`: `"viewer"` (default) or `"speaker"` | a question being answered |
+| `split_compare` | `left`, `right`: `{"title", "text"}` (spoken words) | myth vs. reality, before/after |
+| `bar_chart` | `bars`: `[{"label", "value"}]` (≤ 8, spoken figures only), `unit` | spoken figures compared |
 | `lower_third` | `title`, `subtitle` (spoken or from the brief) | once, early |
-| `cta_end` | `text`: the brand's `cta`, else the spoken call to action | the last 2–3 s |
-| `screenshot_frame` | `image`: a file in `input/`, `focus`: `[x0, y0, x1, y1]` 0..1 (optional), `redact`: list of boxes 0..1 (optional) | when the speaker talks about that image |
+| `cta_end` | `text`: the brand's `cta`, else the spoken call to action; `logo`: true | the last 2–3 s (full-frame card) |
+| `screenshot_frame` | `file`: an image from `job.json` `assets` (e.g. `"input/screen.png"`); `focus`: `[x0, y0, x1, y1]` 0..1 of the image (zoom target, optional); `redact`: list of such boxes (names, numbers, faces of others) | while the speaker talks about that image |
 
 A scene the renderer does not have is skipped (`skipped_scenes` in the summary); then pick
 another.

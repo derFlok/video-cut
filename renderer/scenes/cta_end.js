@@ -58,6 +58,9 @@ function layout(ctx, item, env) {
       : null;
     const h = (logo ? logo.h + (text ? logo.gap : 0) : 0) + (text ? text.height : 0);
     const top = Math.round(area[1] + (ah - h) / 2);
+    // Register the content (logo + text) so captions laid out after it keep clear of it.
+    const m = style.bleed(px);
+    if (h > 0) env.addBlock(item.t0, item.t1, [area[0], top - m, area[2], top + h + m]);
     return {
       px,
       area,
