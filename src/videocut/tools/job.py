@@ -1,7 +1,9 @@
-"""`videocut tool job new|show|approve`: create a job folder, inspect it, approve its plan.
+"""`videocut tool job new|show|approve|brand|screen`: create a job folder, inspect it,
+approve its plan, set its brand or its screen recording.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
+               screen (optional second source: a screen recording, product demos),
                approval {at, project_sha256}: a display copy only, never trusted
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
@@ -41,6 +43,10 @@ ARTEFACTS = [
     "work/audio_raw.wav",
     "work/audio.wav",
     "work/proxy.mp4",
+    "work/screen_probe.json",
+    "work/screen_audio.wav",
+    "work/screen_proxy.mp4",
+    "work/sync.json",
     "work/words.json",
     "work/takes_packed.md",
     "work/candidates.json",
@@ -109,6 +115,15 @@ def _default_id(video: Path, now: datetime) -> str:
 
 
 ASSET_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+SCREEN_EXT = {".mov", ".mp4", ".m4v", ".mkv", ".webm"}
+# Made from the screen recording; a replaced recording invalidates them (a hard link keeps
+# the original mtime, so freshness alone could not tell).
+SCREEN_OUTPUTS = [
+    "work/screen_probe.json",
+    "work/screen_audio.wav",
+    "work/screen_proxy.mp4",
+    "work/sync.json",
+]
 
 
 def _link_or_copy(src: Path, dst: Path) -> str:
@@ -118,6 +133,17 @@ def _link_or_copy(src: Path, dst: Path) -> str:
     except OSError:  # other volume, or a filesystem without hard links
         shutil.copy2(src, dst)
         return "copy"
+
+
+def _screen_file(ref: str) -> Path:
+    screen = Path(ref).expanduser()
+    if not screen.is_file():
+        raise ToolError(f"screen recording not found: {ref}")
+    if screen.suffix.lower() not in SCREEN_EXT:
+        raise ToolError(
+            f"screen recording {screen.name}: must be one of {', '.join(sorted(SCREEN_EXT))}"
+        )
+    return screen
 
 
 def brand_id(ref: str) -> str:
@@ -137,7 +163,12 @@ def new(args) -> dict:
         raise ToolError(f"video not found: {args.video}")
     brand_ref = brand_id(args.brand) if args.brand else None
     assets = [Path(a).expanduser() for a in (args.asset or [])]
+    screen = _screen_file(args.screen) if args.screen else None
     names = [video.name]
+    if screen is not None:
+        if screen.name in names:
+            raise ToolError(f"camera and screen recording are both named {screen.name}; rename one")
+        names.append(screen.name)
     for a in assets:
         if not a.is_file():
             raise ToolError(f"asset not found: {a}")
@@ -159,6 +190,8 @@ def new(args) -> dict:
         how = _link_or_copy(video.resolve(), job / "input" / video.name)
         for a in assets:
             _link_or_copy(a.resolve(), job / "input" / a.name)
+        if screen is not None:
+            _link_or_copy(screen.resolve(), job / "input" / screen.name)
     except OSError as e:  # e.g. disk full: leave no half-made job that blocks a retry
         shutil.rmtree(job, ignore_errors=True)
         raise ToolError(f"could not import {video.name}: {e}") from None
@@ -174,6 +207,8 @@ def new(args) -> dict:
         data["brand"] = brand_ref
     if assets:
         data["assets"] = [f"input/{a.name}" for a in assets]
+    if screen is not None:
+        data["screen"] = f"input/{screen.name}"
     write_json(job / JOB_FILE, data)
     print(job)
     return {
@@ -183,7 +218,42 @@ def new(args) -> dict:
         "imported": how,
         "brand": brand_ref,
         "assets": data.get("assets", []),
+        "screen": data.get("screen"),
     }
+
+
+def set_screen(args) -> dict:
+    """Set or replace the screen recording; outputs made from the old one are removed."""
+    if os.environ.get(AGENT_ENV):
+        raise ToolError(
+            "only a human picks the inputs of a job (not available inside an agent run)"
+        )
+    job = resolve_job(args.job)
+    screen = _screen_file(args.file)
+    data = read_job(job)
+    rel = f"input/{screen.name}"
+    taken = {data.get("source"), *data.get("assets", [])}
+    if rel in taken:
+        raise ToolError(
+            f"{screen.name} is already an input of this job under another role; rename it"
+        )
+    old = data.get("screen")
+    dst = job / rel
+    try:
+        if dst.exists() and dst.resolve() == screen.resolve():
+            how = "in place"  # the file already sits in input/: never unlink the only copy
+        else:
+            dst.unlink(missing_ok=True)
+            how = _link_or_copy(screen.resolve(), dst)
+    except OSError as e:
+        raise ToolError(f"could not import {screen.name}: {e}") from None
+    if old and old != rel and old not in taken:
+        (job / old).unlink(missing_ok=True)
+    for out in SCREEN_OUTPUTS:
+        (job / out).unlink(missing_ok=True)
+    update_job(job, screen=rel)
+    print(f"{job.name}: screen {rel}")
+    return {"job": str(job), "id": job.name, "screen": rel, "imported": how, "replaced": old}
 
 
 def set_brand(args) -> dict:
@@ -236,6 +306,11 @@ def register(subparsers) -> None:
         metavar="FILE",
         help="extra input such as a screenshot (png/jpg/webp), repeatable",
     )
+    n.add_argument(
+        "--screen",
+        metavar="FILE",
+        help="screen recording of the same take (product demo), synced by `tool sync`",
+    )
     n.set_defaults(handler=run_tool("job new", new))
     s = sub.add_parser(
         "show", help="print job.json and which artefacts exist", parents=[job_parent()]
@@ -252,3 +327,10 @@ def register(subparsers) -> None:
     b = sub.add_parser("brand", help="set or replace the brand of a job", parents=[job_parent()])
     b.add_argument("brand", help="brand id (see `tool brand list`)")
     b.set_defaults(handler=run_tool("job brand", set_brand))
+    sc = sub.add_parser(
+        "screen",
+        help="set or replace the screen recording of a job (human only)",
+        parents=[job_parent()],
+    )
+    sc.add_argument("file", help="screen recording (linked or copied, never moved)")
+    sc.set_defaults(handler=run_tool("job screen", set_screen))

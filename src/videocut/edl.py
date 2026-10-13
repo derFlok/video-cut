@@ -4,6 +4,10 @@ Segment times (`in`, `out`, `zoom_keys`) are in SOURCE time; captions, overlays 
 are in OUTPUT time. Phase 1 uses segments only; captions/overlays/broll/music are kept as
 plain dicts and validated loosely (shape and times), their detailed schema comes later.
 
+Product demos add a screen recording (work/sync.json aligns it): a segment may set a
+`layout`, `screen_zoom` keyframes and `redact` blocks, all in CAMERA time like `in`/`out`;
+the screen frame shown at camera time t is screen time `screen_time(t, sync)`.
+
 Validation works on the raw JSON and reports every problem with a JSON path
 (`$.segments[2].out`), so Claude can fix an EDL in one round.
 """
@@ -17,6 +21,10 @@ ZOOM_MIN, ZOOM_MAX = 1.0, 2.0
 FADE_MAX_MS = 200
 DEFAULT_FADE_MS = 30
 BLINK_SEARCH_MS = 150  # how far a blink-free cut point may be suggested from the original
+LAYOUTS = ("face", "screen", "pip", "split")
+DEFAULT_LAYOUT = "face"
+MIN_BOX_SIDE = 0.02  # a screen box narrower than 2 % of the screen is a typo, not a zoom
+SYNC_METHODS = ("audio_xcorr", "clap", "manual")
 
 
 class EdlError(ValueError):
@@ -39,6 +47,9 @@ class Segment:
     fade_ms: int = DEFAULT_FADE_MS
     crop: Crop | None = None
     zoom_keys: list[tuple[float, float]] = field(default_factory=list)
+    layout: str = DEFAULT_LAYOUT
+    screen_zoom: list[dict] = field(default_factory=list)  # [{"t": camera_s, "box": [..]}]
+    redact: list[dict] = field(default_factory=list)  # [{"t0", "t1": camera_s, "box": [..]}]
 
     @property
     def duration(self) -> float:
@@ -78,6 +89,12 @@ class Edl:
                 d["crop"] = {"cx": s.crop.cx, "cy": s.crop.cy, "zoom": s.crop.zoom}
             if s.zoom_keys:
                 d["zoom_keys"] = [list(k) for k in s.zoom_keys]
+            if s.layout != DEFAULT_LAYOUT:
+                d["layout"] = s.layout
+            if s.screen_zoom:
+                d["screen_zoom"] = s.screen_zoom
+            if s.redact:
+                d["redact"] = s.redact
             segs.append(d)
         data: dict = {
             "fps": self.fps,
@@ -105,8 +122,139 @@ def _rel_path(v) -> bool:
     return not p.is_absolute() and ".." not in p.parts
 
 
-def validate(data, source_duration: float | None = None) -> list[str]:
-    """All problems in a raw EDL dict, each prefixed with its JSON path. Empty = valid."""
+def _box_errors(box, p: str) -> list[str]:
+    ok = isinstance(box, list) and len(box) == 4 and all(_num(v) and 0 <= v <= 1 for v in box)
+    if not ok:
+        return [f"{p}: must be [x0, y0, x1, y1], numbers in 0..1 (screen fractions)"]
+    if box[2] - box[0] < MIN_BOX_SIDE or box[3] - box[1] < MIN_BOX_SIDE:
+        return [f"{p}: box {box} is degenerate (x1 > x0 and y1 > y0, each side >= {MIN_BOX_SIDE})"]
+    return []
+
+
+def _screen_errors(s: dict, p: str, a, b) -> list[str]:
+    """Layout, screen_zoom and redact of one segment (a, b = its in/out when numbers)."""
+    errs: list[str] = []
+    layout = s.get("layout", DEFAULT_LAYOUT)
+    if layout not in LAYOUTS:
+        errs.append(f"{p}.layout: must be one of {', '.join(LAYOUTS)}")
+        layout = DEFAULT_LAYOUT
+    inside = _num(a) and _num(b)
+    zoom = s.get("screen_zoom", [])
+    if not isinstance(zoom, list):
+        errs.append(f"{p}.screen_zoom: must be a list of {{t, box}}")
+        zoom = []
+    if zoom and layout == "face":
+        errs.append(f"{p}.screen_zoom: needs layout screen, pip or split (the screen is not shown)")
+    last = -math.inf
+    for j, k in enumerate(zoom):
+        kp = f"{p}.screen_zoom[{j}]"
+        if not isinstance(k, dict):
+            errs.append(f"{kp}: must be an object {{t, box}}")
+            continue
+        t = k.get("t")
+        if not _num(t):
+            errs.append(f"{kp}.t: must be a number (camera seconds)")
+        else:
+            if inside and not a <= t <= b:
+                errs.append(f"{kp}.t: {t} is outside the segment [{a}, {b}]")
+            if t <= last:
+                errs.append(f"{kp}.t: keyframes must be in increasing time order")
+            last = t
+        errs += _box_errors(k.get("box"), f"{kp}.box")
+    red = s.get("redact", [])
+    if not isinstance(red, list):
+        errs.append(f"{p}.redact: must be a list of {{t0, t1, box}}")
+        red = []
+    if red and layout == "face":
+        errs.append(f"{p}.redact: needs layout screen, pip or split (the screen is not shown)")
+    for j, r in enumerate(red):
+        rp = f"{p}.redact[{j}]"
+        if not isinstance(r, dict):
+            errs.append(f"{rp}: must be an object {{t0, t1, box}}")
+            continue
+        t0, t1 = r.get("t0"), r.get("t1")
+        if not (_num(t0) and _num(t1) and t0 < t1):
+            errs.append(f"{rp}: needs numbers t0 < t1 (camera seconds)")
+        elif inside and not (a <= t0 and t1 <= b):
+            errs.append(f"{rp}: [{t0}, {t1}] is outside the segment [{a}, {b}]")
+        errs += _box_errors(r.get("box"), f"{rp}.box")
+    return errs
+
+
+def validate_sync(data) -> list[str]:
+    """Problems in a work/sync.json dict. Empty = valid."""
+    if not isinstance(data, dict):
+        return ["sync: must be an object"]
+    errs: list[str] = []
+    if not _num(data.get("offset_s")):
+        errs.append("sync.offset_s: must be a number (screen_time = camera_time + offset_s)")
+    if data.get("method") not in SYNC_METHODS:
+        errs.append(f"sync.method: must be one of {', '.join(SYNC_METHODS)}")
+    c = data.get("confidence")
+    if not (_num(c) and 0 <= c <= 1):
+        errs.append("sync.confidence: must be a number in 0..1")
+    d = data.get("drift_ppm")
+    if d is not None and not _num(d):
+        errs.append("sync.drift_ppm: must be a number or null")
+    ref = data.get("drift_ref")
+    if ref is not None and not _num(ref):
+        errs.append("sync.drift_ref: must be a number")
+    ov = data.get("overlap")
+    if not (isinstance(ov, list) and len(ov) == 2 and all(_num(v) for v in ov) and ov[0] < ov[1]):
+        errs.append("sync.overlap: must be [camera_t0, camera_t1] with t0 < t1")
+    return errs
+
+
+def read_sync(path: Path) -> dict | None:
+    """A valid sync.json as dict; None when the file is missing, unreadable or invalid."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    return data if not validate_sync(data) else None
+
+
+def screen_time(camera_t: float, sync: dict) -> float:
+    """Screen time of the frame shown at camera time `camera_t`. Drift (sync["drift_ppm"],
+    at most a few frames per minute) is not applied: offset_s is exact at drift_ref."""
+    return camera_t + sync["offset_s"]
+
+
+def overlap_errors(data, sync: dict | None) -> list[str]:
+    """Every non-face segment must lie inside sync["overlap"] (camera time), where both
+    recordings have pictures; without a sync (`None`) any non-face segment is an error
+    (a missing, unreadable or invalid work/sync.json all read as None)."""
+    segs = data.get("segments") if isinstance(data, dict) else None
+    errs: list[str] = []
+    for i, s in enumerate(segs if isinstance(segs, list) else []):
+        if not isinstance(s, dict) or s.get("layout", DEFAULT_LAYOUT) in ("face", None):
+            continue
+        a, b = s.get("in"), s.get("out")
+        p = f"$.segments[{i}]"
+        if sync is None:
+            errs.append(
+                f"{p}.layout: {s.get('layout')!r} needs a valid work/sync.json (run `tool sync`)"
+            )
+        elif _num(a) and _num(b):
+            o0, o1 = sync["overlap"]
+            if a < o0 - 1e-3 or b > o1 + 1e-3:
+                errs.append(
+                    f"{p}: [{a}, {b}] is outside the time both recordings cover [{o0}, {o1}]; "
+                    "use layout face there"
+                )
+    return errs
+
+
+def validate(
+    data,
+    source_duration: float | None = None,
+    sync: dict | None = None,
+    check_sync: bool = False,
+) -> list[str]:
+    """All problems in a raw EDL dict, each prefixed with its JSON path. Empty = valid.
+
+    `check_sync` also checks that non-face segments lie inside the `sync` overlap
+    (a missing sync then fails them)."""
     errs: list[str] = []
     if not isinstance(data, dict):
         return ["$: must be an object"]
@@ -176,6 +324,7 @@ def validate(data, source_duration: float | None = None) -> list[str]:
                 errs.append(f"{kp}: time {k[0]} is outside the segment [{a}, {b}]")
             if not ZOOM_MIN <= k[1] <= ZOOM_MAX:
                 errs.append(f"{kp}: zoom must be in {ZOOM_MIN}..{ZOOM_MAX}")
+        errs += _screen_errors(s, p, a, b)
 
     # Loose checks for the later phases: shape, output-time ranges, paths inside the job.
     for key in ("captions", "overlays", "broll"):
@@ -206,11 +355,15 @@ def validate(data, source_duration: float | None = None) -> list[str]:
                 errs.append("$.music.file: must be a relative path")
             if "gain_db" in music and not _num(music["gain_db"]):
                 errs.append("$.music.gain_db: must be a number")
+    if check_sync:
+        errs += overlap_errors(data, sync)
     return errs
 
 
-def from_dict(data, source_duration: float | None = None) -> Edl:
-    errors = validate(data, source_duration)
+def from_dict(
+    data, source_duration: float | None = None, sync: dict | None = None, check_sync: bool = False
+) -> Edl:
+    errors = validate(data, source_duration, sync, check_sync)
     if errors:
         raise EdlError(errors)
     segs = []
@@ -225,6 +378,9 @@ def from_dict(data, source_duration: float | None = None) -> Edl:
                 if crop is not None
                 else None,
                 zoom_keys=[(float(t), float(z)) for t, z in s.get("zoom_keys", [])],
+                layout=s.get("layout", DEFAULT_LAYOUT),
+                screen_zoom=s.get("screen_zoom", []),
+                redact=s.get("redact", []),
             )
         )
     return Edl(
@@ -239,12 +395,15 @@ def from_dict(data, source_duration: float | None = None) -> Edl:
     )
 
 
-def load(path: Path, source_duration: float | None = None) -> Edl:
+def load(
+    path: Path, source_duration: float | None = None, sync: dict | None = None,
+    check_sync: bool = False,
+) -> Edl:  # fmt: skip
     try:
         data = json.loads(Path(path).read_text())
     except json.JSONDecodeError as e:
         raise EdlError([f"$: invalid JSON at line {e.lineno} column {e.colno}: {e.msg}"]) from e
-    return from_dict(data, source_duration)
+    return from_dict(data, source_duration, sync, check_sync)
 
 
 def save(edl: Edl, path: Path, source_duration: float | None = None) -> None:

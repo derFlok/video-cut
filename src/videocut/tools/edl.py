@@ -3,6 +3,10 @@
 Prints one line per problem with its JSON path. The source duration comes from
 work/probe.json when ingest has run, so out-of-range segments are caught too.
 
+Screen layouts (product demos): `layout`, `screen_zoom` and `redact` of a segment are
+validated, and every non-face segment must lie inside the "overlap" of work/sync.json
+(`tool sync`), the camera time in which both recordings have pictures.
+
 Blink warnings (never a failure): with a current work/face.json, every segment `in`/`out`
 inside a blink (+-1 frame) is reported with the nearest blink-free time within +-150 ms that
 also lies outside every word of work/words.json (when present) as a suggestion.
@@ -11,7 +15,7 @@ also lies outside every word of work/words.json (when present) as a suggestion.
 import json
 from pathlib import Path
 
-from ..edl import EdlError, blink_warnings, load
+from ..edl import EdlError, blink_warnings, load, read_sync
 from .common import ToolError, job_parent, resolve_job, run_tool
 from .face import load_face
 
@@ -31,8 +35,9 @@ def check(args) -> dict:
     duration = None
     if job is not None and (job / "work" / "probe.json").is_file():
         duration = json.loads((job / "work" / "probe.json").read_text())["duration"]
+    sync = read_sync(job / "work" / "sync.json") if job is not None else None
     try:
-        edl = load(path, source_duration=duration)
+        edl = load(path, source_duration=duration, sync=sync, check_sync=job is not None)
     except EdlError as e:
         for err in e.errors:
             print(err)
@@ -49,6 +54,8 @@ def check(args) -> dict:
         "output_duration": round(edl.output_duration(), 3),
         "cuts": [round(t, 3) for t in points[1:-1]],
         "source_duration": duration,
+        "layouts": sorted({s.layout for s in edl.segments}),
+        "sync": None if sync is None else sync["method"],
         "warnings": warnings,
     }
 
