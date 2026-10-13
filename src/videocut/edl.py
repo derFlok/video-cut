@@ -418,6 +418,39 @@ def save(edl: Edl, path: Path, source_duration: float | None = None) -> None:
     tmp.replace(path)
 
 
+def output_spans(edl: Edl) -> list[tuple[float, float]]:
+    """Output [t0, t1) of every segment, snapped to the output frame grid exactly as render
+    places them (_render_plan.build: a segment ends at round(cumulative duration * fps))."""
+    spans, t_out, f0 = [], 0.0, 0
+    for s in edl.segments:
+        t_out += s.duration
+        f1 = round(t_out * edl.fps)
+        spans.append((f0 / edl.fps, f1 / edl.fps))
+        f0 = f1
+    return spans
+
+
+def output_to_source(edl: Edl, t_out: float) -> tuple[int, float] | None:
+    """(segment index, source time) of the frame shown at output time `t_out`; None outside
+    the cut (before 0 or at/after its end)."""
+    for k, (a, b) in enumerate(output_spans(edl)):
+        if a <= t_out < b:
+            s = edl.segments[k]
+            return k, min(s.start + (t_out - a), s.end)
+    return None
+
+
+def source_to_output(edl: Edl, t_src: float) -> list[tuple[int, float]]:
+    """Every (segment index, output time) at which source time `t_src` is shown: none when
+    the cut leaves it out, several when segments repeat it."""
+    out = []
+    for k, (a, b) in enumerate(output_spans(edl)):
+        s = edl.segments[k]
+        if s.start <= t_src < s.end and a + (t_src - s.start) < b:
+            out.append((k, round(a + (t_src - s.start), 6)))
+    return out
+
+
 def blink_warnings(
     edl: Edl,
     blinks: list[dict],
