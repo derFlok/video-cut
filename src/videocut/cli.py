@@ -64,6 +64,11 @@ def main(argv: list[str] | None = None) -> int:
         metavar="FILE",
         help="screen recording made at the same time (product demo) for a new job",
     )
+    r.add_argument(
+        "--format",
+        help="output format 9:16, 16:9, 1:1 or 4:5 (default: 16:9 with a screen recording or "
+        "screenshots, else 9:16); for an existing job it replaces the format",
+    )
 
     t = sub.add_parser("tool", help="pipeline commands used by Claude inside a job")
     tsub = t.add_subparsers(dest="tool_cmd", required=True)

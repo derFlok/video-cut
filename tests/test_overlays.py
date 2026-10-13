@@ -87,7 +87,8 @@ def test_overlays_json_contract_and_renderer_call(capsys, source, fake_renderer)
     assert code == 0, s
     assert s["rendered"] and s["box_count"] == 1 and s["renderer"]["frames"] == 60
     doc = json.loads((job / "work" / "overlays.json").read_text())
-    keys = {"size", "fps", "duration", "tokens", "safe", "face", "captions", "overlays", "plates"}
+    keys = {"size", "width", "height", "fps", "duration", "tokens", "safe", "face", "captions"}
+    keys |= {"overlays", "plates"}
     assert set(doc) == keys
     assert doc["size"] == [1080, 1920] and doc["fps"] == 30 and doc["duration"] == 2.0
     assert doc["plates"] == {"last_word": 0.5, "tail_s": 0.0, "shifted": []}

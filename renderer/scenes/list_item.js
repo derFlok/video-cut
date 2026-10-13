@@ -17,9 +17,10 @@ const totalOf = (item) => {
 function layout(ctx, item, env) {
   if (!textOf(item)) return null;
   return env.once(item, () => {
-    const { tokens, size } = env;
+    const { tokens } = env;
+    const unit = style.frame(env).unit;
     return card.layoutCard(env, item, (k) => {
-      const px = size[0] * 0.062 * k;
+      const px = unit * 0.062 * k;
       const pad = Math.round(px * 0.5);
       const badge = Math.round(px * 1.9);
       const gap = Math.round(px * 0.5);

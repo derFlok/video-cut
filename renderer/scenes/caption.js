@@ -13,7 +13,8 @@ const spoken = (item) => (item.words || []).filter((w) => String(w.w || "").trim
 
 // Placed once per group (the renderer calls this for every item, in time order).
 function layout(ctx, item, env) {
-  const { tokens, size } = env;
+  const { tokens } = env;
+  const f = style.frame(env);
   const words = spoken(item);
   if (!words.length) return null;
   return env.once(item, () =>
@@ -21,7 +22,15 @@ function layout(ctx, item, env) {
       ctx,
       env,
       words.map((w) => style.setCase(tokens, String(w.w).trim())),
-      { px: size[0] * 0.07, role: "heading", maxLines: 2, t0: item.t0, t1: item.t1 },
+      {
+        px: style.captionPx(env),
+        role: "heading",
+        maxLines: 2,
+        // Landscape, square and 4:5: bottom centre, above the bottom safe zone.
+        position: f.tall ? undefined : "bottom",
+        t0: item.t0,
+        t1: item.t1,
+      },
     ),
   );
 }

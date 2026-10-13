@@ -3,10 +3,13 @@
     cut      every segment [in, out] in source time, frame accurate (decode-side trim),
              audio faded by fade_ms at every boundary
     reframe  crop window of the output aspect around crop.cx/cy, `zoom`× tighter, scaled
-             to the EDL size at the EDL fps; zoom_keys are hard punch-ins from that
-             source time on (no animated zoom yet). A segment without a crop is centred
-             on the face median of a current work/face.json (following the face only on
-             a large move, face.face_crops), else on the frame centre
+             to the job's output size (job.json "format", _format.py; an EDL "size" of
+             another format is overridden with a warning) at the EDL fps; zoom_keys are
+             hard punch-ins from that source time on (no animated zoom yet). A segment
+             without a crop is centred on the face median of a current work/face.json
+             (following the face only on a large move, face.face_crops), else on the frame
+             centre. Soft-crop warning below _render_plan.sharp_min_width (scaled with the
+             output width)
     loudness loudnorm two-pass to -14 LUFS / -1 dBTP / LRA 11 (preview: single pass);
              the finished file is measured again
     colour   HDR sources (HLG/PQ) are tonemapped to SDR BT.709 and tagged so (_color.py)
@@ -50,7 +53,7 @@ from ..edl import EdlError, load, read_sync
 from . import _layouts, _plates
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
-from ._geometry import framed
+from ._geometry import framed, sized
 from .common import (
     ToolError,
     binary,
@@ -183,16 +186,25 @@ def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709
     )
 
 
+def _overlay_size(path: Path) -> tuple[int, int] | None:
+    """The output size overlays.json was made for (None when unreadable)."""
+    try:
+        size = json.loads(path.read_text()).get("size")
+        return (int(size[0]), int(size[1]))
+    except (OSError, ValueError, TypeError, AttributeError, IndexError, OverflowError):
+        return None
+
+
 def _layout_video(job, plan, edl, info, face, video_in, inputs):
     """Video lines of a render with screen layouts (the screen is the next input after
-    `inputs`), the screen recording and the clamped zoom keys."""
-    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
+    `inputs`) and the _layouts.plan_all doc (screen, clamped, speaker, warnings)."""
+    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
     video = _layouts.video_chain(
         plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in,
         f"{len(inputs) // 2}:v:0", bg=_layouts.background(job), matrix=overlay_matrix(info),
         cam_sdr=to_sdr(info), screen_sdr=to_sdr(drawn["info"]),
     )  # fmt: skip
-    return video, drawn["screen"], drawn["clamped"]
+    return video, drawn
 
 
 def render(args) -> dict:
@@ -228,6 +240,7 @@ def render(args) -> dict:
         ) from None
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
+    edl, size_note = sized(job, edl)
     edl, followed, face = framed(job, edl)
     # Personal data: every candidate the human did not mark as demo data is redacted, also
     # when the EDL forgot one (redaction.enforced; no decision = all of them).
@@ -246,6 +259,9 @@ def render(args) -> dict:
     # words.json too: the end card's tail is computed from it (_plates), like overlays did.
     ov_inputs = [p for p in (ov_json, work / "words.json") if p.is_file()]
     use_overlay = is_fresh([overlay], [edl_path, *ov_inputs])
+    made_for = _overlay_size(ov_json)
+    if use_overlay and made_for and made_for != tuple(edl.size):  # made for another format
+        use_overlay = False
     if use_overlay and plan.frames:  # the end card's held tail (same schedule as overlays)
         plan = plan_mod.with_tail(plan, _plates.for_job(job, edl, plan.duration).tail_frames)
     audio_args, audio_in, audio_from = _audio_input(job, src, edl.source, info)
@@ -268,11 +284,15 @@ def render(args) -> dict:
         measured = "silent"
     elif preview:
         measured = None  # single pass
-    warnings, v_out, video, clamped, screen_rel = [], "[v]", None, [], None
+    warnings, v_out, video, clamped, screen_rel, speaker = [], "[v]", None, [], None, []
+    if size_note:
+        warnings.append(size_note)
     if use_layouts:
-        video, screen, clamped = _layout_video(job, plan, edl, info, face, video_in, inputs)
-        screen_rel = str(screen.relative_to(job))
-        inputs += ["-i", str(screen)]
+        video, drawn = _layout_video(job, plan, edl, info, face, video_in, inputs)
+        clamped, speaker = drawn["clamped"], drawn["speaker"]
+        warnings += drawn["warnings"]
+        screen_rel = str(drawn["screen"].relative_to(job))
+        inputs += ["-i", str(drawn["screen"])]
         for c in clamped:
             warnings.append(
                 f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
@@ -285,8 +305,8 @@ def render(args) -> dict:
         v_out = "[vo]"
     elif overlay.is_file():
         warnings.append(
-            "work/overlay.mov is older than edl.json, overlays.json or words.json and was left "
-            "out; run `videocut tool overlays` again"
+            "work/overlay.mov is older than edl.json, overlays.json or words.json, or was made "
+            "for another output size, and was left out; run `videocut tool overlays` again"
         )
     elif edl.captions or edl.overlays:
         warnings.append(
@@ -354,9 +374,9 @@ def render(args) -> dict:
 
     loud = measure(dst)
     min_w = plan.min_crop_width()
-    if min_w < plan_mod.SHARP_MIN_WIDTH:
+    if min_w < (sharp := plan_mod.sharp_min_width(edl.size)):
         warnings.append(
-            f"crop is only {min_w} px wide (< {plan_mod.SHARP_MIN_WIDTH}); the reel will look soft"
+            f"crop is only {min_w} px wide (< {sharp}); the reel will look soft"
             " — use less zoom or record in 4K / portrait"
         )
     report = {
@@ -406,6 +426,7 @@ def render(args) -> dict:
         "layouts": report.get("layouts"),
         "screen": screen_rel,
         "screen_zoom_clamped": clamped,
+        "speaker": speaker,
         "redaction": report.get("redaction"),
         "warnings": warnings,
     }

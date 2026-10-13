@@ -117,11 +117,14 @@ function pageMain(spec) {
   const ctx = main.getContext("2d");
   const accCtx = acc.getContext("2d");
   const memo = new Map();
-  // Screen views of a product demo (overlays.json "views"): every item keeps off them.
+  // Product demo (overlays.json "views", flattened by validViews): every item keeps off a
+  // screen view that does not fill the frame and off every zoom target.
   const blocks = (views || []).map((v) => ({ t0: v.t0, t1: v.t1, box: v.screen }));
   const env = {
     tokens,
     size,
+    width: size[0],
+    height: size[1],
     safe,
     fonts: { family: fontFamily, ready: true },
     faceAt: (t) => faceAt(face, t),
@@ -324,13 +327,30 @@ function items(spec, known) {
   return { list, skipped };
 }
 
-// Screen views of a product demo ({t0, t1, screen: [x0, y0, x1, y1]}, output time/px);
-// malformed entries are dropped.
+// Areas to keep clear in a product demo, flattened to {t0, t1, screen: [x0, y0, x1, y1]}
+// (output time/px): each view's `screen` (null when the screen fills the frame: it is the
+// picture) and each of its `focus` zoom targets ({t0, t1, box}). Malformed entries are
+// dropped.
 function validViews(views) {
   const box = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[2] > b[0] && b[3] > b[1];
-  return (Array.isArray(views) ? views : [])
-    .filter((v) => v && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1 && box(v.screen))
-    .map((v) => ({ t0: v.t0, t1: v.t1, screen: v.screen.slice() }));
+  const span = (v) => v && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1;
+  const out = [];
+  for (const v of Array.isArray(views) ? views : []) {
+    if (!span(v)) continue;
+    if (box(v.screen)) out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice() });
+    for (const f of Array.isArray(v.focus) ? v.focus : []) {
+      if (span(f) && box(f.box)) out.push({ t0: f.t0, t1: f.t1, screen: f.box.slice() });
+    }
+  }
+  return out;
+}
+
+// The frame size: spec.size, else spec.width x spec.height, else 1080x1920 (the 9:16
+// reel every call used before output formats existed). Written back as spec.size so the
+// rest of the renderer has one place to read it from.
+function resolveSize(spec) {
+  if (spec.size === undefined) spec.size = [spec.width ?? 1080, spec.height ?? 1920];
+  return spec;
 }
 
 function validate(spec) {
@@ -410,7 +430,7 @@ const round = (v, n = 2) => Math.round(v * 10 ** n) / 10 ** n;
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const spec = JSON.parse(fs.readFileSync(args.input, "utf8"));
+  const spec = resolveSize(JSON.parse(fs.readFileSync(args.input, "utf8")));
   validate(spec);
   const size = spec.size;
   const fps = spec.fps;

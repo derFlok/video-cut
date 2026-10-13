@@ -59,6 +59,7 @@ checks of verify).
 
 ```
 job.json   id, created, source (relative), type, brief, status, approval, brand, assets,
+           format (optional output format; absent = the default rule, resolved on read),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
 work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4        ingest
@@ -220,6 +221,30 @@ group change) and `overlays_NN.jpg` (one tile per overlay, at its middle). Globa
 loudness, true peak, size, black/frozen stretches. After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
 
+## Output format (`tools/_format.py`)
+
+Every job has one output format: job.json `format`, one of `9:16` 1080×1920, `16:9`
+1920×1080, `1:1` 1080×1080, `4:5` 1080×1350. Absent, the default rule decides when the job
+is read (never written back): a job with a screen recording or screenshot assets is a
+product demo and gets `16:9`, every other job `9:16`. `job new --format`, `run --format`
+and `job format <job> <f>` (human only) set it; `job show` prints format and size. A
+changed format makes the finished cut stale (the cut record carries the format), so `run`
+cuts again; the plan stays.
+
+`output_size(job)` is the size of reel, preview (half), cover, overlays.json
+(`size`/`width`/`height`), verify's size check and `brand sheet --format`. The job format
+beats the EDL's own `size` (render and overlays use the job's and warn). Safe zones
+(`safe_zones(size)`, px at the preset; other sizes of the same aspect scale with the
+height): 9:16 top 250 / bottom 350 / sides 6 %, 4:5 108 / 203 / 5 %, 1:1 76 / 151 / 5 %,
+16:9 65 / 130 / 4 % (player UI; the bottom band is the caption strip). The soft-crop
+warning (`sharp_min_width`) scales with the output width.
+
+Renderer: every scene gets `width`/`height` and lays out by aspect class (`portrait`
+h/w > 1.2, `landscape` w/h > 1.2, else `square`), the type scale from the short side.
+Landscape: captions bottom-centre (≤ 70 % of the width, 2 lines), cards and keywords in a
+side column, the lower third bottom-left, screenshots keep their aspect, `cta_end`
+centred; square and 4:5 put the caption at the foot. The 9:16 layout is unchanged.
+
 ## Product demos
 
 A demo job has the camera recording (`source`, the speaker; its time is "camera time", the
@@ -253,12 +278,26 @@ summary adds camera times (`camera_t0`, `camera_t`) from the current sync.json, 
 EDL is in camera time. `sheet screen` draws the analysis onto a strip of frames (activity
 yellow, clicks red, targets green).
 
-**Layouts** (`_layouts.py`, per segment `layout`): `face` (unchanged render path; an EDL of
-face segments renders byte-identically, golden test), `screen` (the screen fills the reel
-width, centred in the safe area, on the brand's `colors.bg`), `pip` (screen at the top of
-the safe area, the speaker as a rounded inset of 34 % of the width below it, on the side away
-from the zoom targets, so it never covers screen content; the strip below the inset is the
-caption room), `split` (screen in the top 58 %, the speaker face-centred below). The screen
+**Layouts** (`_layouts.py`, per segment `layout`, geometry by the job format): `face`
+(unchanged render path; an EDL of face segments renders byte-identically, golden test; in
+16:9 a landscape reframe of the camera). **9:16 and 4:5:** `screen` (the screen fills the
+reel width, centred in the safe area, on the brand's `colors.bg`), `pip` (screen at the top
+of the safe area, the speaker as a rounded inset of 34 % of the width below it, on the side
+away from the zoom targets, so it never covers screen content; the strip below the inset
+is the caption room), `split` (screen in the top 58 %, the speaker face-centred below).
+**16:9:** `screen` fills the frame (letterboxed in `colors.bg` when the recording's aspect
+differs), `pip` adds the speaker as a round bubble 26 % of the frame height in a bottom
+corner above the caption strip, in the corner that covers less of the zoom targets,
+`split` puts the screen in the left 64 % and the speaker face-centred in the right 36 %.
+**1:1:** the screen between the top and bottom safe zones, the bubble pip, `split`
+stacked. The speaker crop (inset, split part) is centred on the segment's face median,
+head and shoulders (face height × 2.6), and at least 0.75 camera px per output px; render
+reports the ratio per segment in render.json `speaker` (`px_ratio`) and warns when it is
+below 1 (upscaled). For a small face (e.g. a video-call tile) `face` runs a second pass
+when the first finds it in < 50 % of the samples: a tile scan with the region of interest
+upscaled (face.json `small_pass`, FACE_VERSION 2). In landscape and square `face`
+segments such a small face (< 25 % of the camera height) gets a closer default crop (zoom
+up to 2×, `face.small_face_zoom`); portrait framing is unchanged. The screen
 frame shown at camera time t is screen time t + offset_s, drawn from the original
 recording. `screen_zoom` keys move the window with a 0.6 s smoothstep: a segment with one
 window is a plain crop + scale; a moving one goes through `perspective` (sense=source,
@@ -269,17 +308,29 @@ its input link size, fixed at configuration, so every zoom ended in the top-left
 every frame that overlaps their range, snapped outward to even pixels. HDR cameras are
 tonemapped per branch (inset, split part) like the face path.
 
-**Sharpness rule.** A zoom window narrower than the view's width at the reel size would
-upscale the screen (< 1 source px per output px); render widens it to that width, warns,
-and lists it in render.json `screen_zoom_clamped` (verify repeats it as info). For a
-2880 px wide recording in a 1080 px reel that is 2.67×; `screen.json` reports the same cap
-as `max_zoom`.
+**Sharpness rule.** A zoom window narrower than the view's width at the job's output size
+would upscale the screen (< 1 source px per output px); render widens it to that width,
+warns, and lists it in render.json `screen_zoom_clamped` (verify repeats it as info). For a
+2880 px wide recording in a 1080 px reel that is 2.67×, in a 1920 px wide 16:9 frame
+1.5× (a 1920 px wide recording has no sharp zoom at all in 16:9); `screen.json` reports
+the caps of the job format as `max_zoom` and of every format in `by_format`.
 
-**Overlays.** overlays.json `views` lists per screen/pip/split stretch the screen view and
-the speaker area (from the same plan render draws). The renderer registers each screen view
-as a block before laying out any item, so captions and scenes keep off it; the face track
-there is the speaker area (pip inset; the speaker's face in split). Captions therefore sit
-below the screen view, outside the speaker. A portrait `screenshot_frame` (screenshot-only
+**Readability.** UI text is taken as 13 logical px (`ui_scale` 2 for recordings with a
+long side ≥ 2700 px, a heuristic); shown smaller than 18 output px it is hard to read.
+`screen.json` `by_format` gives per format and layout `text_px` (whole screen) and
+`readable_zoom`; `edl check` warns `screen_text_small` per window that stays too small,
+verify lists the same as info (`screen.readability`). In 16:9 the whole screen is often
+readable, so the skills zoom only where this says so.
+
+**Overlays.** overlays.json `views` lists per screen/pip/split stretch the screen view, the
+zoom targets (`focus`: output box from the frame a target is reached to the next) and the
+speaker area (from the same plan render draws). The renderer registers the screen view and
+every target as blocks before laying out any item, so captions and scenes keep off them;
+the face track there is the speaker area (pip inset; the speaker's face in split). A screen
+view that fills the frame (≥ 80 % of both sides: 16:9 screen/pip) is the picture itself,
+so its `screen` is null and only the targets and the speaker are kept clear (a target
+covering half the view or more, a screen-shaped zoom box, is not listed: nothing specific
+to avoid); in 9:16 the captions sit below the screen view, outside the speaker. A portrait `screenshot_frame` (screenshot-only
 demos) is drawn as tall as the safe area allows minus room for one caption block and may
 cover the speaker (`stage`: verify does not flag `overlay_on_face` for it).
 
@@ -290,7 +341,9 @@ recording at the mapped time and at ±0.5 s / ±1 s (`screen_time_mismatch` when
 matches clearly better). `screen_overlap` repeats the overlap rule of `edl check`. A cut
 into, out of or between screen views counts as a reframe (no `visual_jump`), a still screen
 in a `screen` segment is not a frozen picture, and blinks are only checked where the camera
-is visible. `overlay_on_screen` flags an item that covers a screen view.
+is visible. In a landscape/square pip the frozen check looks inside the speaker bubble
+only (the rest is a still screen). `overlay_on_screen` flags an item that covers a screen view (one that does not
+fill the frame) or an active zoom target.
 
 **Personal data is a human decision** (`src/videocut/redaction.py`). The plan run lists
 every suspected item (e-mail, phone, name, customer data, other) in `work/redaction.json`

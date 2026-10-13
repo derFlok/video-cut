@@ -3,7 +3,8 @@
 `check` is the gate before a brand is used: it prints the contrast table and advisory
 warnings and exits 1 when brand.json has errors. `show` prints the resolved tokens the
 scenes receive. `sheet` renders the brand's preview sheet: every available scene with
-neutral sample content, in the brand's look.
+neutral sample content, in the brand's look, at an output format (`--format`, default 9:16;
+another format writes preview-<format>.jpg, e.g. preview-16x9.jpg, next to preview.jpg).
 """
 
 import json
@@ -14,11 +15,13 @@ from pathlib import Path
 
 from .. import brand
 from ..paths import RENDERER
+from . import _format
 from ._geometry import safe_zones
 from .common import ToolError, binary, run_tool, write_json
 from .job import AGENT_ENV
 
-SHEET_SIZE = (1080, 1920)
+SHEET_FORMAT = _format.PORTRAIT
+SHEET_SIZE = _format.FORMATS[SHEET_FORMAT]
 SHEET_FPS = 30
 SLOT_S = 2.0  # one scene per slot; the sheet tile is taken SHEET_AT_S into it
 SHEET_AT_S = 1.1
@@ -114,8 +117,8 @@ def scene_names() -> list[str]:
     return sorted(p.stem for p in (RENDERER / "scenes").glob("*.js"))
 
 
-def sheet_spec(tokens: dict, scenes: list[str]) -> dict:
-    """overlays.json for the preview sheet: one SLOT_S slot per scene, each with a sample
+def sheet_spec(tokens: dict, scenes: list[str], size: tuple[int, int] = SHEET_SIZE) -> dict:
+    """overlays.json for the preview sheet at `size`: one SLOT_S slot per scene, each with a sample
     caption group under it (the first slot shows the caption alone), and one tile per slot."""
     slots = ["caption"] + [s for s in scenes if s != "caption"]
     overlays, captions, times = [], [], []
@@ -134,16 +137,23 @@ def sheet_spec(tokens: dict, scenes: list[str]) -> dict:
         captions.append({"t0": t0 + 0.1, "t1": t0 + SLOT_S - 0.1, "words": words})
         times.append(round(t0 + SHEET_AT_S, 3))
     return {
-        "size": list(SHEET_SIZE),
+        "size": list(size),
+        "width": size[0],
+        "height": size[1],
         "fps": SHEET_FPS,
         "duration": len(slots) * SLOT_S,
         "tokens": tokens,
-        "safe": safe_zones(SHEET_SIZE),
+        "safe": safe_zones(size),
         "face": [],
         "captions": captions,
         "overlays": overlays,
         "sheet": {"times": times, "labels": slots, "background": tokens["colors"]["bg"]},
     }
+
+
+def sheet_name(fmt: str) -> str:
+    """preview.jpg for the default format, else e.g. preview-16x9.jpg."""
+    return "preview.jpg" if fmt == SHEET_FORMAT else f"preview-{fmt.replace(':', 'x')}.jpg"
 
 
 def sheet_cmd(args) -> dict:
@@ -154,16 +164,20 @@ def sheet_cmd(args) -> dict:
     tokens, errors, _ = _tokens(args.brand)
     if errors:
         raise ToolError(f"{args.brand}: " + "; ".join(errors))
+    try:
+        fmt = _format.parse_format(args.format)
+    except _format.FormatError as e:
+        raise ToolError(str(e)) from None
     scenes = scene_names()
     if not scenes:
         raise ToolError("renderer/scenes is empty (overlay renderer not installed)")
     out = (
         Path(args.out).expanduser().resolve()
         if args.out
-        else brand.brands_root() / tokens["id"] / "preview.jpg"
+        else brand.brands_root() / tokens["id"] / sheet_name(fmt)
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    spec = sheet_spec(tokens, scenes)
+    spec = sheet_spec(tokens, scenes, _format.FORMATS[fmt])
     with tempfile.TemporaryDirectory(prefix="videocut-sheet-") as tmp:
         doc = Path(tmp) / "overlays.json"
         write_json(doc, spec)
@@ -178,6 +192,7 @@ def sheet_cmd(args) -> dict:
     return {
         "brand": tokens["id"],
         "sheet": str(out),
+        "format": fmt,
         "scenes": shown,
         "no_sample": [s for s in shown if s != "caption" and s not in SAMPLES],
         "fonts": result.get("fonts"),
@@ -201,4 +216,9 @@ def register(subparsers) -> None:
     sh = sub.add_parser("sheet", help="preview sheet: every scene in the brand's look")
     sh.add_argument("brand", help="brand id (or a brand folder)")
     sh.add_argument("--out", help="JPEG to write (default: <brands>/<id>/preview.jpg)")
+    sh.add_argument(
+        "--format",
+        default=SHEET_FORMAT,
+        help=f"output format: {', '.join(_format.FORMATS)} (default {SHEET_FORMAT})",
+    )
     sh.set_defaults(handler=run_tool("brand sheet", sheet_cmd))

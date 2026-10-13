@@ -60,11 +60,19 @@ ids of `work/redaction.json` to redact (the human's decision; without one: all);
 drawn as tall as the safe area allows, at its top, with the caption below it (it may cover
 the speaker, verify marks it `stage`).
 
-**Product demos with a screen recording:** captions and overlays keep off the screen view
-and the speaker inset by themselves (overlays.json `views`); a caption then sits below the
-screen view. Do not put a `screenshot_frame` over a screen segment (the screen is already
-shown). `overlay_on_screen` means an item covers the screen view: move it into a `face`
-segment or drop it.
+**Product demos with a screen recording:** captions and overlays keep clear of the screen
+and the speaker by themselves (overlays.json `views`). How depends on the format
+(`videocut tool job show` → `format`):
+- **9:16 / 4:5 / 1:1**: the screen is a band; overlays keep off the whole screen view and
+  the speaker inset, a caption sits below the screen view.
+- **16:9**: the screen fills the frame (it is the picture), so overlays keep off only the
+  active zoom target and the speaker bubble (bottom corner, above the caption strip);
+  captions are bottom-centre, cards and keywords go to a side column, a lower third
+  bottom-left. In `split` the screen part (left) stays clear as in portrait.
+
+Do not put a `screenshot_frame` over a screen segment (the screen is already shown).
+`overlay_on_screen` means an item covers the screen view or the zoom target: move it to
+another time (a `face` segment, or before/after the target) or drop it.
 
 ## 3. Overlays
 

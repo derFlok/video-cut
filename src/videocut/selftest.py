@@ -4,7 +4,10 @@ The test voice is macOS `say` (German "Anna"), reading a sentence with filler
 words. Video is ffmpeg's test pattern. Nothing leaves the machine.
 """
 
+import contextlib
+import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -227,6 +230,56 @@ def cut() -> str:
     return f"two segments joined with 30 ms fades → {dur:.2f} s"
 
 
+def _tool(*argv: str) -> dict:
+    """`videocut tool <argv>` in-process; its summary line, RuntimeError when it failed
+    (verify: when it could not run; its own judgement is in the summary)."""
+    from .cli import main
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        code = main(["tool", *argv])
+    lines = buf.getvalue().strip().splitlines()
+    summary = json.loads(lines[-1]) if lines else {}
+    if code != 0 or not (summary.get("ok") or argv[0] == "verify"):
+        raise RuntimeError(f"tool {argv[0]} failed: {summary.get('error', code)}")
+    return summary
+
+
+def landscape() -> str:
+    """A short 16:9 job (job.json "format") through render and verify, in a scratch
+    VIDEOCUT_HOME under WORK so no user job or approval is touched."""
+    from .tools.job import approve_job
+
+    clip = WORK / "landscape.mp4"
+    _ff(
+        "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30:duration=3",
+        "-i", str(WORK / "speech.wav"), "-t", "3",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(clip),
+    )  # fmt: skip
+    old = os.environ.get("VIDEOCUT_HOME")
+    os.environ["VIDEOCUT_HOME"] = str(WORK / "home")
+    try:
+        job = Path(_tool("job", "new", str(clip), "--id", "landscape", "--format", "16:9")["job"])
+        edl = {"fps": 30, "size": [1920, 1080], "source": "input/landscape.mp4",
+               "segments": [{"in": 0.2, "out": 1.2}, {"in": 1.6, "out": 2.8}]}  # fmt: skip
+        (job / "work" / "edl.json").write_text(json.dumps(edl))
+        (job / "work" / "project.md").write_text("# Plan: self-test\n")
+        approve_job(job)
+        r = _tool("render", "--job", str(job))
+        v = _tool("verify", "--job", str(job))
+    finally:
+        if old is None:
+            os.environ.pop("VIDEOCUT_HOME", None)
+        else:
+            os.environ["VIDEOCUT_HOME"] = old
+    size = _stream(job / "out" / "reel.mp4", "width,height").replace(",", "x")
+    if size != "1920x1080" or r["size"] != [1920, 1080] or "size" in v.get("failed", []):
+        raise RuntimeError(f"16:9 render is {size}, verify failed {v.get('failed')}")
+    # A 2 s test pattern may miss the loudness target or flag a jump cut; only the size counts.
+    other = f"; verify notes: {', '.join(v['failed'])}" if v.get("failed") else ""
+    return f"{size} reel rendered, size verified ({r['duration']:.1f} s){other}"
+
+
 STEPS: list[tuple[str, Callable[[], str]]] = [
     ("generate test clip", make_clip),
     ("clean audio", denoise),
@@ -235,6 +288,7 @@ STEPS: list[tuple[str, Callable[[], str]]] = [
     ("face tracking", face),
     ("overlay renderer", overlay),
     ("cut + join", cut),
+    ("16:9 render", landscape),
 ]
 
 

@@ -208,3 +208,47 @@ def test_new_with_many_assets_in_one_flag(capsys, tmp_path, videocut_home):
     )  # fmt: skip
     assert code == 0, s
     assert s["assets"] == ["input/one.png", "input/two.jpg", "input/three.webp"]
+
+
+def test_format_on_new_show_and_invalid(capsys, tmp_path):
+    v = _video(tmp_path)
+    code, s, _ = run_tool(capsys, "job", "new", str(v), "--id", "f1")
+    assert code == 0 and s["format"] == "9:16" and s["format_default"] is True
+    code, s, out = run_tool(capsys, "job", "show", "f1")
+    assert s["format"] == "9:16" and s["size"] == [1080, 1920] and s["format_default"]
+    assert "format: 9:16 (1080x1920, default)" in out
+    assert "format" not in json.loads(
+        (tmp_path / "videocut-home" / "jobs" / "f1" / "job.json").read_text()
+    )
+    code, s, _ = run_tool(capsys, "job", "new", str(v), "--id", "f2", "--format", "16x9")
+    assert code == 0 and s["format"] == "16:9" and s["format_default"] is False
+    code, s, _ = run_tool(capsys, "job", "new", str(v), "--id", "f3", "--format", "21:9")
+    assert code == 1 and "9:16" in s["error"] and "4:5" in s["error"]
+
+
+def test_screenshot_assets_default_to_landscape(capsys, tmp_path):
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"png")
+    code, s, _ = run_tool(capsys, "job", "new", str(_video(tmp_path)), "--asset", str(shot))
+    assert code == 0 and s["format"] == "16:9"
+
+
+def test_job_format_sets_replaces_and_says_to_redo_a_plan(capsys, tmp_path, monkeypatch):
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "f4")
+    code, s, out = run_tool(capsys, "job", "format", "f4", "4:5")
+    assert code == 0 and s["format"] == "4:5" and s["previous"] == "9:16" and not s["redo"]
+    job = tmp_path / "videocut-home" / "jobs" / "f4"
+    assert json.loads((job / "job.json").read_text())["format"] == "4:5"
+    (job / "work" / "project.md").write_text("# Plan\n")
+    code, s, out = run_tool(capsys, "job", "format", "--job", str(job), "1:1")
+    assert code == 0 and s["redo"] and "made for 4:5" in out and "videocut run f4" in out
+    code, s, _ = run_tool(capsys, "job", "format", "f4", "square")
+    assert code == 1 and "1:1" in s["error"]
+    # an invalid value in job.json is what the command repairs
+    (job / "job.json").write_text(json.dumps({**json.loads((job / "job.json").read_text()),
+                                              "format": "21:9"}))  # fmt: skip
+    assert run_tool(capsys, "job", "show", "f4")[0] == 1
+    code, s, out = run_tool(capsys, "job", "format", "f4", "9:16")
+    assert code == 0 and s["previous"] is None and s["redo"] and "another format" in out
+    monkeypatch.setenv("VIDEOCUT_AGENT", "1")
+    assert run_tool(capsys, "job", "format", "f4", "16:9")[0] == 1

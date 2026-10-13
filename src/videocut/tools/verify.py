@@ -40,7 +40,8 @@ track are in the output px of work/overlays.json)
     out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
     out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
-<= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s. A preview is
+<= -1.0 dBTP, size of the job's format (job.json "format": 1080x1920 for 9:16, 1920x1080 for
+16:9, ...), no black or frozen stretch longer than 0.5 s. A preview is
 checked at its half size, and its loudness (single-pass) is reported but not judged.
 
 The summary line has `ok` (all global checks pass and no cut or overlay is flagged),
@@ -50,6 +51,7 @@ The exit code is 0 whenever the checks ran.
 """
 
 import json
+import math
 import re
 import subprocess
 from itertools import pairwise
@@ -62,7 +64,7 @@ from ..paths import tool_env
 from . import _image as im
 from . import _plates, _verify_screen
 from . import overlays as overlays_mod
-from ._geometry import overlap, safe_zones
+from ._geometry import job_size, overlap, safe_zones, sized
 from .common import (
     ToolError,
     binary,
@@ -77,7 +79,6 @@ from .face import face_crops, in_blink, load_face
 
 RATE = 48000
 SMALL = (72, 128)  # luma frames for the difference score (w, h)
-TARGET_SIZE = (1080, 1920)
 LUFS_TARGET, LUFS_TOL = -14.0, 1.0
 TRUE_PEAK_MAX = -1.0
 MAX_STRETCH_S = 0.5
@@ -387,11 +388,14 @@ def _num(v) -> bool:
     return isinstance(v, int | float) and not isinstance(v, bool)
 
 
-def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, int], list[str]]:
-    """(boxes or None without work/overlay_boxes.json, face track, overlay size, warnings)."""
+def _load_boxes(
+    job: Path, target: tuple[int, int]
+) -> tuple[list[dict] | None, list[dict], tuple[int, int], list[str]]:
+    """(boxes or None without work/overlay_boxes.json, face track, overlay size (`target`
+    unless overlays.json says otherwise), warnings)."""
     path = job / "work" / "overlay_boxes.json"
     if not path.is_file():
-        return None, [], TARGET_SIZE, []
+        return None, [], target, []
     warnings = []
     edl_path = job / "work" / "edl.json"
     if edl_path.is_file() and not is_fresh([path], [edl_path]):
@@ -399,7 +403,7 @@ def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, in
     try:
         raw = json.loads(path.read_text())
     except ValueError:
-        return None, [], TARGET_SIZE, ["work/overlay_boxes.json is not valid JSON; not checked"]
+        return None, [], target, ["work/overlay_boxes.json is not valid JSON; not checked"]
     boxes = [
         b
         for b in (raw if isinstance(raw, list) else [])
@@ -412,7 +416,7 @@ def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, in
     ]
     if not isinstance(raw, list) or len(boxes) != len(raw):
         warnings.append("work/overlay_boxes.json has malformed entries; they were skipped")
-    face, size = [], TARGET_SIZE
+    face, size = [], target
     try:
         doc = json.loads((job / "work" / "overlays.json").read_text())
         size = (int(doc["size"][0]), int(doc["size"][1]))
@@ -488,14 +492,17 @@ def loudness(reel: Path) -> dict:
     }
 
 
-def bad_stretches(reel: Path, duration: float) -> list[dict]:
-    """Black or frozen stretches longer than MAX_STRETCH_S (ffmpeg blackdetect/freezedetect)."""
+def bad_stretches(reel: Path, duration: float, box: list[int] | None = None) -> list[dict]:
+    """Black or frozen stretches longer than MAX_STRETCH_S (ffmpeg blackdetect/freezedetect),
+    of the whole frame or only inside `box` ([x0, y0, x1, y1] px)."""
+    crop = f"crop={box[2] - box[0]}:{box[3] - box[1]}:{box[0]}:{box[1]}," if box else ""
     log = _info(
         reel,
         [
             "-an",
             "-vf",
-            f"blackdetect=d={MAX_STRETCH_S}:pix_th=0.10,freezedetect=n=0.001:d={MAX_STRETCH_S}",
+            f"{crop}blackdetect=d={MAX_STRETCH_S}:pix_th=0.10,"
+            f"freezedetect=n=0.001:d={MAX_STRETCH_S}",
         ],
     )
     found = [
@@ -512,6 +519,25 @@ def bad_stretches(reel: Path, duration: float) -> list[dict]:
     if open_start is not None and duration - open_start > MAX_STRETCH_S:
         found.append({"kind": "frozen", "t0": open_start, "t1": round(duration, 3)})
     return sorted(found, key=lambda s: s["t0"])
+
+
+def merge_spans(spans: list[tuple[float, float]], slack: float) -> list[tuple[float, float]]:
+    """Time spans with overlapping or touching ones (within `slack`) joined."""
+    out: list[tuple[float, float]] = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1] + slack:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def inscribed(box: list[int]) -> list[int]:
+    """The even-sized square inside the round bubble `box` (its corners show the screen)."""
+    x0, y0, x1, y1 = box
+    side = max(2, int(min(x1 - x0, y1 - y0) / math.sqrt(2)) // 2 * 2)
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    return [cx - side // 2, cy - side // 2, cx - side // 2 + side, cy - side // 2 + side]
 
 
 def _check(ok: bool, **fields) -> dict:
@@ -542,6 +568,7 @@ def verify(args) -> dict:
     reel = job / "out" / reel_name
     if not reel.is_file():
         raise ToolError(f"out/{reel_name} is missing; render first (`videocut tool render`)")
+    target = job_size(job)
     v = im.probe_video(reel)
     fps = v["fps"]
     frames, audio = luma_frames(reel), mono_audio(reel)
@@ -565,7 +592,8 @@ def verify(args) -> dict:
             warnings.append("render.json cuts differ from work/edl.json; the render may be stale")
         else:
             face = load_face(job, edl.source)
-            reframe = reframes(face_crops(edl, face)[0])  # the framing render used
+            framed_edl = face_crops(sized(job, edl)[0], face)[0]  # the framing render used
+            reframe = reframes(framed_edl)
             if face:
                 blink = blinks_at_cuts(edl, face.get("blinks", []))
 
@@ -605,30 +633,39 @@ def verify(args) -> dict:
 
     demo = {}
     if edl is not None:
-        demo = _verify_screen.check(
-            job, json.loads(edl_path.read_text()), render, reel, (v["width"], v["height"])
-        )
+        edl_doc = {**json.loads(edl_path.read_text()), "size": list(target)}  # as render did
+        demo = _verify_screen.check(job, edl_doc, render, reel, (v["width"], v["height"]))
     elif read_job(job).get("screen"):  # a demo reel whose EDL cannot be read: unchecked
         demo = {"error": "work/edl.json is missing or invalid; screen layouts not checked"}
     still_screen = demo.get("spans", [])
+    bubbles = demo.get("bubbles", [])  # landscape/square pip: the camera is the bubble only
 
     loud = loudness(reel)
     # The end card as `videocut tool overlays` scheduled it (after the last word, over the
     # held tail). A static end card is not a frozen picture (one frame of slack each end).
     sched = _plates.for_job(job, edl, edl.output_duration()) if edl is not None else None
     plates = full_frame_spans(sched.overlays) if sched is not None else []
+    still = plates + still_screen
+    if bubbles:  # touching spans count as one (a still screen running into a pip stretch)
+        still = merge_spans(still + [(a, b) for a, b, _ in bubbles], 1 / fps)
     stretches = [
         s
         for s in bad_stretches(reel, video_dur)
         if not (
             s["kind"] == "frozen"
-            and any(
-                a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in plates + still_screen
-            )
+            and any(a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in still)
         )
     ]
+    for box in {tuple(b) for _, _, b in bubbles}:  # a frozen speaker inside the bubble
+        spans = merge_spans([(a, b) for a, b, bb in bubbles if tuple(bb) == box], 1 / fps)
+        for s in bad_stretches(reel, video_dur, inscribed(list(box))):
+            for a, b in spans:
+                t0, t1 = max(s["t0"], a), min(s["t1"], b)
+                if s["kind"] == "frozen" and t1 - t0 > MAX_STRETCH_S:
+                    stretches.append({"kind": "frozen", "t0": t0, "t1": t1, "where": "speaker"})
+    stretches.sort(key=lambda s: s["t0"])
     want = float(render["output_duration"])
-    want_size = tuple(x // 4 * 2 for x in TARGET_SIZE) if preview else TARGET_SIZE
+    want_size = tuple(x // 4 * 2 for x in target) if preview else target
     lufs, peak = loud["integrated_lufs"], loud["true_peak_dbtp"]
     checks = {
         "duration": _check(
@@ -643,7 +680,11 @@ def verify(args) -> dict:
         "true_peak": _check(
             preview or (peak is not None and peak <= TRUE_PEAK_MAX), true_peak_dbtp=peak
         ),
-        "size": _check((v["width"], v["height"]) == want_size, size=[v["width"], v["height"]]),
+        "size": _check(
+            (v["width"], v["height"]) == want_size,
+            size=[v["width"], v["height"]],
+            want=list(want_size),
+        ),
         "black_or_frozen": _check(not stretches, stretches=stretches),
     }
     for old in vdir.glob("cut_*.jpg"):
@@ -655,7 +696,7 @@ def verify(args) -> dict:
     elif "overlap" in demo:
         checks["screen_overlap"] = _check(not demo["overlap"], problems=demo["overlap"])
 
-    boxes, face_track, ov_size, ov_warn = _load_boxes(job)
+    boxes, face_track, ov_size, ov_warn = _load_boxes(job, target)
     warnings += ov_warn
     last_word = sched.last_word if sched is not None else None
     overlay_docs = (
@@ -718,7 +759,9 @@ def verify(args) -> dict:
         "info": info,
         "overlays": overlay_docs,
         "overlay_flagged": overlay_flagged,
-        "screen": {k: demo[k] for k in ("redaction", "screen_time", "clamped") if k in demo},
+        "screen": {
+            k: demo[k] for k in ("redaction", "screen_time", "clamped", "readability") if k in demo
+        },
         "screen_flagged": screen_flagged,
         "screen_zoom_clamped": demo.get("clamped", []),
         "caption_sheets": [str(p.relative_to(job)) for p in sheets],

@@ -31,11 +31,11 @@ function reflow(words, states) {
   return { dx, spread };
 }
 
-function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, position, t0, t1 }) {
+function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, position, anchor, share, reserve = 0, t0, t1 }) {
   let L = null;
   let clear = null; // the largest attempt clear of the face, in no band
   for (const k of [1, 0.85, 0.72, 0.6]) {
-    L = attempt(ctx, env, texts, { px: px * k, role, maxLines, position, t0, t1 });
+    L = attempt(ctx, env, texts, { px: px * k, role, maxLines, position, anchor, share, reserve, t0, t1 });
     if (!L.overlapsFace && L.fits && L.band !== "other") break;
     if (!L.overlapsFace && L.fits) clear = clear || L;
   }
@@ -45,14 +45,20 @@ function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, posi
   return L;
 }
 
-function attempt(ctx, env, texts, { px, role, maxLines, position, t0, t1 }) {
-  const { tokens, size, safe } = env;
+function attempt(ctx, env, texts, { px, role, maxLines, position, anchor, share, reserve, t0, t1 }) {
+  const { tokens, size } = env;
+  // `reserve`: extra room kept free at the foot (the strip of a bottom caption).
+  const safe = reserve ? { ...(env.safe || {}), bottom: ((env.safe && env.safe.bottom) || 0) + reserve } : env.safe;
   const cs = style.captionSettings(tokens);
   const bleed = style.bleed(px);
   const padX = cs.style === "box" ? Math.round(px * 0.45) : Math.round(px * 0.25);
   const padY = Math.round(px * 0.25);
   const scaleRoom = cs.highlight.scale ? SCALE_GROWTH : 0;
-  const avail = size[0] - 2 * ((safe && safe.side) || 0) - 2 * bleed - 2 * padX;
+  const f = style.frame(env);
+  // A landscape frame keeps text lines to 70 % of its width (`share`: another share of
+  // the frame width for the whole block, e.g. a side column).
+  const cap = share ? f.w * share : f.landscape ? f.w * 0.7 : Infinity;
+  const avail = Math.min(size[0] - 2 * ((safe && safe.side) || 0) - 2 * bleed - 2 * padX, cap - 2 * padX);
   ctx.save();
   const fit = fitText(ctx, texts, {
     font: (p) => {
@@ -78,6 +84,7 @@ function attempt(ctx, env, texts, { px, role, maxLines, position, t0, t1 }) {
     face: env.faceDuring(t0, t1),
     avoid: env.blocksDuring(t0, t1),
     position: position || cs.position,
+    anchor,
     margin: reach,
     inset: reach,
   });

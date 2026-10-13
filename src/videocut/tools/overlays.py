@@ -1,12 +1,14 @@
 """`videocut tool overlays [--no-render]` (pipeline step 8): the transparent overlay track.
 
     work/edl.json + work/face.json + brand -> work/overlays.json
-        {"size", "fps", "duration", "tokens", "safe": {"top", "bottom", "side"},
+        {"size", "width", "height", "fps", "duration", "tokens", "safe": {"top", "bottom", "side"},
          "face": [{"t", "box"}], "captions": [...], "overlays": [...]}
     then  node renderer/render.js work/overlays.json --out work/overlay.mov
                                   --boxes work/overlay_boxes.json
 
-Everything is in OUTPUT time and px. `tokens` are the resolved tokens of the job's brand
+Everything is in OUTPUT time and px. The output size is the job's format (job.json "format",
+_format.py), also when the EDL's "size" says otherwise; "width"/"height" repeat it for the
+renderer's scenes. `tokens` are the resolved tokens of the job's brand
 (job.json "brand", default "_example"); the renderer draws only with them. `face` is the
 face track of a current work/face.json mapped through the segments and the very crop
 windows render uses (_geometry), so scenes can keep clear of the face. Screen layouts
@@ -43,7 +45,7 @@ from ..paths import RENDERER, state_dir, tool_env
 from ..redaction import same_asset
 from . import _layouts, _plates
 from . import _render_plan as plan_mod
-from ._geometry import face_track, framed, map_box, safe_zones
+from ._geometry import face_track, framed, map_box, safe_zones, sized
 from .common import (
     ToolError,
     binary,
@@ -58,6 +60,7 @@ from .job import redaction_enforced
 
 DEFAULT_BRAND = brand.EXAMPLE_ID
 SPEAKER_STEP_S = 0.25
+FOCUS_MAX = 0.5  # a zoom target this share of the screen view or more is not kept clear
 RECORDED = ("work/overlay.mov", "work/overlay_boxes.json", "work/overlays.json")
 
 
@@ -101,11 +104,12 @@ def build(job: Path) -> dict:
             f"{len(e.errors)} problem(s) in edl.json: " + "; ".join(e.errors[:5])
         ) from None
     src_size = (int(info["size"][0]), int(info["size"][1]))
+    edl, _ = sized(job, edl)
     edl, _, face = framed(job, edl)
     layouts = [s.layout for s in edl.segments]
     use_layouts = any(lay != "face" for lay in layouts)
     plan = plan_mod.build(edl, src_size, edl.size, layouts if use_layouts else None)
-    views = _views(plan, _layouts.plan_all(job, edl, plan, src_size, face)["segs"], face,
+    views = _views(plan, _layouts.plan_all(job, edl, plan, src_size, face, edl.size)["segs"], face,
                    src_size) if use_layouts else []  # fmt: skip
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
@@ -114,6 +118,8 @@ def build(job: Path) -> dict:
                    key=lambda f: f["t"])  # fmt: skip
     doc = {
         "size": list(edl.size),
+        "width": edl.size[0],
+        "height": edl.size[1],
         "fps": edl.fps,
         "duration": round(plan.duration, 6),
         "tokens": brand_tokens(read_job(job).get("brand") or DEFAULT_BRAND),
@@ -151,10 +157,19 @@ def _redacted(job: Path, item: dict, cands: list[dict]) -> dict:
     return {**item, "props": {**props, "redact": [*have, *boxes]}}
 
 
+def _area(b: list[float]) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
 def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[dict]:
-    """Per non-face range (output time and px): `screen`, the screen view, and `speaker`,
-    where the speaker is (pip: the inset; split: the face box inside the lower part, else
-    that part's top half; screen: none)."""
+    """Per non-face range (output time and px): `screen`, the screen view to keep clear,
+    `focus`, the zoom targets to keep clear ([{"t0", "t1", "box"}]: from the frame a target
+    is reached to the next one), and `speaker`, where the speaker is (pip: the inset; split:
+    the face box inside the speaker part, else that part's upper half; screen: none). A view
+    that fills the frame (_layouts.fills: landscape screen/pip) has `screen` None: the
+    screen is the picture, overlays avoid only its targets and the speaker. A target that
+    covers FOCUS_MAX of the view or more (a screen-shaped zoom box: the zoom only enlarges
+    the whole picture) leaves nothing specific to keep clear and is not listed."""
     out, f0 = [], 0
     median = ((face or {}).get("median") or {}).get("box")
     for i, r in enumerate(plan.ranges):
@@ -170,12 +185,22 @@ def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[di
                 if box:
                     speaker = [box[0] + part.x, box[1] + part.y, box[2] + part.x,
                                box[3] + part.y]  # fmt: skip
+            t0, t1 = round(float(f0 / plan.fps), 6), round(float((f0 + r.frames) / plan.fps), 6)
+            ends = [*seg.focus_at[1:], r.frames][: len(seg.focus_at)]
+            focus = [
+                {"t0": round(float((f0 + a) / plan.fps), 6),
+                 "t1": round(float((f0 + b) / plan.fps), 6), "box": [round(v) for v in box]}
+                for a, b, box in zip(seg.focus_at, ends, seg.focus, strict=True)
+                if b > a and _area(box) < FOCUS_MAX * seg.view.w * seg.view.h
+            ]  # fmt: skip
+            fills = _layouts.fills(seg.view, plan.out_size)
             out.append(
                 {
-                    "t0": round(float(f0 / plan.fps), 6),
-                    "t1": round(float((f0 + r.frames) / plan.fps), 6),
+                    "t0": t0,
+                    "t1": t1,
                     "layout": seg.layout,
-                    "screen": seg.view.box(),
+                    "screen": None if fills else seg.view.box(),
+                    **({"focus": focus} if fills else {}),
                     "speaker": speaker,
                 }
             )

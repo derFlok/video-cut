@@ -5,16 +5,13 @@ render.py crops with exactly these windows and overlays.py maps face boxes throu
 same ones, so a caption placed beside the face in the overlay is beside it in the reel.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..edl import Edl
+from . import _format
+from .common import ToolError, read_job
 from .face import face_crops, load_face
-
-# Organic safe zones of a 1080x1920 reel (docs/BRIEF.md §8): free at the top and bottom
-# (platform UI), and 6 % of the width at the sides.
-SAFE_TOP, SAFE_BOTTOM, SAFE_SIDE = 250, 350, 0.06
-REF_HEIGHT = 1920
 
 
 @dataclass
@@ -45,6 +42,27 @@ def crop_window(
     x = min(max(int(round(cx * sw - w / 2)), 0), sw - w)
     y = min(max(int(round(cy * sh - h / 2)), 0), sh - h)
     return Window(w, h, x, y)
+
+
+def job_size(job: Path) -> tuple[int, int]:
+    """Output size of the job folder's format (job.json "format" or the default rule)."""
+    try:
+        return _format.output_size(read_job(job))
+    except _format.FormatError as e:
+        raise ToolError(f"job.json: {e}") from None
+
+
+def sized(job: Path, edl: Edl) -> tuple[Edl, str | None]:
+    """The EDL at the job's output size, and a note when its own "size" differed (the job's
+    format decides; an EDL written for another format is rendered at the job's)."""
+    size = job_size(job)
+    if tuple(edl.size) == size:
+        return edl, None
+    note = (
+        f"edl.json size {edl.size[0]}x{edl.size[1]} is not the job's format "
+        f"{_format.job_format(read_job(job))} ({size[0]}x{size[1]}); using {size[0]}x{size[1]}"
+    )
+    return replace(edl, size=size), note
 
 
 def framed(job: Path, edl: Edl) -> tuple[Edl, int, dict | None]:
@@ -106,14 +124,8 @@ def face_at(track: list[dict], t: float, max_gap: float = 0.25) -> list[int] | N
 
 
 def safe_zones(size: tuple[int, int]) -> dict:
-    """Organic safe zones in px for an output of `size` (scaled from 1080x1920)."""
-    w, h = size
-    k = h / REF_HEIGHT
-    return {
-        "top": round(SAFE_TOP * k),
-        "bottom": round(SAFE_BOTTOM * k),
-        "side": round(SAFE_SIDE * w),
-    }
+    """Organic safe zones in px for an output of `size` (_format.safe_zones)."""
+    return _format.safe_zones(size)
 
 
 def overlap(a: list[float], b: list[float]) -> float:

@@ -4,7 +4,8 @@
                     px, is checked on sampled output frames of its range (first, middle,
                     last, up to REDACT_SAMPLES): at least REDACT_MIN_SHARE of its pixels
                     must be the brand background. Flag `redaction_missing` otherwise
-                    (a block zoomed fully out of the view has nothing to hide there)
+                    (a block zoomed fully out of the view, or under a landscape/square
+                    speaker bubble, has nothing to hide there; the bubble is left out)
     screen time     per screen segment one output frame (its middle) is compared with the
                     screen recording at the mapped screen time (camera time + offset_s)
                     and at +-0.5 s / +-1 s, through the same zoom window: flag
@@ -12,6 +13,10 @@
                     (static screens match everywhere and pass)
     clamps          render.json `screen_zoom_clamped` (keys widened so the screen stays
                     sharp) are reported as info, never a flag
+    readability     per screen window (the whole screen until the first zoom key, then
+                    each key) the estimated UI text height in output px at the EDL size
+                    (_layouts.readability); `screen_text_small` below TEXT_MIN_PX is
+                    information for the cut agent, never a failure
     overlap         every non-face segment must lie inside work/sync.json "overlap" (the
                     rule of `edl check`); a check that fails otherwise
     decision        every personal-data candidate to redact (the human decision of `job
@@ -36,7 +41,7 @@ from .. import redaction as red_mod
 from ..paths import tool_env
 from . import _layouts
 from . import _render_plan as plan_mod
-from ._geometry import framed
+from ._geometry import framed, sized
 from .common import ToolError, binary
 from .ingest import probe
 from .job import redaction_enforced
@@ -60,11 +65,12 @@ def context(job: Path, data: dict, size: tuple[int, int]) -> dict | None:
     src = (job / data["source"]).resolve()
     info = probe(src)
     edl = edl_mod.from_dict(data, info["duration"])
+    edl, _ = sized(job, edl)  # the job's format, as render drew it
     edl, _, face = framed(job, edl)
     edl = _layouts.with_redaction(edl, redaction_enforced(job)[0])  # what render drew
     layouts = [s.layout for s in edl.segments]
     plan = plan_mod.build(edl, tuple(info["size"]), size, layouts)
-    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
+    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
     starts, f0 = [], 0
     for r in plan.ranges:
         starts.append(f0)
@@ -116,7 +122,7 @@ def _frames(reel: Path, numbers: list[int], size: tuple[int, int]) -> dict[int, 
 def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
     """Per redact block: the sampled output frames, the background share and flags."""
     plan = ctx["plan"]
-    todo = []  # (doc, local n, output frame, rect)
+    todo = []  # (doc, local n, output frame, rect, pip inset)
     docs = []
     for i, seg in ctx["segs"].items():
         r = plan.ranges[i]
@@ -139,21 +145,35 @@ def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
                 rect = [x0 + REDACT_INSET, y0 + REDACT_INSET, x1 - REDACT_INSET, y1 - REDACT_INSET]
                 if rect[2] <= rect[0] or rect[3] <= rect[1]:
                     continue
-                todo.append((doc, n, ctx["starts"][i] + n, rect))
-    frames = _frames(reel, [f for _, _, f, _ in todo], size)
+                todo.append((doc, n, ctx["starts"][i] + n, rect, seg.inset))
+    frames = _frames(reel, [f for _, _, f, _, _ in todo], size)
     bg = _rgb(ctx["bg"])
-    for doc, _, f, rect in todo:
+    for doc, _, f, rect, inset in todo:
         img = frames.get(f)
         if img is None:
             continue
         x0, y0, x1, y1 = rect
         patch = img[y0:y1, x0:x1].astype(int)
-        share = float((np.abs(patch - bg).max(axis=2) <= REDACT_TOL).mean())
+        seen = _uncovered(rect, inset)
+        if not seen.any():  # wholly under the speaker bubble: nothing of it shows
+            continue
+        share = float((np.abs(patch - bg).max(axis=2) <= REDACT_TOL)[seen].mean())
         doc["samples"].append({"t": round(float(f / ctx["plan"].fps), 3), "box": rect,
                                "bg_share": round(share, 3)})  # fmt: skip
         if share < REDACT_MIN_SHARE and "redaction_missing" not in doc["flags"]:
             doc["flags"].append("redaction_missing")
     return docs
+
+
+def _uncovered(rect: list[int], inset) -> np.ndarray:
+    """Mask of the output px of `rect` [x0, y0, x1, y1] not under the pip `inset` (a
+    landscape/square speaker bubble lies over the screen view)."""
+    x0, y0, x1, y1 = rect
+    seen = np.ones((y1 - y0, x1 - x0), bool)
+    if inset is not None:
+        a, b = max(inset.x - x0, 0), max(inset.y - y0, 0)
+        seen[b : max(inset.y + inset.h - y0, 0), a : max(inset.x + inset.w - x0, 0)] = False
+    return seen
 
 
 def _grey(img: np.ndarray) -> np.ndarray:
@@ -200,7 +220,7 @@ def screen_time(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
         if img is None:
             continue
         v = seg.view
-        mask = np.ones((v.h, v.w), bool)
+        mask = _uncovered([v.x, v.y, v.x + v.w, v.y + v.h], seg.inset)
         for n0, n1, x, y, w, h in seg.redact:
             rect = _out_rect(seg, n, x, y, w, h) if n0 <= n <= n1 else None
             if rect:
@@ -247,6 +267,21 @@ def screen_spans(ctx: dict | None) -> list[tuple[float, float]]:
     ]
 
 
+def bubble_spans(ctx: dict | None) -> list[tuple[float, float, list[int]]]:
+    """Output time spans and boxes of the round speaker bubble (landscape/square pip): the
+    rest of such a frame is a still screen, so the camera picture is judged frozen or not
+    inside the bubble only."""
+    if ctx is None:
+        return []
+    plan = ctx["plan"]
+    return [
+        (float(ctx["starts"][i] / plan.fps), float((ctx["starts"][i] + s.frames) / plan.fps),
+         [int(v) for v in s.inset.box()])
+        for i, s in ctx["segs"].items()
+        if s.layout == "pip" and s.inset is not None and s.radius == _layouts.BUBBLE_RADIUS
+    ]  # fmt: skip
+
+
 def overlap_check(job: Path, data: dict) -> list[str]:
     return edl_mod.overlap_errors(data, edl_mod.read_sync(job / "work" / "sync.json"))
 
@@ -257,16 +292,30 @@ def clamped_info(render: dict) -> list[dict]:
 
 
 def load_views(job: Path) -> list[dict]:
+    """The areas overlays keep clear in a product demo, from overlays.json "views":
+    [{"t0", "t1", "screen": box}], a screen view that does not fill the frame and every
+    zoom target ("focus")."""
     try:
         doc = json.loads((job / "work" / "overlays.json").read_text())
     except (OSError, ValueError):
         return []
     views = doc.get("views") if isinstance(doc, dict) else None
-    return [
-        v
-        for v in (views if isinstance(views, list) else [])
-        if isinstance(v, dict) and isinstance(v.get("screen"), list) and len(v["screen"]) == 4
-    ]
+    out = []
+    for v in views if isinstance(views, list) else []:
+        if not isinstance(v, dict):
+            continue
+        focus = v.get("focus") if isinstance(v.get("focus"), list) else []
+        for b in [v, *(f for f in focus if isinstance(f, dict))]:
+            box = b.get("screen", b.get("box"))
+            if isinstance(box, list) and len(box) == 4 and _num(b.get("t0"), b.get("t1"), *box):
+                out.append({"t0": b["t0"], "t1": b["t1"], "screen": box})
+    return out
+
+
+def _num(*vals) -> bool:
+    return all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals
+    )
 
 
 def decision_gaps(job: Path, data: dict) -> list[dict]:
@@ -279,9 +328,21 @@ def decision_gaps(job: Path, data: dict) -> list[dict]:
     ]
 
 
+def readability(ctx: dict) -> list[dict]:
+    """UI text height per screen window of every non-face segment:
+    [{"segment", "layout", "t", "zoom", "text_px", "readable_zoom", "flags"}]."""
+    edl, screen = ctx["edl"], tuple(ctx["info"]["size"])
+    return [
+        {"segment": k, "layout": s.layout, **doc}
+        for k, s in enumerate(edl.segments)
+        if s.layout != "face"
+        for doc in _layouts.readability(s, screen, tuple(edl.size))
+    ]
+
+
 def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]) -> dict:
-    """All product-demo checks: {"redaction", "screen_time", "clamped", "overlap",
-    "spans", "decision"}; only "decision" for a face-only EDL."""
+    """All product-demo checks: {"redaction", "screen_time", "clamped", "readability",
+    "overlap", "spans", "decision"}; only "decision" for a face-only EDL."""
     try:
         gaps = decision_gaps(job, data)
         ctx = context(job, data, size)
@@ -298,6 +359,8 @@ def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]
         "redaction": red_docs,
         "screen_time": time_docs,
         "clamped": clamped_info(render),
+        "readability": readability(ctx),
         "overlap": overlap_check(job, data),
         "spans": screen_spans(ctx),
+        "bubbles": bubble_spans(ctx),
     }

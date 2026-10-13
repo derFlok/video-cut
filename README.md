@@ -1,6 +1,6 @@
 # Video Cut
 
-**Claude cuts your videos, on your Mac.** Record yourself talking, drop the file in, pick a video type and a brand, and Video Cut turns it into a finished short video: filler words and pauses removed, vertical 9:16 framing, animated captions, graphics that back up what you say, clean audio, music underneath.
+**Claude cuts your videos, on your Mac.** Record yourself talking, drop the file in, pick a video type and a brand, and Video Cut turns it into a finished short video: filler words and pauses removed, vertical 9:16 framing (or 16:9, 1:1, 4:5 per video), animated captions, graphics that back up what you say, clean audio, music underneath.
 
 Video and audio never leave your machine. Claude only receives text (the transcript) and small still images at decision points.
 
@@ -59,7 +59,8 @@ Your brands, projects and downloaded models live in `~/VideoCut` (change with `V
 3. **You approve** the plan in the terminal (edit `project.md` first if you like). Nothing is
    cut before that. To decide later: `videocut tool job approve <id>`, then `videocut run <id>`.
 4. **Cut:** Claude writes the edit list, renders a preview, checks every cut (clicks, jumps,
-   loudness), fixes up to three rounds and renders `out/reel.mp4` (1080×1920, −14 LUFS).
+   loudness), fixes up to three rounds and renders `out/reel.mp4` (in the job's format, e.g.
+   1080×1920; −14 LUFS).
    `work/cut_report.md` lists what changed and any open doubts.
 5. **Captions and overlays** (with `--brand`): Claude adds captions and a few overlays (key
    words, numbers, questions, screenshots) in your brand's look, using only what you say.
@@ -68,8 +69,16 @@ Your brands, projects and downloaded models live in `~/VideoCut` (change with `V
 
 Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--screen FILE` (a
 screen recording made at the same time, for a new job), `--asset FILE...` (screenshots for a
-new job; put it last), `--demo-data` (personal data the plan found is demo data), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
+new job; put it last), `--demo-data` (personal data the plan found is demo data),
+`--format 9:16|16:9|1:1|4:5` (output format; for an existing job it replaces the format and
+cuts again), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
 logged in `work/runs.jsonl`.
+
+**Output format** (per video): `9:16` 1080×1920 (Reels, Shorts, Stories), `16:9` 1920×1080
+(YouTube, website, presentations), `1:1` 1080×1080 and `4:5` 1080×1350 (feed posts).
+Default: `16:9` when the job has a screen recording or screenshots (a product demo), else
+`9:16`. Change it later with `videocut tool job format <id> 16:9`; `videocut tool job show
+<id>` prints it.
 
 ## Recording a product demo
 
@@ -85,10 +94,16 @@ logged in `work/runs.jsonl`.
    webcam), then start the screen recording. Optional: clap once in view of the camera at
    the start; it helps when the room is noisy.
 3. Do the demo and talk as usual; stop both recordings at the end.
+
+   Tip for a 16:9 demo (the default here): record the Mac screen at its native resolution —
+   the screen then fills the video and stays sharp, zooms are only needed for small text.
+   Record yourself with a separate camera (phone or webcam); a camera picture of you gives a
+   much better round picture-in-picture bubble than a small video-call tile.
 4. Run the first command above. Prep syncs the two recordings (`work/sync.json`) and finds
    clicks and changes on the screen. The plan says which parts show you, the screen, or
-   both (a small picture of you below the screen, or screen on top and you below), where to
-   zoom in, and which places may show personal data (e-mail addresses, phone numbers,
+   both (in 16:9: the screen fills the frame with you as a round bubble in a corner, or the
+   screen beside you; in 9:16: a small picture of you below the screen, or screen on top
+   and you below), where to zoom in, and which places may show personal data (e-mail addresses, phone numbers,
    names). **Demo data?** You are asked at approval: all demo, redact all, or pick numbers
    (or pass `--demo-data`). Without an answer everything listed is covered with solid
    blocks.

@@ -7,6 +7,7 @@ Timing: every segment boundary and zoom key is snapped to the output frame grid
 snapped duration, so audio and video never drift apart however many cuts there are.
 """
 
+import math
 from dataclasses import dataclass, replace
 from fractions import Fraction
 
@@ -14,12 +15,19 @@ from ..edl import Edl
 from ._geometry import Window, crop_window
 
 SHARP_MIN_WIDTH = 608  # crop narrower than this is visibly soft at 1080 wide (BRIEF §10)
+SHARP_REF_WIDTH = 1080
 TARGET_I, TARGET_TP, TARGET_LRA = -14.0, -1.0, 11.0
 # loudnorm aims this much below TARGET_TP: AAC encoding overshoots the true peak by a few
 # tenths of a dB, and the finished file must still stay at or below TARGET_TP.
 TP_HEADROOM = 0.5
 MEASURED_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
 RATE = 48000
+
+
+def sharp_min_width(out_size: tuple[int, int]) -> int:
+    """Narrowest face crop (source px) that still looks sharp at `out_size`: SHARP_MIN_WIDTH
+    at 1080 wide, the same source px per output px at any other output width."""
+    return math.ceil(SHARP_MIN_WIDTH * out_size[0] / SHARP_REF_WIDTH)
 
 
 @dataclass

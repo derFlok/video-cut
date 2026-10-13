@@ -3,6 +3,7 @@
 // "speaker" is the reply, tail bottom right, in the inverted pair.
 // Colours, fonts and motion come only from env.tokens.
 
+const style = require("../lib/style");
 const card = require("../lib/card");
 
 const name = "chat_bubble";
@@ -14,7 +15,7 @@ function layout(ctx, item, env) {
   if (!textOf(item)) return null;
   return env.once(item, () =>
     card.layoutCard(env, item, (k) => {
-      const px = env.size[0] * 0.058 * k;
+      const px = style.frame(env).unit * 0.058 * k;
       const padX = Math.round(px * 0.7);
       const padY = Math.round(px * 0.5);
       const tail = Math.round(px * 0.55);
