@@ -43,7 +43,8 @@ Marken, Projekte und Modelle liegen in `~/VideoCut` (änderbar über `VIDEOCUT_H
 
 Optionen: `--approve` (ohne Nachfrage), `--replan`, `--recut`, `--brand <id>`, `--screen DATEI`
 (gleichzeitig aufgenommene Bildschirmaufnahme, für einen neuen Auftrag), `--asset DATEI...`
-(Screenshots für einen neuen Auftrag; als letzte Option angeben), `--max-turns N`. Zeit, Turns,
+(Screenshots für einen neuen Auftrag; als letzte Option angeben), `--demo-data` (gefundene
+persönliche Daten sind Demodaten), `--max-turns N`. Zeit, Turns,
 Kosten und Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
 
 ## Produktdemo aufnehmen
@@ -63,9 +64,10 @@ Kosten und Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
 4. Den ersten Befehl oben starten. Die Vorbereitung synchronisiert beide Aufnahmen
    (`work/sync.json`) und findet Klicks und Änderungen auf dem Bildschirm. Der Plan sagt,
    wo du zu sehen bist, wo der Bildschirm oder beides (du klein unter dem Bildschirm, oder
-   Bildschirm oben und du unten), wohin gezoomt wird und was verdeckt wird (E-Mail-Adressen,
-   Telefonnummern, Namen). Nach deiner Freigabe werden diese Stellen mit vollen Flächen
-   abgedeckt, bevor irgendetwas gerendert wird.
+   Bildschirm oben und du unten), wohin gezoomt wird und welche Stellen persönliche Daten
+   zeigen könnten (E-Mail-Adressen, Telefonnummern, Namen). **Demodaten?** Du wirst bei der
+   Freigabe gefragt: alles Demo, alles abdecken oder Nummern wählen (oder `--demo-data`).
+   Ohne Antwort wird alles Gelistete mit vollen Flächen abgedeckt.
 5. Ist die Synchronisierung unsicher, hält der Lauf an und erklärt, wie du sie von Hand
    setzt: `videocut tool sync --job <id> --offset <Sekunden>` (Bildschirmzeit minus
    Kamerazeit eines Moments, den man in beiden sieht oder hört), dann `videocut run <id>`.

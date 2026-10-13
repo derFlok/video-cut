@@ -68,7 +68,7 @@ Your brands, projects and downloaded models live in `~/VideoCut` (change with `V
 
 Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--screen FILE` (a
 screen recording made at the same time, for a new job), `--asset FILE...` (screenshots for a
-new job; put it last), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
+new job; put it last), `--demo-data` (personal data the plan found is demo data), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
 logged in `work/runs.jsonl`.
 
 ## Recording a product demo
@@ -88,8 +88,10 @@ logged in `work/runs.jsonl`.
 4. Run the first command above. Prep syncs the two recordings (`work/sync.json`) and finds
    clicks and changes on the screen. The plan says which parts show you, the screen, or
    both (a small picture of you below the screen, or screen on top and you below), where to
-   zoom in, and what to hide (e-mail addresses, phone numbers, names). After your approval
-   these hidden parts are covered with solid blocks before anything is rendered.
+   zoom in, and which places may show personal data (e-mail addresses, phone numbers,
+   names). **Demo data?** You are asked at approval: all demo, redact all, or pick numbers
+   (or pass `--demo-data`). Without an answer everything listed is covered with solid
+   blocks.
 5. If the sync is unsure, the run stops and tells you how to set it by hand:
    `videocut tool sync --job <id> --offset <seconds>` (screen time minus camera time of one
    moment you can see or hear in both), then `videocut run <id>`.

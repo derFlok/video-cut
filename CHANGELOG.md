@@ -273,9 +273,23 @@
   block) instead of a landscape-sized box and may cover the speaker (`stage`).
 - README / README.de: "Recording a product demo" / "Produktdemo aufnehmen".
 
+- Personal data is a human decision at the plan gate: the plan writes candidates to
+  `work/redaction.json` (and numbered in project.md); `videocut run` asks "Demo data? [a]ll
+  demo / [r]edact all / [s]elect", `--demo-data` = all demo; `videocut tool job redaction
+  --all-demo | --redact-all | --redact 1,3` (human only). The decision is stored outside the
+  job folder with the SHA-256 of the list; a changed list invalidates it. Safe default: all
+  candidates redacted, and render/overlays add them even when the EDL forgot one;
+  `edl check` and verify flag `redaction_missing`.
+
 ### Fixed — Product demos
 - Moving screen zooms ended in the top-left corner: `crop` after a per-frame `scale` clamps
   x/y to its configured input size. Moving windows now go through `perspective`
   (sub-pixel, eval=frame); a test checks that the zoomed view shows the target region.
+- Review fixes: a manual `sync --offset` is reused by later runs (the only way for a screen
+  recording without audio; `videocut run` looped on the sync stop); redact ranges get one
+  frame of slack on each side plus the drift over the segment, and the measured drift is
+  applied per segment; the screen stream starts at its first video frame
+  (`setpts=PTS-STARTPTS`, as sync and the proxy count); verify fails closed when the screen
+  checks cannot run or a demo reel's EDL is unreadable.
 - `work/screen.json` is removed with the other screen outputs when the screen recording is
   replaced (a hard link keeps the old mtime, so freshness could not tell).

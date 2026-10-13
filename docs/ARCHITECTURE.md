@@ -33,7 +33,7 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--id]`, `job show [job]`, `job approve [job]`, `job brand <id>`, `job screen <file>` | `job.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>` | `job.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]` | `brand.py` |
 | `captions [--force]` | `captions.py` |
 | `overlays [--no-render]` | `overlays.py` |
@@ -70,7 +70,7 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            sheets/contact_NN.jpg, burst_*.jpg, timeline_*.jpg, screen_*.jpg,
            assets_NN.jpg                                                         sheet
            contract.md (reel contract of the type, copied by `run` if one exists)
-           project.md                                                            plan run
+           project.md, redaction.json (personal-data candidates)                 plan run
            edl.json, render_filter.txt, cut_report.md                            cut run
            overlays.json, overlay.mov, overlay_boxes.json, overlay_report.md     overlay run
            runs.jsonl, claude-plan.jsonl, claude-cut.jsonl                       videocut run
@@ -291,6 +291,22 @@ matches clearly better). `screen_overlap` repeats the overlap rule of `edl check
 into, out of or between screen views counts as a reframe (no `visual_jump`), a still screen
 in a `screen` segment is not a frozen picture, and blinks are only checked where the camera
 is visible. `overlay_on_screen` flags an item that covers a screen view.
+
+**Personal data is a human decision** (`src/videocut/redaction.py`). The plan run lists
+every suspected item (e-mail, phone, name, customer data, other) in `work/redaction.json`
+(camera time + screen box, or screenshot file + box) and numbered in project.md. Whether
+it is demo data is decided by a human only: the approval prompt of `videocut run` asks
+"[a]ll demo / [r]edact all / [s]elect", `--demo-data` records "all demo" (method `flag`),
+and `videocut tool job redaction <job> --all-demo | --redact-all | --redact 1,3` refuses
+inside an agent run. The decision lives in `$VIDEOCUT_HOME/state/<job>/redaction_decision.json`
+with the SHA-256 of redaction.json and a copy of it. Safe default: without a valid decision
+(none, or the list changed) every candidate is redacted; what a decision once marked
+"redact" and what the approval record saw (`redaction_candidates`) stay redacted even if
+the list is edited later. Render adds a redact block for every enforced screen candidate to
+the screen segments it overlaps (render.json `redaction`: source `decision` or `default`),
+overlays add enforced screenshot boxes to `screenshot_frame` items, and `edl check` /
+verify flag `redaction_missing` when the EDL itself lacks one (the cut must be explicit).
+An unreadable redaction.json fails closed (no approval, no render).
 
 **Screenshots only.** `job new --asset FILE...` takes many images; `sheet assets` puts them
 on one numbered contact sheet (≤ 1080×1920, with sizes and orientation in the summary), so
