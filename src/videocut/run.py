@@ -276,6 +276,17 @@ def _tokens(usage: dict | None) -> int | None:
     return sum(int(usage.get(k) or 0) for k in keys)
 
 
+def _fs_now(job: Path) -> float:
+    """Now, on the clock file mtimes use (Linux stamps files from a coarser clock than
+    time.time(), so a file written right after time.time() can look older)."""
+    mark = job / ".started"
+    mark.touch()
+    try:
+        return mark.stat().st_mtime
+    finally:
+        mark.unlink(missing_ok=True)
+
+
 def _mtime(p: Path) -> float | None:
     return p.stat().st_mtime if p.is_file() else None
 
@@ -495,7 +506,7 @@ def run(
             record_cut(job, approved_sha)  # a job cut before the record existed
     else:
         resume = plan_session if plan_session and project_sha(job) == plan_sha else None
-        started = time.time()
+        started = _fs_now(job)
         prompt = CUT_PROMPT
         if not plan_session and (job / "out" / "reel.mp4").is_file():
             why = "--recut" if recut else "the plan or the personal-data decision changed"
@@ -509,7 +520,7 @@ def run(
     job_brand = read_job(job).get("brand")
     if job_brand and (brand or not overlays_done(job, job_brand)):
         cut_sha = segments_sha(job)
-        started = time.time()
+        started = _fs_now(job)
         prompt = OVERLAYS_PROMPT
         old = read_job(job).get("overlays")
         edl_caps = (json.loads(edl.read_text()).get("captions") if edl.is_file() else None) or []

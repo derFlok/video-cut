@@ -23,7 +23,10 @@ jobs:
           uvx ruff@0.17.0 format --check src tests
       - name: shellcheck
         run: shellcheck start.sh uninstall.sh .githooks/pre-commit
+      # The project's locked dependencies (Linux wheels; MLX installs but cannot run, so
+      # transcription tests stop at the missing model) plus the dev group (pytest). Tests
+      # that need macOS `say` or ffmpeg are skipped (marker `media`).
       - name: unit tests
-        env:
-          PYTHONPATH: src
-        run: uv run --no-project --python 3.12 --with pytest python -m pytest -q
+        run: |
+          uv sync --frozen --python 3.12
+          uv run --frozen python -m pytest -q

@@ -77,15 +77,28 @@ def _clean(raw: list[tuple[str, float, float, float | None]], duration: float) -
     return words
 
 
+def _mlx(module: str):
+    """Import an MLX package; a clear error where MLX cannot run (it needs Apple silicon)."""
+    import importlib
+
+    try:
+        return importlib.import_module(module)
+    except ImportError as e:
+        raise ToolError(
+            f"{module} cannot load here ({e}); transcription needs Apple silicon"
+        ) from None
+
+
 def run_whisper(audio: Path, language: str | None, prompt: bool = True) -> tuple[list, str, bool]:
     """Words from mlx-whisper; the bool says whether the filler prompt was kept."""
-    import mlx_whisper
+    d = model_dir("turbo")
+    mlx_whisper = _mlx("mlx_whisper")
 
     text = FILLER_PROMPT.get(language or "") if prompt else None
     while True:
         result = mlx_whisper.transcribe(
             str(audio),
-            path_or_hf_repo=str(model_dir("turbo")),
+            path_or_hf_repo=str(d),
             word_timestamps=True,
             language=language,
             initial_prompt=text,
@@ -112,9 +125,7 @@ def run_whisper(audio: Path, language: str | None, prompt: bool = True) -> tuple
 def run_parakeet(audio: Path) -> tuple[list, str]:
     d = model_dir("parakeet")
     os.environ["HF_HUB_OFFLINE"] = "1"  # load from the local folder, never the network
-    from parakeet_mlx import from_pretrained
-
-    model = from_pretrained(str(d))
+    model = _mlx("parakeet_mlx").from_pretrained(str(d))
     duration = wav_duration(audio)
     result = model.transcribe(str(audio), chunk_duration=120.0 if duration > 150 else None)
     # Tokens are sub-words; a token starting with a space begins a new word.

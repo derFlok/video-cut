@@ -298,6 +298,13 @@
   so it replaces the EDL instead of stopping to protect the earlier overlays; a cut record
   from before `redaction_sha256` keeps its reel.
 
+- CI `lint-and-test` (red on main since #10): the unit tests ran without the project's
+  dependencies (`--no-project --with pytest`, 14 collection errors for numpy). Now
+  `uv sync --frozen` installs the locked Linux wheels; MLX imports are checked after the
+  model and fail with a clear message off Apple silicon; `videocut run` takes its start time
+  from the file clock (Linux stamps files from a coarser clock than `time.time()`, so a
+  fresh render looked older than the run). Linux: 213 passed, 119 skipped (media).
+
 ### Observed — Product demos (real agent runs, generated test material, brand-c locally)
 
 - Screen demo (25 s camera + screen recording with a fake e-mail and phone number, sync
