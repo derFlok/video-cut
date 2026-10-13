@@ -1,5 +1,4 @@
 /// <reference types="vitest/config" />
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -10,7 +9,7 @@ export default defineConfig(({ mode }) => ({
   base: "./",
   define: { __MOCK__: JSON.stringify(mode === "mock") },
   build: {
-    outDir: fileURLToPath(new URL("../src/videocut/web/dist", import.meta.url)),
+    outDir: "../src/videocut/web/dist", // relative to app/ (no Node types needed here)
     emptyOutDir: true,
     sourcemap: false,
   },
