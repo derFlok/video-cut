@@ -72,11 +72,13 @@ function focusRect(src, focus) {
   return [x, y, fw, fh];
 }
 
-// Whether the item must be laid out before the time-ordered rest (a portrait screenshot).
+// Whether the item must be laid out before the time-ordered rest: a portrait screenshot,
+// and any screenshot in a landscape frame (it is the picture of the moment there).
 function layoutFirst(item, env) {
   const file = fileOf(item);
   const img = file && env.image(file);
-  return !!(img && img.width > 0 && img.height > 0 && img.width < img.height);
+  if (!(img && img.width > 0 && img.height > 0)) return false;
+  return img.width < img.height || style.frame(env).landscape;
 }
 
 function layout(ctx, item, env) {
@@ -92,26 +94,42 @@ function layout(ctx, item, env) {
     const focus = p.focus == null ? null : normBox(p.focus, "focus");
     const src = redacted(env, img, boxes, card.palette(env.tokens).text);
     const ar = src.w / src.h;
-    const { size, safe } = env;
-    const usableH = size[1] - ((safe && safe.top) || 0) - ((safe && safe.bottom) || 0);
+    const { safe } = env;
+    const f = style.frame(env);
+    const usableH = f.h - ((safe && safe.top) || 0) - ((safe && safe.bottom) || 0);
     // Landscape: a card of at most LANDSCAPE_H of the usable height, clear of the face.
     // Portrait (a phone screenshot): as tall as the safe area allows, at its top, minus
     // room for one caption block below it; it is the picture of the moment and may cover
     // the speaker (stage). It is laid out before the captions (layoutFirst), so they take
     // the room below instead of pushing it aside.
+    // Landscape frame: the screenshot is the picture of the moment (stage), fitted into the
+    // area above the caption strip keeping its aspect: a landscape screenshot fills it, a
+    // portrait one stands at the right edge with the side space left free.
     const portrait = ar < 1;
+    const wideFrame = f.landscape;
+    const stage = portrait || wideFrame;
+    const reserve = style.captionReserve(env);
     const L = card.layoutCard(
       env,
       item,
       (k) => {
-        const px = size[0] * 0.05 * k;
+        const px = f.unit * 0.05 * k;
         const pad = Math.round(px * 0.3);
         const reach = style.bleed(px);
-        const maxH = portrait ? usableH * (1 - CAPTION_ROOM) - 2 * pad - 2 * reach : usableH * LANDSCAPE_H;
-        const iw = Math.min(card.maxCardWidth(env, px, pad), maxH * ar) * k;
+        const maxH = wideFrame
+          ? usableH - reserve - 2 * pad - 2 * reach
+          : portrait
+            ? usableH * (1 - CAPTION_ROOM) - 2 * pad - 2 * reach
+            : usableH * LANDSCAPE_H;
+        const room = wideFrame ? f.w - 2 * ((safe && safe.side) || 0) - 2 * reach - 2 * pad : card.maxCardWidth(env, px, pad);
+        const iw = Math.min(room, maxH * ar) * k;
         return { px, pad, iw, ih: iw / ar, w: iw + 2 * pad, h: iw / ar + 2 * pad };
       },
-      { stage: portrait, position: portrait ? "top" : "center" },
+      {
+        stage,
+        position: portrait && !wideFrame ? "top" : "center",
+        landscape: { position: "center", anchor: portrait ? "right" : "center" },
+      },
     );
     return { ...L, src, focus: focus && focusRect(src, focus) };
   });

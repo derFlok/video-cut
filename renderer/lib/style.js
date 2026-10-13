@@ -16,6 +16,36 @@ function captionColors(tokens) {
   };
 }
 
+// The frame a scene lays out in: width/height from the renderer (env.width/env.height,
+// else env.size), 1080x1920 when none is given. `unit` is the short side: the type scale
+// follows it, so text is as large on a 1920x1080 frame as on a 1080x1920 one. `aspect`
+// is "portrait" (h/w > 1.2), "landscape" (w/h > 1.2) or "square".
+function frame(env) {
+  const size = env.size || [];
+  const w = Number(env.width) > 0 ? Number(env.width) : Number(size[0]) > 0 ? Number(size[0]) : 1080;
+  const h = Number(env.height) > 0 ? Number(env.height) : Number(size[1]) > 0 ? Number(size[1]) : 1920;
+  const aspect = h / w > 1.2 ? "portrait" : w / h > 1.2 ? "landscape" : "square";
+  // `tall`: 9:16-like frames, where the bands of the vertical stack have room; the
+  // other frames (landscape, square, 4:5) keep a strip at the foot for the caption.
+  return { w, h, unit: Math.min(w, h), aspect, landscape: aspect === "landscape", tall: h / w >= 1.6 };
+}
+
+// Font size of a caption: a share of the short side; a bit smaller in a frame that is not
+// tall (landscape, square, 4:5), where the block sits in front of the picture and the
+// vertical room is short.
+function captionPx(env) {
+  const f = frame(env);
+  return f.unit * (f.tall ? 0.07 : 0.055);
+}
+
+// Room a bottom-centre caption block of a landscape frame takes at the foot of the
+// allowed area: two lines with padding, plus the transition bleed above and below (the
+// blocks beside it keep that far from it, whichever is laid out first).
+function captionReserve(env) {
+  const px = captionPx(env);
+  return Math.ceil(2 * Math.round(px * 1.18) + 2 * Math.round(px * 0.25) + 2 * bleed(px)) + 2;
+}
+
 function weights(tokens) {
   const ws = ((tokens.fonts && tokens.fonts.weights) || []).filter(Number.isFinite);
   return ws.length ? ws : [400, 700];
@@ -116,6 +146,9 @@ function bleed(px) {
 }
 
 module.exports = {
+  frame,
+  captionPx,
+  captionReserve,
   captionColors,
   weights,
   strongest,

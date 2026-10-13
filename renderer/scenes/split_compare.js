@@ -19,12 +19,17 @@ function layout(ctx, item, env) {
   const r = side(item, "right");
   if (!(l.title || l.text || r.title || r.text)) return null;
   return env.once(item, () => {
-    const { tokens, size } = env;
-    return card.layoutCard(env, item, (k) => {
-      const px = size[0] * 0.05 * k;
+    const { tokens } = env;
+    const f = style.frame(env);
+    // Landscape: the pair sits at the foot of the frame (above the caption strip), wide.
+    return card.layoutCard(
+      env,
+      item,
+      (k) => {
+      const px = f.unit * 0.05 * k;
       const pad = Math.round(px * 0.6);
       const gap = Math.round(px * 0.4);
-      const colW = (card.maxCardWidth(env, px, 0) - gap) / 2 - 2 * pad;
+      const colW = (card.maxCardWidth(env, px, 0, true) - gap) / 2 - 2 * pad;
       const col = (s) => {
         const title = s.title ? card.textRun(ctx, env, style.setCase(tokens, s.title), { px: px * 1.15, role: "heading", maxWidth: colW, maxLines: 2 }) : null;
         const text = s.text ? card.textRun(ctx, env, s.text, { px, role: "body", maxWidth: colW, maxLines: 6 }) : null;
@@ -35,7 +40,9 @@ function layout(ctx, item, env) {
       const right = col(side(item, "right"));
       const h = Math.max(left.h, right.h) + 2 * pad;
       return { px, pad, gap, colW, left, right, w: 2 * (colW + 2 * pad) + gap, h };
-    });
+      },
+      { landscape: { position: "lower", anchor: "center" } },
+    );
   });
 }
 

@@ -122,6 +122,8 @@ function pageMain(spec) {
   const env = {
     tokens,
     size,
+    width: size[0],
+    height: size[1],
     safe,
     fonts: { family: fontFamily, ready: true },
     faceAt: (t) => faceAt(face, t),
@@ -333,6 +335,14 @@ function validViews(views) {
     .map((v) => ({ t0: v.t0, t1: v.t1, screen: v.screen.slice() }));
 }
 
+// The frame size: spec.size, else spec.width x spec.height, else 1080x1920 (the 9:16
+// reel every call used before output formats existed). Written back as spec.size so the
+// rest of the renderer has one place to read it from.
+function resolveSize(spec) {
+  if (spec.size === undefined) spec.size = [spec.width ?? 1080, spec.height ?? 1920];
+  return spec;
+}
+
 function validate(spec) {
   const errs = [];
   const okSize = Array.isArray(spec.size) && spec.size.length === 2 && spec.size.every((v) => Number.isInteger(v) && v > 0);
@@ -410,7 +420,7 @@ const round = (v, n = 2) => Math.round(v * 10 ** n) / 10 ** n;
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const spec = JSON.parse(fs.readFileSync(args.input, "utf8"));
+  const spec = resolveSize(JSON.parse(fs.readFileSync(args.input, "utf8")));
   validate(spec);
   const size = spec.size;
   const fps = spec.fps;

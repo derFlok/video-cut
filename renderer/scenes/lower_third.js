@@ -14,12 +14,13 @@ const subOf = (item) => String((item.props && item.props.subtitle) || "").trim()
 function layout(ctx, item, env) {
   if (!titleOf(item)) return null;
   return env.once(item, () => {
-    const { tokens, size } = env;
+    const { tokens } = env;
+    const unit = style.frame(env).unit;
     return card.layoutCard(
       env,
       item,
       (k) => {
-        const px = size[0] * 0.055 * k;
+        const px = unit * 0.055 * k;
         const pad = Math.round(px * 0.55);
         const rule = Math.max(3, Math.round(px * 0.12));
         const ruleGap = Math.round(px * 0.45);
@@ -39,7 +40,8 @@ function layout(ctx, item, env) {
           h: title.height + between + (sub ? sub.height : 0) + 2 * pad,
         };
       },
-      { position: "lower" },
+      // Landscape: bottom left of the area above the caption strip.
+      { position: "lower", landscape: { position: "bottom", anchor: "left" } },
     );
   });
 }

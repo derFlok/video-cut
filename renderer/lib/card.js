@@ -123,9 +123,15 @@ function drawRun(ctx, env, run, x, y, align, color) {
 }
 
 // Content width a card may use at most (safe area minus transition bleed and padding).
-function maxCardWidth(env, px, pad) {
+// In a landscape frame a card stays in a side column (at most 33 % of the frame width,
+// 50 % for a `wide` card such as a comparison).
+function maxCardWidth(env, px, pad, wide = false) {
   const side = (env.safe && env.safe.side) || 0;
-  return env.size[0] - 2 * side - 2 * style.bleed(px) - 2 * pad;
+  const f = style.frame(env);
+  const room = f.w - 2 * side - 2 * style.bleed(px) - 2 * pad;
+  if (f.tall) return room;
+  const share = f.landscape ? (wide ? 0.5 : 0.33) : wide ? 0.88 : 0.66;
+  return Math.min(room, f.w * share - 2 * pad) * (env.cardNarrow || 1);
 }
 
 // Place a card measured by `measure(k)` (k: scale 1 .. 0.6; returns {w, h, px, ...}),
@@ -135,11 +141,32 @@ function maxCardWidth(env, px, pad) {
 // overlapsFace, overlapsBlock}. `stage`: the card is the picture of the moment and may
 // cover the speaker (a portrait screenshot): placed clear of other blocks only, at the
 // largest size that fits.
-function layoutCard(env, item, measure, { position = "center", stage = false } = {}) {
-  const { size, safe } = env;
+// A frame that is not tall keeps above the strip a bottom caption needs. In a landscape
+// frame a card also goes to the free side (right edge first, then left); `landscape: {position, anchor,
+// reserve}` overrides that per scene (a lower third sits at the foot, bottom left).
+function layoutCard(env, item, measure, { position = "center", stage = false, landscape } = {}) {
+  const f = style.frame(env);
+  // A frame that is not tall (square, 4:5) keeps the centre first and uses the sides
+  // when the face leaves no room there; 9:16 stays centred as before.
+  let anchor = f.tall ? "center" : "centre+sides";
+  let safe = env.safe;
+  if (!f.tall) {
+    const o = f.landscape
+      ? { position: "center", anchor: "sides", reserve: style.captionReserve(env), ...landscape }
+      : { position, anchor, reserve: style.captionReserve(env) };
+    ({ position, anchor } = o);
+    safe = { ...(env.safe || {}), bottom: ((env.safe && env.safe.bottom) || 0) + o.reserve };
+  }
+  const { size } = env;
   let L = null;
-  for (const k of [1, 0.85, 0.72, 0.6]) {
+  // A frame that is not tall tries a narrower card (tall and taller) before a smaller
+  // one, so a card can stand beside the face; 9:16 only ever shrinks.
+  const attempts = [];
+  for (const k of [1, 0.85, 0.72, 0.6]) for (const narrow of f.tall || stage ? [1] : [1, 0.75, 0.55]) attempts.push([k, narrow]);
+  for (const [k, narrow] of attempts) {
+    env.cardNarrow = narrow;
     const m = measure(k);
+    env.cardNarrow = 1;
     const reach = style.bleed(m.px);
     const placed = placeBlock({
       size,
@@ -149,13 +176,17 @@ function layoutCard(env, item, measure, { position = "center", stage = false } =
       face: stage ? null : env.faceDuring(item.t0, item.t1),
       avoid: env.blocksDuring(item.t0, item.t1),
       position,
+      anchor,
       margin: reach,
       inset: reach,
     });
     const [ax0, ay0, ax1, ay1] = allowedArea(size, safe, reach);
     const fits = m.w <= ax1 - ax0 && m.h <= ay1 - ay0;
     L = { ...m, ...placed, reach, fits, stage };
-    if (!L.overlapsFace && !(stage && L.overlapsBlock) && fits) break;
+    // A frame that is not tall has less room to spare: shrink until the card also clears
+    // the blocks already placed (9:16 keeps its older rule).
+    const crowded = L.overlapsBlock && (stage || !f.tall);
+    if (!L.overlapsFace && !crowded && fits) break;
   }
   const m = L.reach;
   env.addBlock(item.t0, item.t1, [L.box[0] - m, L.box[1] - m, L.box[2] + m, L.box[3] + m]);
