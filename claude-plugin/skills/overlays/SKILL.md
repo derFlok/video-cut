@@ -57,7 +57,8 @@ ids of `work/redaction.json` to redact (the human's decision; without one: all);
 `box` of each of them whose `asset` is the item's `file` into its `redact` list
 (`redaction.demo` ids are demo data: leave them visible). verify flags a missing one as
 `redaction_missing`. A portrait screenshot is
-drawn as tall as the safe area allows (it may cover the speaker, verify marks it `stage`).
+drawn as tall as the safe area allows, at its top, with the caption below it (it may cover
+the speaker, verify marks it `stage`).
 
 **Product demos with a screen recording:** captions and overlays keep off the screen view
 and the speaker inset by themselves (overlays.json `views`); a caption then sits below the

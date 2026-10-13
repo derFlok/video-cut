@@ -314,6 +314,14 @@ test("a portrait screenshot uses the safe height, may cover the face, keeps capt
   const h = tall.box[3] - tall.box[1];
   assert.ok(tall.stage && h > usable * 0.6 && h <= usable * 0.8, `portrait card height ${h} of ${usable}`);
   assert.ok(tall.box[1] >= SAFE.top && tall.box[3] <= SIZE[1] - SAFE.bottom, "inside the safe area");
+  assert.ok(tall.box[1] - SAFE.top < 60, `portrait card at the top: ${tall.box}`);
+  assert.ok(mod.layoutFirst({ props: { file: "phone.png" } }, env) && !mod.layoutFirst({ props: { file: "shot.png" } }, env));
+  // A two-line caption laid out after it (render.js lays layoutFirst items out first)
+  // fits in the room left below, clear of the card.
+  const text = "die mir beim Laufen am Meer wirklich".split(" ");
+  const cap = { scene: "caption", t0: 0, t1: 1.5, words: text.map((w, i) => ({ w, t0: i * 0.2, t1: i * 0.2 + 0.2 })) };
+  const C = scene("caption").layout(fakeCtx(), cap, env);
+  assert.ok(C.fits && !C.overlapsBlock && C.box[1] >= tall.box[3], `caption ${C.box} below card ${tall.box}`);
   // Landscape stays a card clear of the face, as before.
   const env2 = makeEnv(tokens, FACES.centre, { "shot.png": SHOT });
   const wide = mod.layout(fakeCtx(), { scene: "screenshot_frame", t0: 0, t1: 3, props: { file: "shot.png" } }, env2);

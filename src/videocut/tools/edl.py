@@ -52,7 +52,7 @@ def check(args) -> dict:
         ) from None
     if job is not None:  # personal data the human decided to redact (or all, by default)
         cands, _ = redaction_enforced(job)
-        gaps = redaction.missing(cands, json.loads(path.read_text()))
+        gaps = redaction.missing(cands, json.loads(path.read_text()), job)
         if gaps:
             errs = [
                 f"{g['where']}: redaction_missing: candidate {g['id']} of work/redaction.json "

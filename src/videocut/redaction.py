@@ -29,8 +29,10 @@ decided-redact candidates the EDL does not cover (flag `redaction_missing`).
 import hashlib
 import json
 import math
+import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from .paths import state_dir
 
@@ -158,6 +160,50 @@ def decide(job: Path, redact: list[int] | None, method: str) -> dict:
     return rec
 
 
+def asset_file(job: Path, ref) -> Path | None:
+    """The file an asset reference names, resolved like the renderer does (a job-relative
+    path or file:// URL, symlinks followed); None when it is not a file reference."""
+    if not isinstance(ref, str) or not ref.strip() or "\0" in ref:
+        return None
+    ref = ref.strip()
+    if ref.startswith("file://"):
+        ref = unquote(urlparse(ref).path)
+    elif re.match(r"[a-z][a-z0-9+.-]*:", ref, re.I):  # another scheme: not a file
+        return None
+    try:
+        return (job / ref).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def same_asset(job: Path, ref, asset: str) -> bool:
+    """Whether the overlay file reference `ref` shows the candidate's `asset`: the same
+    resolved file, or a file with the same bytes (a copy under another name)."""
+    a, b = asset_file(job, ref), asset_file(job, asset)
+    if a is None or b is None:
+        return False
+    if a == b:
+        return True
+    try:
+        return (
+            a.is_file()
+            and b.is_file()
+            and a.stat().st_size == b.stat().st_size
+            and (hashlib.sha256(a.read_bytes()).digest() == hashlib.sha256(b.read_bytes()).digest())
+        )
+    except OSError:
+        return False
+
+
+def state_sha(cands: list[dict]) -> str | None:
+    """Fingerprint of the enforced candidates (job.json "cut" record: a changed decision
+    means the reel must be rendered again); None without any."""
+    if not cands:
+        return None
+    blob = json.dumps(sorted(cands, key=_key), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
 def _key(c: dict) -> tuple:
     where = ("asset", c["asset"]) if "asset" in c else ("t", round(c["t0"], 3), round(c["t1"], 3))
     return (*where, tuple(round(v, 4) for v in c["box"]))
@@ -215,10 +261,22 @@ def screen_blocks(cands: list[dict], start: float, end: float) -> list[dict]:
     return out
 
 
-def missing(cands: list[dict], data: dict) -> list[dict]:
+def covered(block: dict, reds: list) -> bool:
+    """Whether redact block `block` {t0, t1, box} lies inside one of `reds`."""
+    return any(
+        isinstance(r, dict)
+        and _num(r.get("t0")) and _num(r.get("t1"))
+        and r["t0"] <= block["t0"] + EPS and r["t1"] >= block["t1"] - EPS
+        and _box(r.get("box")) and _covers(r["box"], block["box"])
+        for r in reds
+    )  # fmt: skip
+
+
+def missing(cands: list[dict], data: dict, job: Path) -> list[dict]:
     """Candidates to redact that the raw EDL `data` does not cover: a non-face segment
     showing the screen during the candidate's time without a redact block over its box,
-    or a screenshot_frame of its asset without such a redact box. [{"id", "where"}]."""
+    or a screenshot_frame of its asset (any spelling of the path, or a copy of the file)
+    without such a redact box. [{"id", "where"}]."""
     segs = data.get("segments") if isinstance(data, dict) else None
     ovs = data.get("overlays") if isinstance(data, dict) else None
     out = []
@@ -228,7 +286,7 @@ def missing(cands: list[dict], data: dict) -> list[dict]:
                 props = o.get("props") if isinstance(o, dict) else None
                 if not (o.get("scene") == "screenshot_frame" and isinstance(props, dict)):
                     continue
-                if str(props.get("file", "")).strip() != c["asset"]:
+                if not same_asset(job, props.get("file"), c["asset"]):
                     continue
                 boxes = props.get("redact") if isinstance(props.get("redact"), list) else []
                 if not any(_box(b) and _covers(b, c["box"]) for b in boxes):
@@ -244,14 +302,7 @@ def missing(cands: list[dict], data: dict) -> list[dict]:
             if t1 - t0 <= EPS:
                 continue
             reds = s.get("redact") if isinstance(s.get("redact"), list) else []
-            ok = any(
-                isinstance(r, dict)
-                and _num(r.get("t0")) and _num(r.get("t1"))
-                and r["t0"] <= t0 + EPS and r["t1"] >= t1 - EPS
-                and _box(r.get("box")) and _covers(r["box"], c["box"])
-                for r in reds
-            )  # fmt: skip
-            if not ok:
+            if not covered({"t0": t0, "t1": t1, "box": c["box"]}, reds):
                 out.append({"id": c["id"], "where": f"$.segments[{i}].redact"})
     return out
 

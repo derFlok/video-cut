@@ -275,7 +275,7 @@ def decision_gaps(job: Path, data: dict) -> list[dict]:
     cands, _ = redaction_enforced(job)
     return [
         {"check": "decision", **g, "flags": ["redaction_missing"]}
-        for g in red_mod.missing(cands, data)
+        for g in red_mod.missing(cands, data, job)
     ]
 
 

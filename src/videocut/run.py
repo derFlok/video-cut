@@ -48,6 +48,7 @@ from .tools.job import (
     is_approved,
     project_sha,
     read_approval,
+    redaction_enforced,
     revoke_approval,
 )
 
@@ -310,9 +311,11 @@ def cut_done(job: Path) -> bool:
         return False
     rec = read_job(job).get("cut")
     if isinstance(rec, dict):
-        return rec.get("project_sha256") == approval["project_sha256"] and rec.get(
-            "segments_sha256"
-        ) == segments_sha(job)
+        return (
+            rec.get("project_sha256") == approval["project_sha256"]
+            and rec.get("segments_sha256") == segments_sha(job)
+            and rec.get("redaction_sha256") == _redaction_sha(job)
+        )
     vfile = job / "out" / "verify.json"
     try:
         verify = json.loads(vfile.read_text())
@@ -328,6 +331,14 @@ def cut_done(job: Path) -> bool:
     )
 
 
+def _redaction_sha(job: Path) -> str | None:
+    """What the reel redacts (a changed personal-data decision means a new render)."""
+    try:
+        return red.state_sha(redaction_enforced(job)[0])
+    except ToolError:
+        return "invalid"
+
+
 def record_cut(job: Path, approved_sha: str) -> None:
     verify = json.loads((job / "out" / "verify.json").read_text())
     update_job(
@@ -336,6 +347,7 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "project_sha256": approved_sha,
             "segments_sha256": segments_sha(job),
+            "redaction_sha256": _redaction_sha(job),
             "verify_ok": bool(verify.get("ok")),
         },
         overlays=None,  # a new cut has no overlays yet

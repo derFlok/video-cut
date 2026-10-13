@@ -92,7 +92,7 @@ def test_invalid_list_fails_closed(capsys, job):
         job_tool.approve_job(job)
 
 
-def test_missing_checks_screen_segments_and_screenshots():
+def test_missing_checks_screen_segments_and_screenshots(tmp_path):
     data = {
         "segments": [
             {"in": 0.0, "out": 3.0},  # face: nothing shown
@@ -103,7 +103,7 @@ def test_missing_checks_screen_segments_and_screenshots():
         "overlays": [{"scene": "screenshot_frame", "t0": 1, "t1": 3,
                       "props": {"file": "input/shot.png", "redact": [[0.1, 0.1, 0.3, 0.2]]}}],
     }  # fmt: skip
-    got = red.missing([SCREEN, SHOT], data)
+    got = red.missing([SCREEN, SHOT], data, tmp_path)
     assert got == [{"id": 1, "where": "$.segments[2].redact"},
                    {"id": 2, "where": "$.overlays[0].props.redact"}]  # fmt: skip
     assert red.screen_blocks([SCREEN, SHOT], 5.0, 8.0) == [
@@ -130,13 +130,54 @@ def test_demo_data_flag_and_non_interactive_default(job):
     assert rec["method"] == "flag" and rec["redact"] == [] and rec["demo"] == [1, 2]
 
 
-def test_overlays_add_candidate_boxes_to_their_screenshot():
+def test_overlays_add_candidate_boxes_to_their_screenshot(tmp_path):
     from videocut.tools.overlays import _redacted
 
+    job = tmp_path
     item = {"scene": "screenshot_frame", "t0": 1, "t1": 3,
             "props": {"file": "input/shot.png", "redact": [[0, 0, 0.1, 0.1]]}}  # fmt: skip
-    out = _redacted(item, [SCREEN, SHOT])
+    out = _redacted(job, item, [SCREEN, SHOT])
     assert out["props"]["redact"] == [[0, 0, 0.1, 0.1], SHOT["box"]]
     assert item["props"]["redact"] == [[0, 0, 0.1, 0.1]]  # the EDL item is not changed
     other = {**item, "props": {"file": "input/other.png"}}
-    assert _redacted(other, [SHOT]) is other
+    assert _redacted(job, other, [SHOT]) is other
+
+
+@pytest.mark.parametrize(
+    "ref", ["./input/shot.png", "input//shot.png", "work/../input/shot.png", "file://{job}/input/shot.png",
+            " input/shot.png", "work/copy.png"],
+)  # fmt: skip
+def test_any_spelling_or_copy_of_a_screenshot_is_redacted(tmp_path, ref):
+    from videocut.tools.overlays import _redacted
+
+    (tmp_path / "input").mkdir()
+    (tmp_path / "work").mkdir()
+    (tmp_path / "input" / "shot.png").write_bytes(b"png bytes")
+    (tmp_path / "work" / "copy.png").write_bytes(b"png bytes")
+    (tmp_path / "input" / "other.png").write_bytes(b"other bytes")
+    ref = ref.format(job=tmp_path)
+    item = {"scene": "screenshot_frame", "t0": 1, "t1": 3, "props": {"file": ref}}
+    assert _redacted(tmp_path, item, [SHOT])["props"]["redact"] == [SHOT["box"]]
+    assert red.missing([SHOT], {"overlays": [item]}, tmp_path) == [
+        {"id": 2, "where": "$.overlays[0].props.redact"}
+    ]
+    other = {**item, "props": {"file": "./input/other.png"}}
+    assert _redacted(tmp_path, other, [SHOT]) is other
+    assert red.missing([SHOT], {"overlays": [other]}, tmp_path) == []
+    assert not red.same_asset(tmp_path, "https://example.com/input/shot.png", SHOT["asset"])
+
+
+def test_a_changed_decision_means_the_cut_is_not_done(job):
+    (job / "out").mkdir(exist_ok=True)
+    (job / "out" / "reel.mp4").write_bytes(b"x")
+    (job / "out" / "verify.json").write_text('{"ok": true, "reel": "out/reel.mp4"}')
+    (job / "work" / "edl.json").write_text('{"segments": []}')
+    job_tool.approve_job(job)
+    run.record_cut(job, job_tool.read_approval(job)["project_sha256"])
+    assert run.cut_done(job)
+    red.decide(job, [1], "cli")  # the screenshot is demo data: the reel must change
+    assert not run.cut_done(job)
+    run.record_cut(job, job_tool.read_approval(job)["project_sha256"])
+    assert run.cut_done(job)
+    red.decide(job, None, "cli")  # redact all again
+    assert not run.cut_done(job)

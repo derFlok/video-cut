@@ -282,6 +282,18 @@
   `edl check` and verify flag `redaction_missing`.
 
 ### Fixed — Product demos
+
+- Moving screen zooms were one frame ahead of the plan (ffmpeg `perspective` counts `in`
+  from 1); verify then saw a redact block "not solid" during fast zoom moves and the cut run
+  dropped its zoom-outs to get past it. Now frame-exact, with a test.
+- A screenshot's personal data is matched by the file, not the spelling: `./input/x.png`,
+  `file://…`, `work/../input/x.png` or a copy of the file are redacted (and checked) too.
+- A changed personal-data decision makes `videocut run` cut and render again (job.json
+  `cut.redaction_sha256`); before, the old reel stayed "done".
+- A portrait screenshot is laid out before the captions, at the top of the safe area, so
+  the caption fits below it (in the end-to-end run the phone screenshot collided with the
+  caption and was dropped).
+- Render no longer adds a candidate's redact block twice when the EDL already has it.
 - Moving screen zooms ended in the top-left corner: `crop` after a per-frame `scale` clamps
   x/y to its configured input size. Moving windows now go through `perspective`
   (sub-pixel, eval=frame); a test checks that the zoomed view shows the target region.

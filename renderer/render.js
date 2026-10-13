@@ -141,8 +141,15 @@ function pageMain(spec) {
   };
 
   // Lay out every item once, in time order, so placement never depends on which
-  // frames get rendered (--still, --sheet and the full render agree).
-  const order = items.map((it, i) => i).sort((a, b) => items[a].t0 - items[b].t0 || a - b);
+  // frames get rendered (--still, --sheet and the full render agree). Items a scene marks
+  // `layoutFirst` (a portrait screenshot that fills the stage) go before the rest.
+  const first = items.map((it) => {
+    const s = scenes[it.scene];
+    return s && s.layoutFirst && s.layoutFirst(it, env) ? 0 : 1;
+  });
+  const order = items
+    .map((it, i) => i)
+    .sort((a, b) => first[a] - first[b] || items[a].t0 - items[b].t0 || a - b);
   const placement = { face: 0, block: 0, cramped: 0 };
   for (const i of order) {
     const scene = scenes[items[i].scene];

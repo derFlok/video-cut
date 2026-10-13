@@ -349,6 +349,7 @@ def with_redaction(edl, cands: list[dict]):
     segs = []
     for s in edl.segments:
         extra = redaction.screen_blocks(cands, s.start, s.end) if s.layout != "face" else []
+        extra = [b for b in extra if not redaction.covered(b, s.redact)]
         segs.append(replace(s, redact=[*s.redact, *extra]) if extra else s)
     return replace(edl, segments=segs)
 
@@ -442,11 +443,12 @@ def screen_view(seg: Segment, fps: Fraction, bg: str, matrix: str, to_sdr: str) 
         x, y = (max(0, round(v)) for v in seg.initial[:2])
         w, h = min(int(seg.initial[2]), sw - x), min(int(seg.initial[2] * vh / vw), sh - y)
         return [*f, f"crop={w}:{h}:{x}:{y}", scale, "setsar=1"]
-    # Moving window: perspective maps the window's corners (source px, per input frame
-    # `in`) onto the whole frame with sub-pixel precision, then one fixed-size scale.
+    # Moving window: perspective maps the window's corners (source px, per input frame)
+    # onto the whole frame with sub-pixel precision, then one fixed-size scale. Its `in`
+    # counts from 1 (the first frame is in=1), the local frame n is in-1.
     # (A scale with eval=frame followed by crop cannot work: crop clamps x/y to the
     # size of its input link, fixed when the graph is configured.)
-    x, y, w = (f"({window_expr(seg, i, 'in')})" for i in range(3))
+    x, y, w = (f"({window_expr(seg, i, '(in-1)')})" for i in range(3))
     h = f"({w}*{vh}/{vw})"
     corners = [(x, y), (f"{x}+{w}", y), (x, f"{y}+{h}"), (f"{x}+{w}", f"{y}+{h}")]
     args = ":".join(f"x{k}='{cx}':y{k}='{cy}'" for k, (cx, cy) in enumerate(corners))

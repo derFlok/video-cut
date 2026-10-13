@@ -197,6 +197,32 @@ def test_layouts_render(capsys, material):
         else:
             assert np.abs(box - 244).max() < 12, i
 
+    # The moving window is frame-exact: during the move of segment 4 the red block's
+    # centre sits where window_at(n) puts it, not one frame ahead (perspective's `in`
+    # counts from 1).
+    seg = _seg_plan(4)
+    v, m = seg.view, seg.moves[0]
+    imgs = _frames(reel, starts[4] + m.start, starts[4] + m.end, (v.w, v.h, v.x, v.y), "rgb24")
+
+    def centre(n):
+        x, y, w = lay.window_at(seg, n)
+        kk = v.w / w
+        x0, x1 = max((SECRET[0] - x) * kk, 0), min((SECRET[2] - x) * kk, v.w)
+        y0, y1 = max((SECRET[1] - y) * kk, 0), min((SECRET[3] - y) * kk, v.h)
+        return np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+
+    errs = []
+    for j, img in enumerate(imgs[2:-2], start=2):
+        n = m.start + j
+        ys, xs = np.nonzero((img[..., 0] > 150) & (img[..., 1] < 100) & (img[..., 2] < 100))
+        if len(xs) < 500:
+            continue
+        got = np.array([xs.mean(), ys.mean()])
+        here, ahead = np.linalg.norm(got - centre(n)), np.linalg.norm(got - centre(n + 1))
+        errs.append(here)
+        assert here < ahead and here < 3, (n, got, centre(n), centre(n + 1))
+    assert len(errs) > 5
+
     # Layout look: screen keeps the bottom on the brand background, split shows the
     # camera there, pip has the inset below the view.
     def bottom(i):
