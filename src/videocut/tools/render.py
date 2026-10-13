@@ -17,6 +17,11 @@
              after the last spoken word), the reel gets a held tail: the last frame
              repeats under the card, the audio is padded with silence after loudnorm
              (render.json "tail_s"; output_duration includes it)
+    layouts  segments with "layout" screen/pip/split are drawn from the original screen
+             recording (job.json "screen") at camera time + work/sync.json offset_s, with
+             eased screen_zoom, redact blocks and brand background (_layouts.py); render.json
+             gets "layouts" and "screen_zoom_clamped" (keys widened to stay >= 1 source px
+             per output px). An EDL of face segments only renders exactly as before
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
 
@@ -39,7 +44,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from ..edl import EdlError, load
-from . import _plates
+from . import _layouts, _plates
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed
@@ -175,6 +180,36 @@ def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709
     )
 
 
+def _layout_video(job, plan, edl, specs, info, screen, face, video_in, inputs):
+    """Video lines of a render with screen layouts (the screen is the next input after
+    `inputs`) and the clamped zoom keys [{"segment", "t", "zoom", "max_zoom"}]."""
+    offset = _layouts.sync_offset(job)
+    sinfo = _layouts.probe_screen(screen)
+    screen_frames = math.floor(sinfo["duration"] * plan.fps)
+    segs, clamped = {}, []
+    for i, r in enumerate(plan.ranges):
+        if r.layout == "face":
+            continue
+        seg, cl = _layouts.plan_segment(
+            specs[r.seg], edl.segments[r.seg], r.frames, plan.fps,
+            offset=offset, screen=tuple(sinfo["size"]), camera=tuple(info["size"]),
+            out=plan.out_size, full_out=tuple(edl.size), face=face,
+        )  # fmt: skip
+        if seg.screen_frame + seg.frames <= 0 or seg.screen_frame >= screen_frames:
+            raise ToolError(
+                f"segment {r.seg} ({r.layout}) lies outside the screen recording "
+                f"(offset_s {offset})"
+            )
+        segs[i] = seg
+        clamped += [{"segment": r.seg, **c} for c in cl]
+    video = _layouts.video_chain(
+        plan, segs, lambda r: plan_mod.range_filters(plan, r), video_in,
+        f"{len(inputs) // 2}:v:0", bg=_layouts.background(job), matrix=overlay_matrix(info),
+        cam_sdr=to_sdr(info), screen_sdr=to_sdr(sinfo),
+    )  # fmt: skip
+    return video, clamped
+
+
 def render(args) -> dict:
     job = resolve_job(args.job)
     if not is_approved(job):  # the human gate: no cut, not even a preview, before approval
@@ -204,12 +239,17 @@ def render(args) -> dict:
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
     edl, followed, face = framed(job, edl)
+    specs, errs = _layouts.specs(data)
+    if errs:
+        raise ToolError(f"{len(errs)} problem(s) in edl.json: " + "; ".join(errs[:5]))
+    layouts = [s["layout"] for s in specs]
+    use_layouts = any(lay != "face" for lay in layouts)
 
     preview = bool(args.preview)
     ow, oh = edl.size
     if preview:
         ow, oh = max(2, ow // 4 * 2), max(2, oh // 4 * 2)
-    plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh))
+    plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh), layouts if use_layouts else None)
     overlay = work / "overlay.mov"
     ov_json = work / "overlays.json"
     # words.json too: the end card's tail is computed from it (_plates), like overlays did.
@@ -237,10 +277,20 @@ def render(args) -> dict:
         measured = "silent"
     elif preview:
         measured = None  # single pass
-    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info))
-    warnings, v_out = [], "[v]"
+    warnings, v_out, video, clamped, screen_rel = [], "[v]", None, [], None
+    if use_layouts:
+        screen = _layouts.screen_source(job)
+        screen_rel = str(screen.relative_to(job))
+        video, clamped = _layout_video(job, plan, edl, specs, info, screen, face, video_in, inputs)
+        inputs += ["-i", str(screen)]
+        for c in clamped:
+            warnings.append(
+                f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
+                f" blurry; clamped to {c['max_zoom']}x"
+            )
+    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video)
     if use_overlay:
-        graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh), overlay_matrix(info))
+        graph += composite_graph(len(inputs) // 2, plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
         v_out = "[vo]"
     elif overlay.is_file():
@@ -328,6 +378,9 @@ def render(args) -> dict:
     }
     if use_overlay:
         report["overlay"] = True
+    if use_layouts:
+        report["layouts"] = {k: layouts.count(k) for k in _layouts.LAYOUTS if k in layouts}
+        report["screen_zoom_clamped"] = clamped
     if plan.tail:
         report["tail_s"] = round(float(plan.tail / plan.fps), 3)
     if loud["integrated_lufs"] is None:
@@ -358,6 +411,9 @@ def render(args) -> dict:
         "default_crop": "face" if face and face.get("median") else "centre",
         "face_follow_segments": followed,
         "overlay": use_overlay,
+        "layouts": report.get("layouts"),
+        "screen": screen_rel,
+        "screen_zoom_clamped": clamped,
         "warnings": warnings,
     }
 
