@@ -36,6 +36,7 @@ import json
 import re
 import shutil
 import sys
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -104,12 +105,58 @@ class RunError(RuntimeError):
     pass
 
 
+class _StdoutRouter(io.TextIOBase):
+    """sys.stdout that sends each thread's output to that thread's capture buffer (if any).
+
+    contextlib.redirect_stdout swaps the process-wide sys.stdout: in the local app a run
+    thread and a request thread capturing tool output at the same time would mix their
+    summary lines (and could leave sys.stdout pointing at a dead buffer)."""
+
+    def __init__(self, out):
+        self.out = out
+        self.local = threading.local()
+
+    def _target(self):
+        return getattr(self.local, "buf", None) or self.out
+
+    def write(self, s: str) -> int:
+        return self._target().write(s)
+
+    def flush(self) -> None:
+        self._target().flush()
+
+    def isatty(self) -> bool:
+        return getattr(self.local, "buf", None) is None and self.out.isatty()
+
+
+def install_stdout_router() -> None:
+    """For processes that run pipeline steps in threads (the local app)."""
+    if not isinstance(sys.stdout, _StdoutRouter):
+        sys.stdout = _StdoutRouter(sys.stdout)
+
+
+@contextlib.contextmanager
+def capture_stdout():
+    """Capture this thread's stdout (thread-safe once install_stdout_router() ran)."""
+    buf = io.StringIO()
+    router = sys.stdout if isinstance(sys.stdout, _StdoutRouter) else None
+    if router is None:
+        with contextlib.redirect_stdout(buf):
+            yield buf
+        return
+    prev = getattr(router.local, "buf", None)
+    router.local.buf = buf
+    try:
+        yield buf
+    finally:
+        router.local.buf = prev
+
+
 def tool(job: Path, *argv: str) -> dict:
     """Run `videocut tool <argv> --job <job>` in-process; return its summary line."""
     from .cli import main
 
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
+    with capture_stdout() as buf:
         code = _main(main, ["tool", *argv, "--job", str(job)])
     lines = buf.getvalue().strip().splitlines()
     try:
@@ -138,7 +185,6 @@ def new_job(
 ) -> Path:
     from .cli import main
 
-    buf = io.StringIO()
     argv = ["tool", "job", "new", str(video)]
     argv += ["--type", type_] if type_ else []
     argv += ["--brief", brief] if brief else []
@@ -146,7 +192,7 @@ def new_job(
     argv += ["--format", format_] if format_ else []
     if assets:
         argv += ["--asset", *assets]
-    with contextlib.redirect_stdout(buf):
+    with capture_stdout() as buf:
         code = _main(main, argv)
     lines = buf.getvalue().strip().splitlines()
     s = json.loads(lines[-1]) if code == 0 and lines else {}

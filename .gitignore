@@ -24,3 +24,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+
+# The local app: built from app/ by `videocut setup`, never committed
+/src/videocut/web/dist/
+/app/node_modules/

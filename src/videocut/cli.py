@@ -108,9 +108,9 @@ def main(argv: list[str] | None = None) -> int:
         install.install_model(a.name)
         return 0
     if a.cmd == "ui":
-        from . import web
+        from . import server
 
-        web.serve(a.port, open_browser=not a.no_open)
+        server.serve(a.port, open_browser=not a.no_open)
         return 0
     if a.cmd == "auth":
         from . import settings
