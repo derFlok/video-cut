@@ -5,82 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Video Cut</title>
 <style>
-  :root {
-    --bg: #f6f6f5; --surface: #ffffff; --text: #161616; --muted: #6a6a6a;
-    --line: #e4e4e2; --ok: #1f7a4d; --bad: #b3261e; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #121212; --surface: #1c1c1c; --text: #ededed; --muted: #9a9a9a;
-            --line: #2c2c2c; --ok: #5cc28f; --bad: #f2867e; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 15px/1.5 system-ui, -apple-system, sans-serif; }
-  main { max-width: 720px; margin: 0 auto; padding: 48px 16px; }
-  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); margin: 0 0 32px; }
-  section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
-  h2 { font-size: 16px; margin: 0 0 4px; }
-  p { margin: 0 0 16px; color: var(--muted); }
-  button { font: inherit; font-weight: 600; padding: 10px 16px; border-radius: 8px; border: 0;
-           background: var(--text); color: var(--bg); cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-  ol { list-style: none; margin: 16px 0 0; padding: 0; font-family: var(--mono); font-size: 13px; }
-  li { padding: 6px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-  li .k { display: inline-block; min-width: 56px; color: var(--muted); }
-  .result { margin-top: 16px; font-weight: 600; }
-  .result.ok { color: var(--ok); } .result.bad { color: var(--bad); }
-  .meta { color: var(--muted); font-weight: 400; font-size: 13px; display: block; }
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 36rem; margin: 4rem auto; padding: 0 1rem; line-height: 1.5; }
+  code { font-size: 1rem; }
 </style>
 </head>
 <body>
 <main>
   <h1>Video Cut</h1>
-  <p class="sub">Lokal auf diesem Mac · Claude schneidet</p>
-  <section>
-    <h2>Verbindung zu Claude prüfen</h2>
-    <p>Startet Claude im Hintergrund mit den Video-Cut-Werkzeugen und zeigt live, was passiert.</p>
-    <button id="go">Verbindung testen</button>
-    <ol id="log"></ol>
-    <div id="result" class="result" role="status"></div>
-  </section>
+  <p lang="de">Die App ist noch nicht gebaut. Beende Video Cut (Ctrl+C) und führe im
+  Projektordner <code>./start.sh</code> aus, dann starte <code>videocut ui</code> neu.</p>
+  <p lang="en">The app is not built yet. Stop Video Cut (Ctrl+C), run <code>./start.sh</code>
+  in the project folder, then start <code>videocut ui</code> again.</p>
 </main>
-<script>
-  const token = new URLSearchParams(location.search).get("t");
-  const LABEL = { start: "Start", tool: "Aktion", text: "Claude", done: "Fertig", error: "Fehler", summary: "" };
-  const log = document.getElementById("log"), result = document.getElementById("result"),
-        go = document.getElementById("go");
-
-  function line(kind, text) {
-    const li = document.createElement("li");
-    li.innerHTML = `<span class="k"></span><span class="t"></span>`;
-    li.querySelector(".k").textContent = LABEL[kind] ?? kind;
-    li.querySelector(".t").textContent = text;
-    log.appendChild(li);
-  }
-
-  go.onclick = async () => {
-    go.disabled = true; log.innerHTML = ""; result.textContent = ""; result.className = "result";
-    const r = await fetch("/api/ping", { method: "POST", headers: { "X-Token": token } });
-    if (!r.ok) { line("error", (await r.json()).error || r.statusText); go.disabled = false; return; }
-    const { job } = await r.json();
-    const es = new EventSource(`/api/jobs/${job}/events?t=${encodeURIComponent(token)}`);
-    es.onmessage = (m) => {
-      const ev = JSON.parse(m.data);
-      if (ev.kind === "summary") {
-        const d = ev.data;
-        result.className = "result " + (d.ok ? "ok" : "bad");
-        result.innerHTML = (d.ok ? "Verbindung steht." : "Verbindung fehlgeschlagen.") +
-          `<span class="meta">${d.auth === "apikey" ? "API-Key" : "eigener Claude-Login"} · ` +
-          `${d.seconds} s · ${d.turns ?? "–"} Schritte` +
-          (d.cost_usd != null ? ` · rechnerisch ${d.cost_usd.toFixed(3)} $` : "") + `</span>`;
-      } else if (ev.kind !== "done") {
-        line(ev.kind, ev.text);
-      }
-    };
-    es.addEventListener("end", () => { es.close(); go.disabled = false; });
-    es.onerror = () => { es.close(); go.disabled = false; };
-  };
-</script>
 </body>
 </html>

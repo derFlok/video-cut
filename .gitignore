@@ -2,6 +2,10 @@
 /.tools/
 /.venv/
 renderer/node_modules/
+app/node_modules/
+app/dist-mock/
+# Built web UI (videocut setup / start.sh build it from app/)
+src/videocut/web/dist/
 
 # Never commit user material (it lives in ~/VideoCut anyway)
 /jobs/
@@ -24,3 +28,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+
+# The local app: built from app/ by `videocut setup`, never committed
+/src/videocut/web/dist/
+/app/node_modules/
+/app/dist-mock/
+/app/e2e/out/

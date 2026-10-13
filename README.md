@@ -4,7 +4,7 @@
 
 Video and audio never leave your machine. Claude only receives text (the transcript) and small still images at decision points.
 
-> **Status: early development (0.0.x).** Installer, toolchain and self-test work. The editing pipeline and the app are being built. See [`docs/BRIEF.md`](docs/BRIEF.md) for the full design and [`CHANGELOG.md`](CHANGELOG.md) for progress.
+> **Status: early development (0.0.x).** Installer, editing pipeline and the local app work; expect rough edges. See [`docs/BRIEF.md`](docs/BRIEF.md) for the full design and [`CHANGELOG.md`](CHANGELOG.md) for progress.
 
 [Deutsch](README.de.md)
 
@@ -40,11 +40,42 @@ cd video-cut
 |---|---|
 | `./start.sh` | install or refresh, then check the installation |
 | `./start.sh --selftest` | same, then run the pipeline on a generated test clip |
+| `./start.sh --ui` | same, then open the app in your browser |
 | `./start.sh --check` | only check, install nothing |
 | `./uninstall.sh` | remove installed tools (keeps your data) |
 | `./uninstall.sh --all` | also offer to delete your data folder |
 
 Your brands, projects and downloaded models live in `~/VideoCut` (change with `VIDEOCUT_HOME`), never inside the repository.
+
+## Using the app
+
+```bash
+./start.sh --ui            # or, once installed: .tools/bin/uv run videocut ui
+```
+
+The app runs only on your Mac (`127.0.0.1`) and opens in your browser with a one-time link;
+close the terminal window to stop it. German by default, English via the switch at the top.
+
+1. **New video:** pick a video type, drag your camera recording onto the page (optionally a
+   screen recording of the same take, or screenshots), choose a brand and an output format,
+   and write a one-line instruction for Claude. The upload starts the preparation.
+2. **Watch the progress:** the steps, a live log, the time and the Claude cost so far.
+3. **Read the plan:** hook, core message, what stays in (with source times and why), the
+   framing with stills, overlays and risks. Ask Claude to change it in plain words, for
+   example *"make the ending shorter, the last sentence is enough"* or *"drop the question
+   about the calls, keep the example longer"*. You can also edit the plan text directly.
+4. **Personal data:** if the plan found names, e-mail addresses or numbers on screen, you
+   decide per item what is redacted (default: everything). Then **approve**: only now
+   Claude cuts, adds captions and overlays, renders and checks its own result.
+5. **Result:** play the reel, read the automatic check in plain words, and give feedback at
+   the current player position, for example *"zoom out less here"*, *"the caption at 0:12
+   says the wrong word"* or *"drop the question about the calls"*. Only the affected parts
+   change; every version stays listed (the last five can be played again).
+6. **Download** the MP4 and the cover.
+
+**Brands** (top navigation): preview sheets per format, colours, fonts, caption pace and
+form of address, logo and font upload, new brands start from the neutral example. The
+app checks a brand the same way `videocut tool brand check` does.
 
 ## Usage (command line)
 
@@ -66,6 +97,11 @@ Your brands, projects and downloaded models live in `~/VideoCut` (change with `V
    words, numbers, questions, screenshots) in your brand's look, using only what you say.
    Nothing on the face or in the app's UI zones, which is checked automatically. Then it
    renders the final reel. `work/overlay_report.md` lists the overlays.
+
+Corrections: `videocut run <id> --plan-feedback "shorter ending"` revises the plan before
+approval (approve it again afterwards); `videocut run <id> --feedback "zoom out less here" --at 12`
+revises the finished reel at second 12 without a new approval (the previous reel stays in
+`out/history/`, every correction is logged in `work/revisions.jsonl`).
 
 Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--screen FILE` (a
 screen recording made at the same time, for a new job), `--asset FILE...` (screenshots for a

@@ -70,6 +70,20 @@ def main(argv: list[str] | None = None) -> int:
         "screenshots, else 9:16); for an existing job it replaces the format",
     )
 
+    r.add_argument(
+        "--feedback",
+        metavar="TEXT",
+        help="revise the finished reel: what to change, in plain words (no new approval)",
+    )
+    r.add_argument(
+        "--at", type=float, metavar="S", help="with --feedback: the reel second it is about"
+    )
+    r.add_argument(
+        "--plan-feedback",
+        metavar="TEXT",
+        help="revise the plan before approval: what to change (implies --replan)",
+    )
+
     t = sub.add_parser("tool", help="pipeline commands used by Claude inside a job")
     tsub = t.add_subparsers(dest="tool_cmd", required=True)
     from . import tools
@@ -108,9 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         install.install_model(a.name)
         return 0
     if a.cmd == "ui":
-        from . import web
+        from . import server
 
-        web.serve(a.port, open_browser=not a.no_open)
+        server.serve(a.port, open_browser=not a.no_open)
         return 0
     if a.cmd == "auth":
         from . import settings

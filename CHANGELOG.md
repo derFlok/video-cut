@@ -402,4 +402,67 @@
   screen recording in 16:9 has no sharp zoom at all.
 - 1:1 with a centred head, a card and a caption is cramped; a landscape screenshot fills
   only ~55 % of the height.
-- The web UI has no job-creation form yet, so no format picker there.
+- The web UI has no job-creation form yet, so no format picker there (done in Phase 3).
+
+### Added — Phase 3: local app (jobs, plan review and feedback, approval, revisions, brands)
+- **Backend** (`src/videocut/server/`, FastAPI + uvicorn on 127.0.0.1): per-start token
+  exchanged for an HttpOnly SameSite=Strict session cookie, Host and Origin checks, CSP and
+  `nosniff`; jobs API (streamed, size-capped, ffprobe-checked uploads; plan view and edit,
+  sha-checked; approval + personal-data decision written to the same stores as the CLI;
+  plan feedback; feedback; stills from an allow-list of folders; media with HTTP Range incl.
+  `out/history/reel-<k>.mp4`; download; delete to `$VIDEOCUT_HOME/trash`); brands API (list,
+  validated edit returning the brand, create from the neutral example, logo/font upload with
+  magic-byte check and `role` (logo light/dark/icon_*, font display/body) that sets the
+  token, cached preview sheet); server-sent events with replay on connect; one Claude run
+  at a time (queue); errors as `{detail: {message, code?, errors?}}` with 409 codes `busy`,
+  `stale`, `state`, `exists`, `read_only`. `run.py` captures tool output per thread (CLI
+  unchanged).
+- **Revision runs:** `videocut run <job> --feedback TEXT [--at S]` with the new `revise`
+  skill; `videocut tool edl locate <output_s> [--source]` maps a reel second to segment,
+  source time, layout, zoom key and overlays. Guards: plan, personal-data candidates and
+  decision, redaction still covered, final render of the current EDL, overlays kept, source
+  time outside the approved plan only when `work/revision.json` quotes the feedback
+  (`extends_plan`); a failed revision restores everything from a backup outside the job
+  folder. `out/history/` keeps the last five reels; `work/revisions.jsonl` logs every run.
+  The API reports `versions` (version 1 = first cut, one per successful revision, playable
+  while kept) and `version`/`video_url` per revision.
+- **Plan feedback:** `videocut run <job> --plan-feedback TEXT` (plan skill in revise-the-plan
+  mode, changes only what the feedback asks, needs a new approval). The plan skill also
+  writes `work/plan.json` (title, format, hook, core_message, keep_list, views, overlays,
+  personal_data, risks; `change_note` after feedback), checked by `videocut tool plan
+  check`; `videocut tool sheet plan` writes stills for views and personal-data candidates to
+  `work/plan_stills/`.
+- **UI** (`app/`, React 19 + TypeScript + Vite, built into `src/videocut/web/dist/`, not
+  committed): job list, new job (type cards, drag & drop with upload progress, brand,
+  format, one-line instruction), progress (stepper, live log, time, cost), plan review
+  (plan.json with stills or the markdown, editor with stale-plan handling, plan feedback
+  with the change highlighted), personal-data dialog (redact everything by default, per
+  item choice), result (player, verify findings in plain words, feedback at the player
+  position, versions "Version n" with playback of the kept ones, MP4/cover download, the
+  approved plan on demand), brands (preview sheets per format, token editor with the
+  server's validation, logo/font upload, new brand from the neutral example). German
+  default, English switch; verify flag and check ids in plain words. Mock API for
+  development (`npm run dev:mock`, `build:mock`, `screenshots`); 20 vitest tests.
+- `videocut setup` / `./start.sh` build the UI with the bundled node (`npm ci`, rebuilt when
+  the source changes); `./start.sh --ui` and `videocut ui` open the app with the session
+  link; without a build every page says how to build it.
+- End-to-end script through the browser (`tests/e2e/app_e2e.py` + `app/e2e/app.e2e.mjs`,
+  real Claude runs on generated clips in a throwaway `VIDEOCUT_HOME`, screenshots per step;
+  `VIDEOCUT_E2E=1`, not in CI). CI builds and tests the UI with the pinned node.
+
+- Review fixes before merge: the approval also binds `work/plan.json` (shown and trusted
+  only while unchanged; a human markdown edit drops it); feedback needs the recorded cut of
+  the approved plan; a new cut archives `revisions.jsonl` and `out/history/`; a failed
+  revision no longer prunes a kept reel and also restores `out/preview.mp4`; `redact` with
+  no or duplicate ids is refused; uploads are checked by container format with
+  `-protocol_whitelist file`; stale upload staging is removed at start; the run channel is
+  idle before its `done` event. A finished reel whose overlay verify flagged something
+  shows as done (result page) instead of offering Start again.
+
+### Known — Phase 3
+- The session cookie is not port-bound: other local servers on 127.0.0.1/localhost that
+  the browser visits receive it (it changes with every `videocut ui` start).
+- The plan's free-text fields (why, risks) are in the language Claude writes them in,
+  often English, while the UI is German.
+- FastAPI 0.143 pulls in `opentelemetry-api`. SSE keep-alive every 15 s; `?follow=0` replays
+  the events once and closes.

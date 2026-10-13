@@ -9,10 +9,12 @@
 | `start.sh` | entry point: platform checks, bootstraps `uv`, syncs Python, runs `videocut setup` + `doctor` |
 | `manifest/tools.json` | pinned downloads: version, URL, SHA-256, licence |
 | `src/videocut/` | Python package and CLI (`setup`, `doctor`, `selftest`, `models pull`, `ui`, `auth`, `run`, `tool`) |
-| `src/videocut/run.py` | `videocut run`: prep → plan run → human approval → cut run → overlay run |
+| `src/videocut/run.py` | `videocut run`: prep → plan run → human approval → cut run → overlay run; `--plan-feedback` (revise the plan), `--feedback [--at]` (revise the reel) |
+| `src/videocut/server/` | local app backend (FastAPI + uvicorn): `app.py` routes, `security.py` session/Host/Origin guard, `uploads.py` streamed uploads, `runs.py` run queue + events, `state.py` job views, `brands.py` |
+| `app/` | local app UI source (React + TypeScript + Vite, vitest); built into `src/videocut/web/dist/` (not committed) by `videocut setup`; `app/e2e/` the browser end-to-end script |
 | `src/videocut/brand.py` | brand profiles: load, validate, resolve `brand.json` into design tokens |
 | `src/videocut/agent.py` | the restricted `claude` runner (see `SECURITY.md`) |
-| `claude-plugin/` | Claude Code plugin `video-cut` with the skills `ping`, `plan`, `cut`, `overlays` |
+| `claude-plugin/` | Claude Code plugin `video-cut` with the skills `ping`, `plan`, `cut`, `overlays`, `revise` |
 | `src/videocut/tools/` | `videocut tool <name>`: one module per pipeline tool, used by Claude inside a job |
 | `src/videocut/edl.py` | EDL schema (dataclasses), validation with JSON paths, load/save |
 | `tests/clips.py` | generated test clips (macOS `say` + ffmpeg test pattern), no third-party media |
@@ -72,11 +74,16 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            assets_NN.jpg                                                         sheet
            contract.md (reel contract of the type, copied by `run` if one exists)
            project.md, redaction.json (personal-data candidates)                 plan run
+           plan.json (the plan as data for the app), plan_stills/view_NN.jpg,
+           pd_NN.jpg (`sheet plan`), plan_feedback.json (during a plan feedback run)
            edl.json, render_filter.txt, cut_report.md                            cut run
            overlays.json, overlay.mov, overlay_boxes.json, overlay_report.md     overlay run
            runs.jsonl, claude-plan.jsonl, claude-cut.jsonl                       videocut run
+           revision_request.json, revision.json, revision_report.md,
+           revisions.jsonl (one line per feedback run)                           revise run
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
            verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg      verify
+           history/reel-<k>.mp4 (the reel before a revision; the last five)       revise run
 ```
 
 Lifecycle (`status` in job.json): `new` → `ingested` (ingest) → `approved` (`job approve`, by a
@@ -383,6 +390,123 @@ verify get them from `edl.Segment`). Captions,
 overlays, b-roll and music are validated loosely until their phase. `output_duration()` and
 `cut_points()` (output time of every segment boundary, including 0 and the end) serve render
 and verify.
+
+## Plan as data (`work/plan.json`, `tools/plan.py`)
+
+The plan run writes `work/project.md` (the authority, what the human approves) and its twin
+`work/plan.json` for the app: `title`, `format`, `hook {text, src}`, optional `core_message`,
+`target_s`, `keep_list [{n, src, text, why}]` (output order, source seconds), `views [{n, src,
+layout, zoom_box?, zoom_t?, why, still}]` (demos), `overlays [{n, src, scene, text, why}]`,
+`personal_data` (repeats `work/redaction.json` exactly), `risks`, and after plan feedback
+`change_note` (what the feedback changed, in a few words). `videocut tool plan check`
+validates it against the job (format, source duration, layouts, redaction candidates);
+`videocut tool sheet plan` writes downscaled stills of the views and personal-data
+candidates to `work/plan_stills/` and their paths (relative to the job folder) back into
+`still`. A plan without plan.json still works: the app shows the markdown.
+
+**Plan feedback** (`videocut run <job> --plan-feedback TEXT`, `POST /api/jobs/{id}/plan/feedback`):
+a plan run in revise-the-plan mode. The text goes to `work/plan_feedback.json` (removed after
+the run); the skill changes only what the feedback asks and adds a "Changed after feedback"
+line. The approval is sha-bound, so a changed plan needs a new approval (the API also revokes
+an existing one before the run starts).
+
+## Revision runs (`run.revise`, skill `revise`)
+
+`videocut run <job> --feedback TEXT [--at S]` (and `POST /api/jobs/{id}/feedback`) revises the
+finished reel without a new approval: the human's feedback is the authority for these changes.
+`--at` is an output second; `videocut tool edl locate <s>` maps it to the segment, source
+time, layout, zoom key and overlays shown there (`work/revision_request.json`). The skill
+changes only what the feedback asks (segments, zoom keys, layouts, overlays, caption text),
+renders and verifies. Before the run, `out/reel.mp4` is copied to `out/history/reel-<k>.mp4`
+(k counts on, the last five are kept) and the files a revision may touch are backed up
+outside the job folder (`state/<job>/revision_backup`). The run fails, and everything comes
+back, when it changed `project.md`, the personal-data candidates or decision, dropped a
+redaction that is still in the reel, ended without a full render of the current EDL, lost the
+overlays, or used source time outside the approved plan without `work/revision.json`
+`extends_plan` quoting the feedback words that ask for it. Every run appends to
+`work/revisions.jsonl`: `n, time, text, at_s, located, ok, changed, extends_plan, asked,
+summary, verify_ok, cost, turns, wall_s, previous_reel, error`.
+
+Versions: version 1 is the reel of the approved plan, each successful revision makes the next
+one. `previous_reel` is the reel *before* revision n, so the reel revision n made is the next
+successful revision's `previous_reel`, or `out/reel.mp4` for the latest. `GET /api/jobs/{id}`
+reports this as `versions [{version, revision, text, video_url, current}]` and on each
+revision `version` + `video_url` (null once out/history dropped the file).
+
+## Local app (`videocut ui`, `src/videocut/server/`, `app/`)
+
+`videocut ui` starts uvicorn on `127.0.0.1:4300` and opens `http://127.0.0.1:4300/?t=TOKEN`.
+The UI is a static React build served from `src/videocut/web/dist/` (`videocut setup` and
+`./start.sh` build it with the bundled node: `npm ci`, `npm run build`, rebuilt when a source
+file or the lock file changed); without it, every page explains how to build it.
+
+Routes (prefix `/api`): `session`, `types`, `brands` (list, read, validated edit, create from
+the neutral example, logo/font upload with `role`, cached preview sheet), `jobs` (list,
+create by multipart upload, detail, delete to `$VIDEOCUT_HOME/trash`), `jobs/{id}/start`,
+`events` (server-sent events: `stage`, `log`, `tool`, `gate`, `error`, `done`; replayed on
+connect), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
+`media/{reel|preview|cover|screen_proxy|camera_proxy|history/reel-<k>.mp4}` (HTTP Range),
+`download`. Errors are `{"detail": {"message", "code"?, "errors"?}}`; 409 codes: `busy` (a
+run is queued or active), `stale` (the plan changed since it was read), `state`, `exists`,
+`read_only`.
+
+Runs: one at a time (`runs.py`, a queue and one worker thread). A run calls the same
+`run.run(...)` as the CLI with `say` bound to the job's event channel (thread-local stdout
+capture keeps tool output of parallel requests apart) and an `ask` that never answers yes:
+a run stops at the plan gate (exit code 3 → gate `plan`) and the UI answers through
+`/approve`. Status/stage of a job come from its files plus the channel: status `new |
+running | waiting | done | error`, stage `prep, plan, approval, cut, overlays, verify, done,
+revise, plan_revise, error`, gate `plan | result | null`.
+
+Security model:
+- bound to 127.0.0.1; a request whose Host header is not `127.0.0.1:PORT`/`localhost:PORT`
+  is refused (DNS rebinding);
+- the per-start token is only in the link: `GET /?t=TOKEN` sets an HttpOnly
+  `SameSite=Strict` session cookie and redirects (303) to `/`; every other request needs the
+  cookie (scripts and tests may send `X-Token`); the token is never in JS;
+- writes (POST/PUT/PATCH/DELETE) by cookie also need `Origin` = the app's own origin;
+- known limit: cookies are not port-bound, so another server on `127.0.0.1`/`localhost`
+  that the browser visits receives the session cookie (a local program could replay it);
+  the cookie dies with the `videocut ui` process (a new value per start);
+- CSP `default-src 'self'` (no inline script, no CDN), `nosniff`, `frame-ancestors 'none'`,
+  `no-referrer`, `Cache-Control: no-store` on the API;
+- uploads stream to a staging folder with a size cap, are checked by extension and ffprobe
+  (videos need a video stream, the camera an audio stream; images must probe as PNG, JPEG
+  or WebP), get a plain file
+  name and enter the job through `job new` like a CLI file; brand files are checked by magic
+  bytes; nothing uploaded is executed;
+- stills only from `work/plan_stills/`, `work/sheets/`, `out/verify/` (plain path parts,
+  image extensions, symlinks resolved and confined); media only the fixed outputs and
+  `out/history/reel-<k>.mp4`;
+- the human decisions (approve, the personal-data decision, feedback) only come from these
+  authenticated requests. The approval and the decision are written outside the job folder
+  (`$VIDEOCUT_HOME/approvals/`, `$VIDEOCUT_HOME/state/<job>/redaction_decision.json`) by the
+  server, exactly like the CLI; an
+  agent run cannot reach them (no network, writes only `./work/**`, `VIDEOCUT_AGENT=1` makes
+  `job approve`/`job redaction` refuse).
+- the approval binds `work/project.md` and the `work/plan.json` the human saw
+  (`plan_json_sha256`); afterwards the app shows plan.json only while it is that one, and
+  the revise guard reads the approved keep list only from it. A human edit of the markdown
+  drops plan.json (the markdown is the plan then). `/feedback` and `revise` need the
+  recorded cut of the approved plan; a new cut moves `revisions.jsonl` and `out/history/`
+  aside (`*-before-<time>`), so versions always belong to one plan;
+- uploads are judged by content: ffprobe with `-protocol_whitelist file`, and the
+  container must be a video container (MOV/MP4, MKV/WebM, AVI) or an image; staging
+  folders a killed server left behind are removed at start.
+
+`app/`: screens Home (job list), NewJob (type cards, drag & drop with upload progress, brand,
+format, one-line instruction), JobPage (stepper, live log, time, cost), PlanReview
+(structured plan with stills or the markdown, editor with stale-sha handling, plan feedback
+with the change highlighted), PersonalData (redact everything by default, per item choice),
+Result (player, verify findings in plain words, feedback at the player position, versions,
+MP4/cover download), Brands (preview sheet per format, token editor with the server's
+validation, logo/font upload, new brand from the neutral example). German default, English
+switch (`app/src/i18n.tsx`); verify flag and check ids map to plain words, unknown ids show
+as they are. `npm run dev:mock` runs the UI against an in-memory mock of the API.
+
+End to end through the browser: `VIDEOCUT_E2E=1 .tools/bin/uv run python
+tests/e2e/app_e2e.py` (real Claude runs on generated clips in a throwaway `VIDEOCUT_HOME`,
+screenshots per step; not in CI).
 
 ## Decisions
 

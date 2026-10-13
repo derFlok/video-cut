@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import manifest
 from .download import fetch
-from .paths import BIN, MODELS, RENDERER, TOOLS, tool_env
+from .paths import BIN, MODELS, RENDERER, ROOT, TOOLS, tool_env
 
 STATE = TOOLS / "installed.json"
 
@@ -117,6 +117,49 @@ def install_renderer() -> None:
         _mark("chromium", key)
 
 
+APP = ROOT / "app"  # the UI source (React + TypeScript + Vite)
+APP_DIST = ROOT / "src" / "videocut" / "web" / "dist"  # served by `videocut ui`
+
+
+def build_app() -> None:
+    """Build the UI with the bundled node when its source is present (a no-op otherwise).
+    Rebuilt when the lock file or any source file changed since the last build."""
+    if not (APP / "package.json").is_file():
+        return
+    from .download import sha256_of
+
+    lock = APP / "package-lock.json"
+    if not lock.is_file():
+        raise RuntimeError(f"{lock} is missing (app packages are installed pinned, npm ci)")
+    deps = sha256_of(lock)
+    if not _done("app-deps", deps, APP / "node_modules"):
+        _step("Installing app packages")
+        subprocess.run(
+            [str(BIN / "npm"), "ci", "--no-audit", "--no-fund", "--silent"],
+            cwd=APP,
+            env=tool_env(),
+            check=True,
+        )
+        _mark("app-deps", deps)
+    newest = max(
+        (
+            p.stat().st_mtime
+            for p in APP.rglob("*")
+            if p.is_file() and "node_modules" not in p.parts and "dist" not in p.parts
+        ),
+        default=0,
+    )
+    built = APP_DIST / "index.html"
+    if built.is_file() and built.stat().st_mtime >= newest:
+        return
+    _step("Building the app")
+    subprocess.run(
+        [str(BIN / "npm"), "run", "build", "--silent"], cwd=APP, env=tool_env(), check=True
+    )
+    if not built.is_file():
+        raise RuntimeError(f"the app build wrote no {built}")
+
+
 def install_model(name: str) -> None:
     m = manifest.models()[name]
     if m["kind"] == "huggingface":
@@ -146,6 +189,7 @@ def run(models: bool = True) -> None:
     install_zipped_binary("ffprobe")
     install_plain_binary("deep-filter")
     install_renderer()
+    build_app()
     if models:
         for name, m in manifest.models().items():
             if m.get("default"):

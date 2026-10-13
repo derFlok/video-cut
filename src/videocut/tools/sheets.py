@@ -10,6 +10,11 @@ screen:    contact strip of the screen recording over screen time [t0, t1] with 
            work/screen.json drawn in (activity yellow, clicks red, zoom targets green)
            -> work/sheets/screen_<t0>_<t1>.jpg (without t0/t1: the whole recording, an
            overview of up to 10 tiles)
+plan:      one still per view row and per personal-data candidate of work/plan.json (the
+           screen or camera frame at the view's start, or at its zoom_t, with the zoom box
+           drawn green; a candidate's screen frame or screenshot with its box drawn red),
+           at most PLAN_STILL_MAX px on the long side -> work/plan_stills/view_NN.jpg and
+           pd_NN.jpg; their paths go back into plan.json ("still")
 assets:    the job's images (job.json "assets", e.g. screenshots of a demo) as numbered
            thumbnails, ASSETS_PER_SHEET per sheet -> work/sheets/assets_NN.jpg; the summary
            maps each number to its file and size
@@ -23,7 +28,17 @@ import tempfile
 from pathlib import Path
 
 from . import _image as im
-from .common import ToolError, binary, is_fresh, job_parent, read_job, resolve_job, run, run_tool
+from .common import (
+    ToolError,
+    binary,
+    is_fresh,
+    job_parent,
+    read_job,
+    resolve_job,
+    run,
+    run_tool,
+    write_json,
+)
 from .screen import probe_screen, screen_source
 
 COLS = 3
@@ -512,6 +527,96 @@ def assets_sheet(args) -> dict:
     return {"sheets": sheets, "images": items, "labels": font is not None}
 
 
+# ---------------------------------------------------------------- plan stills
+
+PLAN_STILL_MAX = 960
+PD_COLOR = CLICK_COLOR
+
+
+def _fit(w: int, h: int, limit: int = PLAN_STILL_MAX) -> tuple[int, int]:
+    k = min(1.0, limit / max(w, h))
+    return max(2, round(w * k / 2) * 2), max(2, round(h * k / 2) * 2)
+
+
+def _still(job: Path, inputs: list[str], size: tuple[int, int], box, color: str, name: str):
+    w, h = _fit(*size)
+    graph = f"[0:v]scale={w}:{h}"
+    if box:
+        x0, y0 = int(box[0] * w), int(box[1] * h)
+        bw, bh = max(2, int(box[2] * w) - x0), max(2, int(box[3] * h) - y0)
+        graph += f",drawbox=x={x0}:y={y0}:w={bw}:h={bh}:color={color}:t=4"
+    (f,) = im.render_jpegs([inputs], graph + "[out]", job / "work" / "plan_stills", [name])
+    return str(f.relative_to(job))
+
+
+def plan_stills(args) -> dict:
+    from ..edl import read_sync, screen_time
+    from ..redaction import asset_file
+    from .plan import FILE, STILLS, check_job
+
+    job = resolve_job(args.job).resolve()
+    data, errs = check_job(job)
+    if errs:
+        raise ToolError("work/plan.json is not valid (`videocut tool plan check`): " + errs[0])
+    dest = job / STILLS
+    dest.mkdir(parents=True, exist_ok=True)
+    for old in dest.glob("*.jpg"):
+        old.unlink()
+    sync = read_sync(job / "work" / "sync.json")
+    screen = cam = None
+    warnings = []
+
+    def screen_frame(t_cam: float):
+        nonlocal screen
+        if sync is None:
+            return None
+        if screen is None:
+            src = _screen_input(job)
+            screen = (src, tuple(probe_screen(src)["size"]))
+        return ["-ss", f"{max(0.0, screen_time(t_cam, sync)):.4f}", "-i", str(screen[0])], screen[1]
+
+    def camera_frame(t: float):
+        nonlocal cam
+        if cam is None:
+            src, v = _proxy(job)
+            cam = (src, (v["width"], v["height"]))
+        return ["-ss", f"{t:.4f}", "-i", str(cam[0])], cam[1]
+
+    made = []
+    for v in data.get("views") or []:
+        t = v["src"][0] if v.get("zoom_t") is None else v["zoom_t"]
+        name = f"view_{v['n']:02d}.jpg"
+        got = camera_frame(t) if v["layout"] == "face" else screen_frame(t)
+        if got is None:
+            warnings.append(f"view {v['n']}: no valid work/sync.json, no screen still")
+            v["still"] = None
+            continue
+        v["still"] = _still(job, got[0], got[1], v.get("zoom_box"), TARGET_COLOR, name)
+        made.append(v["still"])
+    for c in data.get("personal_data") or []:
+        name = f"pd_{c['id']:02d}.jpg"
+        if "asset" in c:
+            f = asset_file(job, c["asset"])
+            if f is None or not f.is_relative_to(job) or not f.is_file():
+                warnings.append(f"personal data {c['id']}: {c['asset']} not found")
+                c["still"] = None
+                continue
+            got = (["-i", str(f)], _image_size(f))
+        else:
+            got = screen_frame((c["t0"] + c["t1"]) / 2)
+            if got is None:
+                warnings.append(f"personal data {c['id']}: no valid work/sync.json, no still")
+                c["still"] = None
+                continue
+        c["still"] = _still(job, got[0], got[1], c["box"], PD_COLOR, name)
+        made.append(c["still"])
+    write_json(job / FILE, data)
+    for w in warnings:
+        print(f"warning: {w}")
+    print(f"{STILLS}: {len(made)} still(s)")
+    return {"dir": STILLS, "stills": made, "warnings": warnings}
+
+
 def register(subparsers) -> None:
     p = subparsers.add_parser("sheet", help="contact, burst, timeline and screen sheets")
     sub = p.add_subparsers(dest="sheet_cmd", required=True)
@@ -543,3 +648,8 @@ def register(subparsers) -> None:
         parents=[job_parent()],
     )  # fmt: skip
     a.set_defaults(handler=run_tool("sheet assets", assets_sheet))
+    pl = sub.add_parser(
+        "plan", help="stills of the plan's views and personal-data candidates",
+        parents=[job_parent()],
+    )  # fmt: skip
+    pl.set_defaults(handler=run_tool("sheet plan", plan_stills))

@@ -30,3 +30,19 @@ jobs:
         run: |
           uv sync --frozen --python 3.12
           uv run --frozen python -m pytest -q
+
+  app:
+    # The local app's UI (app/): unit tests and the production build, with the node version
+    # pinned in manifest/tools.json (keep the two in step).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - name: app tests and build
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm run build

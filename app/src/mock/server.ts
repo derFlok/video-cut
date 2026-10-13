@@ -1,0 +1,488 @@
+// In-memory fake of the shared API contract: development (`npm run dev:mock`), tests and
+// screenshots. It simulates runs with timers and streams events like the real server.
+
+import { setTransport, type Transport, type UploadProgress } from "../api/client";
+import type {
+  Brand,
+  JobDetail,
+  JobEvent,
+  JobSummary,
+  PdCandidate,
+  Plan,
+  PlanJson,
+  Stage,
+  VideoType,
+} from "../api/types";
+import { brandSheet, coverPicture, personStill, screenStill } from "./pictures";
+
+export interface MockOptions {
+  /** Milliseconds per simulated step (0 in tests). */
+  step?: number;
+  /** Start with the demo jobs (true) or empty. */
+  seed?: boolean;
+}
+
+interface MockJob {
+  detail: JobDetail;
+  created: string;
+  title: string | null;
+  plan: Plan | null;
+  events: JobEvent[];
+}
+
+export interface MockState {
+  types: VideoType[];
+  brands: Map<string, Brand>;
+  jobs: Map<string, MockJob>;
+  active: string | null;
+  /** Every request the fake saw (method, path, body), newest last. */
+  calls: { method: string; path: string; body: unknown }[];
+}
+
+const TYPES: VideoType[] = [
+  { id: "thought", name_de: "Gedanke des Tages", name_en: "Thought of the day", desc_de: "30–45 s, eine These, Kernaussage groß eingeblendet.", desc_en: "30–45 s, one thesis, the core message shown large.", needs: ["camera"], optional: [] },
+  { id: "myth", name_de: "Mythos vs. Realität", name_en: "Myth vs. reality", desc_de: "Gegenüberstellung als Split-Grafik.", desc_en: "Side-by-side split graphic.", needs: ["camera"], optional: [] },
+  { id: "tips", name_de: "Drei Tipps", name_en: "Three tips", desc_de: "Liste mit animierter Nummer pro Punkt.", desc_en: "A list with an animated number per point.", needs: ["camera"], optional: [] },
+  { id: "walkthrough", name_de: "Produkt-Walkthrough", name_en: "Product walkthrough", desc_de: "Bildschirmaufnahme mit Zoom auf die besprochene Stelle.", desc_en: "Screen recording zoomed onto the part you talk about.", needs: ["camera"], optional: ["screen", "assets"] },
+  { id: "process", name_de: "Prozess als Bildstrecke", name_en: "Process as a picture series", desc_de: "Mehrere Screenshots als Klickstrecke.", desc_en: "Several screenshots as a click-through.", needs: ["camera"], optional: ["assets"] },
+];
+
+const EXAMPLE: Brand = {
+  name: "Example (neutral)",
+  colors: { bg: "#F4F4F4", surface: "#FFFFFF", text: "#141414", muted: "#6B6B6B", accent: "#141414", accent_usage: "sparsam" },
+  fonts: { display: "system-ui", body: "system-ui", weights: [400, 600, 800] },
+  logo: { light: null, dark: null, placement: "none" },
+  captions: { style: "box", case: "normal", highlight: "underline", position: "center", pace: "normal" },
+  motion: { character: "ruhig", spring: { w: 13, z: 0.9 }, transitions: "blur" },
+  icons: "none",
+  voice: { address: "du", tone: "neutral", forbidden_words: [], cta: "" },
+  music: { mood: "neutral", max_bpm: 110 },
+  legal: { footer: "" },
+  files: ["brand.json"],
+};
+
+const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+const sha = (s: string) => {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(16).padStart(8, "0");
+};
+
+function planFor(title: string, variant = 0, note?: string): Plan {
+  const keep = [
+    { n: 1, src: [3.2, 7.9] as [number, number], text: "Einstieg: die häufigste Frage in einem Satz.", why: "Starker Hook ohne Begrüßung." },
+    { n: 2, src: [12.4, 24.0] as [number, number], text: "Die Antwort mit dem Beispiel aus dem Alltag.", why: "Kernaussage, ruhig erklärt." },
+    { n: 3, src: [31.5, 44.8] as [number, number], text: "Zweites Beispiel mit der Bildschirmaufnahme.", why: "Zeigt den Ablauf konkret." },
+    { n: 4, src: [52.0, 58.6] as [number, number], text: "Abschluss mit Aufruf zum Weiterleiten.", why: "Klarer Schluss." },
+  ];
+  if (variant > 0) keep.splice(2, 1, { n: 3, src: [33.0, 49.5], text: "Zweites Beispiel, länger, ohne die Zwischenfrage.", why: "Auf Wunsch: Beispiel länger, Frage weg." });
+  const plan: PlanJson = {
+    title,
+    format: "16:9",
+    hook: { text: "Die eine Frage, die fast jeder stellt – und warum die Antwort einfacher ist.", src: [0.4, 3.1] },
+    core_message: "Ein klarer Ablauf spart jede Woche Zeit.",
+    keep_list: keep,
+    views: [
+      { n: 1, src: [3.2, 7.9], layout: "face", still: "work/plan_stills/view-1.jpg" },
+      { n: 2, src: [12.4, 24.0], layout: "pip", zoom_box: [0.1, 0.2, 0.6, 0.6], still: "work/plan_stills/view-2.jpg" },
+      { n: 3, src: [31.5, 44.8], layout: "screen", zoom_box: [0.3, 0.1, 0.9, 0.5], still: "work/plan_stills/view-3.jpg" },
+      { n: 4, src: [52.0, 58.6], layout: "split", still: "work/plan_stills/view-4.jpg" },
+    ],
+    overlays: [
+      { scene: "keyword", t0: 1.0, text: "Die häufigste Frage" },
+      { scene: "number_card", t0: 9.5, text: "3 Schritte" },
+      { scene: "cta_end", t0: 38.0, text: "Schick das jemandem, der das braucht." },
+    ],
+    personal_data: [
+      { id: 1, kind: "email", t0: 18.0, t1: 24.1, box: [0.55, 0.3, 0.92, 0.38], reason: "E-Mail-Adresse in der Kontaktliste sichtbar.", still: "work/plan_stills/pd-1.jpg" },
+      { id: 2, kind: "name", asset: "input/shot-1.png", box: [0.06, 0.42, 0.45, 0.5], reason: "Vor- und Nachname in der Kopfzeile.", still: "work/plan_stills/pd-2.jpg" },
+    ],
+    risks: ["Bildschirmaufnahme bei 0:31 ist klein; Zoom auf höchstens 1,6×.", "Ton am Ende leicht hallig."],
+  };
+  if (note) plan.change_note = note;
+  const md = [
+    `# ${title}`,
+    "",
+    `**Hook:** ${plan.hook}`,
+    "",
+    `**Kernaussage:** ${plan.core_message}`,
+    "",
+    "## Streichliste / Behalten",
+    "",
+    "| # | Quelle | Inhalt |",
+    "|---|---|---|",
+    ...keep.map((k) => `| ${k.n} | ${k.src[0]}–${k.src[1]} s | ${k.text} |`),
+    "",
+    "## Risiken",
+    "",
+    ...(plan.risks as string[]).map((r) => `- ${r}`),
+    "",
+  ].join("\n");
+  return { markdown: md, plan, sha: sha(md) };
+}
+
+const CANDIDATES: PdCandidate[] = [
+  { id: 1, kind: "email", t0: 18.0, t1: 24.1, box: [0.55, 0.3, 0.92, 0.38], reason: "E-Mail-Adresse in der Kontaktliste sichtbar." },
+  { id: 2, kind: "name", asset: "input/shot-1.png", box: [0.06, 0.42, 0.45, 0.5], reason: "Vor- und Nachname in der Kopfzeile." },
+];
+
+function baseDetail(id: string, over: Partial<JobDetail>): JobDetail {
+  return {
+    id,
+    type: "thought",
+    brand: null,
+    format: "auto",
+    format_resolved: "9:16",
+    status: "new",
+    stage: "prep",
+    approved: false,
+    plan_sha: null,
+    redaction: { candidates: [], decision: null },
+    outputs: null,
+    verify: null,
+    runs: [],
+    revisions: [],
+    ...over,
+  };
+}
+
+function seedJobs(): Map<string, MockJob> {
+  const jobs = new Map<string, MockJob>();
+  const add = (id: string, title: string | null, created: string, d: Partial<JobDetail>, plan: Plan | null) =>
+    jobs.set(id, { detail: baseDetail(id, { title, created, ...d, plan_sha: plan?.sha ?? null }), created, title, plan, events: [{ t: "stage", stage: d.stage ?? "prep" }] });
+  const p1 = planFor("Warum ein fester Ablauf Zeit spart");
+  add(
+    "job-approval",
+    "Warum ein fester Ablauf Zeit spart",
+    "2026-10-12T09:14:00",
+    {
+      type: "walkthrough",
+      brand: "light",
+      format: "auto",
+      format_resolved: "16:9",
+      status: "waiting",
+      stage: "approval",
+      brief: "Kurz halten, Fokus auf den Ablauf",
+      redaction: { candidates: clone(CANDIDATES), decision: null },
+      runs: [
+        { phase: "prep", wall_s: 184, turns: null, cost_usd: null },
+        { phase: "plan", wall_s: 141, turns: 22, cost_usd: 0.41 },
+      ],
+    },
+    p1,
+  );
+  add(
+    "job-done",
+    "Drei Tipps für den Start",
+    "2026-10-10T16:40:00",
+    {
+      type: "tips",
+      brand: "dark",
+      format: "9:16",
+      format_resolved: "9:16",
+      status: "done",
+      stage: "done",
+      approved: true,
+      outputs: { reel: "out/reel.mp4", preview: "out/preview.mp4", cover: "out/cover.jpg" },
+      verify: {
+        ok: false,
+        checks: { loudness: { ok: true }, duration: { ok: true } },
+        flagged: [{ cut: 7, t: 21.4, flags: ["blink_at_cut"] }],
+        overlay_flagged: [],
+        screen_flagged: [],
+      },
+      runs: [
+        { phase: "prep", wall_s: 160, turns: null, cost_usd: null },
+        { phase: "plan", wall_s: 120, turns: 18, cost_usd: 0.36 },
+        { phase: "cut", wall_s: 302, turns: 41, cost_usd: 0.88 },
+        { phase: "overlays", wall_s: 210, turns: 30, cost_usd: 0.52 },
+      ],
+      revisions: [
+        { n: 1, time: "2026-10-10T17:20:00", text: "Bei 0:12 weniger rauszoomen.", at_s: 12.0, ok: true, changed: { segments: [3] }, cost: 0.21, version: 2, video_url: "/api/jobs/job-done/media/history/reel-2.mp4" },
+        { n: 2, time: "2026-10-10T17:41:00", text: "Die Frage zu den Anrufen weglassen.", ok: true, changed: { segments: [5, 6] }, cost: 0.18, version: 3, video_url: "/api/jobs/job-done/media/reel" },
+      ],
+      versions: [
+        { version: 3, revision: 2, text: "Die Frage zu den Anrufen weglassen.", video_url: "/api/jobs/job-done/media/reel", current: true },
+        { version: 2, revision: 1, text: "Bei 0:12 weniger rauszoomen.", video_url: "/api/jobs/job-done/media/history/reel-2.mp4", current: false },
+        { version: 1, revision: null, text: null, video_url: "/api/jobs/job-done/media/history/reel-1.mp4", current: false },
+      ],
+    },
+    planFor("Drei Tipps für den Start"),
+  );
+  add("job-running", "Neue Funktion in 40 Sekunden", "2026-10-13T08:02:00", { type: "walkthrough", status: "running", stage: "prep", format: "16:9", format_resolved: "16:9", runs: [] }, null);
+  add("job-error", null, "2026-10-09T11:00:00", { type: "myth", status: "error", stage: "error", runs: [{ phase: "prep", wall_s: 12, turns: null, cost_usd: null }] }, null);
+  const running = jobs.get("job-running")!;
+  running.events.push({ t: "log", text: "Audio wird extrahiert (48 kHz) …" }, { t: "tool", text: "Bash: videocut tool transcribe job-running" }, { t: "log", text: "Transkript: 412 Wörter, 18 Pausen." });
+  return jobs;
+}
+
+export function createMock(opts: MockOptions = {}) {
+  const step = opts.step ?? 700;
+  const state: MockState = {
+    types: TYPES,
+    brands: new Map<string, Brand>([
+      ["_example", clone(EXAMPLE)],
+      ...(opts.seed === false
+        ? []
+        : ([
+            ["light", { ...clone(EXAMPLE), name: "Beispiel hell", colors: { ...EXAMPLE.colors, accent: "#2F6FDE", surface: "#FFFFFF" } }],
+            ["dark", { ...clone(EXAMPLE), name: "Beispiel dunkel", colors: { bg: "#121417", surface: "#1E2228", text: "#F2F2F2", muted: "#9AA0A8", accent: "#E8B23A", accent_usage: "frei" } }],
+          ] as [string, Brand][])),
+    ]),
+    jobs: opts.seed === false ? new Map() : seedJobs(),
+    active: null,
+    calls: [],
+  };
+  const listeners = new Map<string, Set<(ev: JobEvent) => void>>();
+  let counter = 1;
+
+  const emit = (id: string, ev: JobEvent) => {
+    const job = state.jobs.get(id);
+    if (!job) return;
+    if (ev.t === "stage") {
+      job.events = job.events.filter((e) => e.t !== "stage");
+      job.detail.stage = ev.stage;
+    }
+    job.events.push(ev);
+    listeners.get(id)?.forEach((cb) => cb(ev));
+  };
+  const later = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  /** A simulated Claude run: stages with log lines, then a gate or done. */
+  async function simulate(id: string, stages: Stage[], end: "plan" | "result", after: () => void) {
+    const job = state.jobs.get(id)!;
+    state.active = id;
+    job.detail.status = "running";
+    const t0 = Date.now();
+    for (const s of stages) {
+      emit(id, { t: "stage", stage: s });
+      await later(step);
+      emit(id, { t: "log", text: `${s}: läuft …` });
+      emit(id, { t: "tool", text: `Bash: videocut tool ${s === "prep" ? "ingest" : s} ${id}` });
+      await later(step);
+    }
+    after();
+    job.detail.runs.push({ phase: stages[stages.length - 1], wall_s: Math.round((Date.now() - t0) / 1000) + 60, turns: 12, cost_usd: 0.27 });
+    state.active = null;
+    if (end === "plan") {
+      job.detail.status = "waiting";
+      emit(id, { t: "stage", stage: "approval" });
+      emit(id, { t: "gate", gate: "plan" });
+    } else {
+      job.detail.status = "done";
+      emit(id, { t: "stage", stage: "done" });
+      emit(id, { t: "gate", gate: "result" });
+      emit(id, { t: "done", ok: true });
+    }
+  }
+
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  function summary(j: MockJob): JobSummary {
+    const d = j.detail;
+    return {
+      id: d.id,
+      created: j.created,
+      type: d.type,
+      brand: d.brand,
+      format: d.format,
+      status: d.status,
+      stage: d.stage,
+      title: j.title,
+      thumb_url: d.status === "new" ? null : `/api/jobs/${d.id}/stills/work/plan_stills/view-1.jpg`,
+    };
+  }
+
+  function route(method: string, path: string, body: unknown): Response {
+    const url = new URL(path, "http://127.0.0.1");
+    const p = url.pathname.split("/").filter(Boolean).map(decodeURIComponent); // ["api", ...]
+    if (p[0] !== "api") return json(404, { detail: "not found" });
+    const [, a, id, b, c] = p;
+
+    if (a === "session") return json(200, { version: "0.0.1", lang: "de", claude: { ok: true, how: "subscription" } });
+    if (a === "types") return json(200, state.types);
+
+    if (a === "brands") {
+      if (!id && method === "GET")
+        return json(200, [...state.brands.entries()].map(([bid, br]) => ({ id: bid, name: br.name, preview_url: `/api/brands/${bid}/sheet?format=9:16` })));
+      if (!id && method === "POST") {
+        const name = String((body as { name?: string })?.name ?? "Neue Marke");
+        const bid = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `brand-${counter++}`;
+        state.brands.set(bid, { ...clone(EXAMPLE), name });
+        return json(201, { id: bid });
+      }
+      const br = state.brands.get(id);
+      if (!br) return json(404, { detail: `no brand ${id}` });
+      if (!b && method === "GET") return json(200, br);
+      if (!b && method === "PUT") {
+        if (id === "_example") return json(409, { detail: { message: "the bundled example brand is read-only; create a new brand", code: "read_only" } });
+        const tokens = body as Brand;
+        const errors: string[] = [];
+        if (!tokens.name || !String(tokens.name).trim()) errors.push("$.name: required, a non-empty string");
+        for (const k of ["bg", "text", "accent", "surface", "muted"]) {
+          const v = tokens.colors?.[k];
+          if (v !== undefined && !/^#[0-9a-fA-F]{6}$/.test(v)) errors.push(`$.colors.${k}: '${v}' is not a hex colour like #RRGGBB`);
+        }
+        if (errors.length) return json(422, { detail: { message: "brand is invalid", errors } });
+        state.brands.set(id, { ...tokens, files: br.files });
+        return json(200, state.brands.get(id));
+      }
+      if (b === "files" && method === "POST") {
+        const form = body as FormData;
+        const file = (form.get("logo") ?? form.get("font")) as File | null;
+        if (!file) return json(400, { detail: "no file" });
+        const name = form.get("logo") ? `logo-${form.get("role") ?? "light"}${file.name.slice(file.name.lastIndexOf("."))}` : `fonts/${file.name}`;
+        br.files = [...(br.files ?? []), name];
+        if (form.get("logo")) br.logo = { ...br.logo, [String(form.get("role") ?? "light")]: name };
+        return json(200, br);
+      }
+    }
+
+    if (a === "jobs") {
+      if (!id && method === "GET")
+        return json(200, [...state.jobs.values()].sort((x, y) => (x.created < y.created ? 1 : -1)).map(summary));
+      const job = state.jobs.get(id);
+      if (!job) return json(404, { detail: `no job ${id}` });
+      const d = job.detail;
+      if (!b && method === "GET") return json(200, d);
+      if (!b && method === "DELETE") {
+        state.jobs.delete(id);
+        return json(200, { ok: true });
+      }
+      if (b === "start" && method === "POST") {
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        void simulate(id, ["prep", "plan"], "plan", () => {
+          job.plan = planFor(job.title ?? "Neues Video");
+          d.plan_sha = job.plan.sha;
+          d.redaction = { candidates: clone(CANDIDATES), decision: null };
+        });
+        return json(202, { ok: true });
+      }
+      if (b === "plan" && !c && method === "GET") return job.plan ? json(200, job.plan) : json(404, { detail: "no plan yet" });
+      if (b === "plan" && !c && method === "PUT") {
+        const { markdown, sha: s } = body as { markdown: string; sha: string };
+        if (!job.plan || s !== job.plan.sha) return json(409, { detail: { message: "the plan changed since you read it; read it again", code: "stale" } });
+        job.plan = { markdown, plan: job.plan.plan, sha: sha(markdown) };
+        d.plan_sha = job.plan.sha;
+        d.approved = false;
+        return json(200, job.plan);
+      }
+      if (b === "plan" && c === "feedback" && method === "POST") {
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        const text = String((body as { text?: string }).text ?? "");
+        d.approved = false;
+        void simulate(id, ["plan_revise"], "plan", () => {
+          job.plan = planFor(job.title ?? "Neues Video", 1, `Auf deinen Wunsch: ${text}`);
+          d.plan_sha = job.plan.sha;
+        });
+        return json(202, { ok: true });
+      }
+      if (b === "approve" && method === "POST") {
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        const req = body as { plan_sha: string; redaction?: { mode: string; ids: number[] } };
+        if (!job.plan || req.plan_sha !== job.plan.sha) return json(409, { detail: { message: "the plan changed since you read it; read it again", code: "stale" } });
+        d.approved = true;
+        d.redaction.decision = req.redaction ? { ...req.redaction } : null;
+        void simulate(id, ["cut", "overlays", "verify"], "result", () => {
+          d.outputs = { reel: "out/reel.mp4", preview: "out/preview.mp4", cover: "out/cover.jpg" };
+          d.verify = { ok: true, checks: { loudness: { ok: true } }, flagged: [], overlay_flagged: [], screen_flagged: [] };
+        });
+        return json(202, { ok: true });
+      }
+      if (b === "feedback" && method === "POST") {
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        const fb = body as { text: string; at_s?: number };
+        const n = d.revisions.length + 1;
+        void simulate(id, ["revise", "verify"], "result", () => {
+          // Like the server: the reel before revision n is kept as out/history/reel-<n>.mp4,
+          // so version k (k < latest) plays history/reel-k, the latest one the current reel.
+          const version = d.revisions.filter((r) => r.ok !== false).length + 2;
+          d.revisions.push({ n, time: new Date().toISOString(), text: fb.text, at_s: fb.at_s ?? null, ok: true, changed: { segments: [2] }, cost: 0.19, previous_reel: `out/history/reel-${version - 1}.mp4`, version } as never);
+          const reel = `/api/jobs/${id}/media/reel`;
+          d.versions = [
+            ...d.revisions.filter((r) => r.version).map((r) => ({ version: r.version!, revision: r.n ?? null, text: r.text, video_url: r.version === version ? reel : `/api/jobs/${id}/media/history/reel-${r.version}.mp4`, current: r.version === version })).reverse(),
+            { version: 1, revision: null, text: null, video_url: `/api/jobs/${id}/media/history/reel-1.mp4`, current: false },
+          ];
+          for (const r of d.revisions) if (r.version) r.video_url = d.versions.find((v) => v.version === r.version)?.video_url ?? undefined;
+        });
+        return json(202, { ok: true });
+      }
+    }
+    return json(404, { detail: "not found" });
+  }
+
+  const transport: Transport = {
+    async request(method, path, body) {
+      state.calls.push({ method, path, body });
+      return route(method, path, body);
+    },
+    async upload(path, form, onProgress: (p: UploadProgress) => void) {
+      state.calls.push({ method: "POST", path, body: form });
+      const files = ["camera", "screen", "assets"].flatMap((k) => form.getAll(k)).filter((f): f is File => f instanceof File);
+      const total = files.reduce((s, f) => s + f.size, 0) || 1;
+      for (let i = 1; i <= 10; i++) {
+        await later(step / 5);
+        onProgress({ loaded: (total * i) / 10, total });
+      }
+      const camera = form.get("camera");
+      if (!(camera instanceof File)) return json(422, { detail: "camera recording missing" });
+      const id = `job-${Date.now().toString(36)}-${counter++}`;
+      const withScreen = form.get("screen") instanceof File || form.getAll("assets").length > 0;
+      const fmt = String(form.get("format") ?? "auto");
+      const title = camera.name.replace(/\.[^.]+$/, "");
+      state.jobs.set(id, {
+        detail: baseDetail(id, {
+          type: String(form.get("type")),
+          brand: (form.get("brand") as string) || null,
+          format: fmt as JobDetail["format"],
+          format_resolved: (fmt === "auto" ? (withScreen ? "16:9" : "9:16") : fmt) as JobDetail["format_resolved"],
+          brief: (form.get("brief") as string) || null,
+          title,
+        }),
+        created: new Date().toISOString(),
+        title,
+        plan: null,
+        events: [{ t: "stage", stage: "prep" }],
+      });
+      return json(201, { id });
+    },
+    events(path, onEvent) {
+      const id = decodeURIComponent(path.split("/")[3]);
+      const set = listeners.get(id) ?? new Set();
+      listeners.set(id, set);
+      set.add(onEvent);
+      // Replay the current state, like the server does on connect.
+      const replay = [...(state.jobs.get(id)?.events ?? [])];
+      setTimeout(() => replay.forEach(onEvent), 0);
+      return () => set.delete(onEvent);
+    },
+    url(path) {
+      const u = new URL(path, "http://127.0.0.1");
+      const p = u.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+      if (p[1] === "brands" && p[3] === "sheet") {
+        const br = state.brands.get(p[2]);
+        return brandSheet(br?.colors ?? {}, u.searchParams.get("format") ?? "9:16");
+      }
+      if (p[1] === "jobs" && p[3] === "stills") {
+        const name = p.slice(4).join("/");
+        const m = name.match(/(\d+)/);
+        const n = m ? Number(m[1]) : 1;
+        const fmt = state.jobs.get(p[2])?.detail.format_resolved ?? "16:9";
+        if (name.includes("pd-") || name.includes("view-3")) return screenStill(n);
+        return personStill(n, fmt);
+      }
+      if (p[1] === "jobs" && p[3] === "media" && p[4] === "cover") return coverPicture(state.jobs.get(p[2])?.detail.format_resolved ?? "9:16");
+      if (p[1] === "jobs" && (p[3] === "media" || p[3] === "download")) return "data:video/mp4;base64,";
+      return path;
+    },
+  };
+
+  return { state, transport, emit };
+}
+
+export function installMock(opts: MockOptions = {}) {
+  const mock = createMock(opts);
+  setTransport(mock.transport);
+  return mock;
+}

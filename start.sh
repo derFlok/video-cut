@@ -3,6 +3,7 @@
 #
 #   ./start.sh              install/refresh everything, then run the doctor
 #   ./start.sh --selftest   same, then cut a generated test clip end to end
+#   ./start.sh --ui         same, then open the app in the browser
 #   ./start.sh --check      only run the doctor, install nothing
 #
 # Everything is installed into ./.tools (no Homebrew, no sudo).
@@ -70,4 +71,8 @@ say "Syncing Python environment"
 
 if [[ "${1:-}" == "--selftest" ]]; then
   "$BIN/uv" run --frozen --quiet videocut selftest
+elif [[ "${1:-}" == "--ui" ]]; then
+  exec "$BIN/uv" run --frozen --quiet videocut ui
+else
+  say "Ready. Open the app with: ./start.sh --ui   (or: .tools/bin/uv run videocut ui)"
 fi
