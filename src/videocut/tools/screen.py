@@ -16,11 +16,25 @@ an ffmpeg pipe and writes work/screen.json:
                     change followed nearby
     scenes          [t] hard changes (most of the screen changed at once)
     text_density    [{t, box, score}] edge density per tile, once per scene
-    zoom_targets    [{t0, t1, box, max_zoom, max_zoom_split, view, zoom, score, clicks}]
-                    activity and clicks merged into regions that stay put for >= 1.2 s.
-                    max_zoom keeps >= 1 source px per output px when the screen view
-                    fills the reel width; view is the screen-shaped box to show at
-                    zoom = min(1/box size, max_zoom)
+    zoom_targets    [{t0, t1, box, max_zoom, max_zoom_split, view, zoom, text_px, score,
+                    clicks}] activity and clicks merged into regions that stay put for
+                    >= 1.2 s. max_zoom (max_zoom_split) keeps >= 1 source px per output
+                    px in the "screen" ("split") view of the job's format; view is the
+                    screen-shaped box to show at zoom = min(1/box size, max_zoom); text_px
+                    the estimated UI text height in output px there ("screen" view)
+    format          the job's output format the zoom caps above were computed for
+    max_zoom        {screen, pip, split} caps of that format
+    ui_scale        source px per logical px assumed for the UI (HiDPI recordings: 2)
+    by_format       {format: {screen|pip|split: {max_zoom, text_px, readable_zoom}}} for
+                    EVERY output format (_format.FORMATS): the sharpness cap, the UI text
+                    height in output px with the whole screen shown, and the zoom at which
+                    it reaches _layouts.TEXT_MIN_PX (readable); readable_zoom > max_zoom
+                    means the text cannot be both sharp and readable in that view
+
+The caps and text sizes come from the layout geometry render draws (_layouts.view_rect)
+at each format's output size, so they never drift from render. They are stored per format
+(by_format) rather than computed by readers; the job-format fields (format, max_zoom,
+zoom_targets) are recomputed without a new analysis when job.json "format" changes.
 
 All boxes are [x0, y0, x1, y1] normalised to the recording, times are screen seconds.
 Idempotent: a screen.json newer than the recording with the same parameters is kept.
@@ -36,6 +50,8 @@ import numpy as np
 
 from .. import edl
 from ..paths import tool_env
+from ._format import FORMATS, job_format
+from ._layouts import readable_zoom, text_px, ui_scale, view_rect
 from .common import (
     ToolError,
     binary,
@@ -68,10 +84,7 @@ STOP_NEAR = 0.04  # ... this close to the pointer counts as a click
 # Click ring: square-ish hollow blob between these shares of the long side.
 RING_MIN_FRAC, RING_MAX_FRAC = 0.012, 0.1
 RING_LINK_S = 0.25
-# Reel geometry the zoom cap is computed for (render owns the layouts; these mirror them):
-# "screen" fills the 1080 px width, "split" fills the top 58 % of 1920 (cover).
-OUT_W, OUT_H = 1080, 1920
-SPLIT_TOP = 0.58
+VIEWS = ("screen", "pip", "split")  # layouts with a screen view
 # Zoom targets.
 TARGET_MIN_S = 1.2
 TARGET_GAP_S = 1.0
@@ -111,14 +124,38 @@ def probe_screen(src: Path) -> dict:
     return {"size": [w, h], "duration": dur}
 
 
-def max_zoom(w: int, h: int, layout: str = "screen") -> float:
+def max_zoom(w: int, h: int, layout: str = "screen", out: tuple[int, int] = (1080, 1920)) -> float:
     """Largest zoom (1 / shown share of the screen) that keeps >= 1 source px per output
-    px over the area the screen fills in the reel; rounded down to 0.01."""
-    if layout == "split":
-        area_w, area_h = OUT_W, round(OUT_H * SPLIT_TOP)
-    else:
-        area_w, area_h = OUT_W, OUT_W * h / w
-    return math.floor(min(w / area_w, h / area_h) * 100 + 1e-6) / 100
+    px in the `layout` view of an `out`-sized output; rounded down to 0.01."""
+    return math.floor(w / view_rect(layout, out, (w, h)).w * 100 + 1e-6) / 100
+
+
+def by_format(w: int, h: int) -> dict:
+    """{format: {layout: {max_zoom, text_px, readable_zoom}}} for every output format."""
+    out = {}
+    for fmt, size in FORMATS.items():
+        out[fmt] = {
+            lay: {
+                "max_zoom": max_zoom(w, h, lay, size),
+                "text_px": round(text_px((w, h), view_rect(lay, size, (w, h)).w, w), 1),
+                "readable_zoom": round(readable_zoom(lay, size, (w, h)), 2),
+            }
+            for lay in VIEWS
+        }
+    return out
+
+
+def derive(doc: dict, fmt: str) -> dict:
+    """The format-dependent fields of `doc` (format, max_zoom, ui_scale, by_format,
+    zoom_targets) for output format `fmt`."""
+    w, h = doc["size"]
+    size = FORMATS[fmt]
+    doc["format"] = fmt
+    doc["max_zoom"] = {lay: max_zoom(w, h, lay, size) for lay in VIEWS}
+    doc["ui_scale"] = ui_scale((w, h))
+    doc["by_format"] = by_format(w, h)
+    doc["zoom_targets"] = zoom_targets(doc, doc["duration"], size)
+    return doc
 
 
 def analysis_size(w: int, h: int, long_side: int = LONG_SIDE) -> tuple[int, int]:
@@ -403,10 +440,12 @@ def _small(box) -> bool:
     return box[2] - box[0] <= TARGET_MAX and box[3] - box[1] <= TARGET_MAX
 
 
-def zoom_targets(doc: dict, duration: float) -> list[dict]:
-    """Merge activity and clicks into regions that stay put, each with its zoom cap."""
+def zoom_targets(doc: dict, duration: float, out: tuple[int, int] = (1080, 1920)) -> list[dict]:
+    """Merge activity and clicks into regions that stay put, each with its zoom cap for an
+    `out`-sized output."""
     w, h = doc["size"]
-    cap, cap_split = max_zoom(w, h), max_zoom(w, h, "split")
+    cap, cap_split = max_zoom(w, h, "screen", out), max_zoom(w, h, "split", out)
+    view_w = view_rect("screen", out, (w, h)).w
     scenes = doc["scenes"]
     events = [(a["t"], a["box"], a["score"] / SAMPLE_FPS, 0) for a in doc["activity"]]
     hw, hh = CLICK_BOX / 2, CLICK_BOX / 2 * w / h
@@ -477,9 +516,9 @@ def zoom_targets(doc: dict, duration: float) -> list[dict]:
         x0, y0, x1, y1 = tr["box"]
         pad = 0.1 * max(x1 - x0, y1 - y0) + 0.01
         box = [max(0.0, x0 - pad), max(0.0, y0 - pad), min(1.0, x1 + pad), min(1.0, y1 + pad)]
+        if max(box[2] - box[0], box[3] - box[1]) > 1 / TARGET_MIN_ZOOM:
+            continue  # too large to be worth a zoom (a low cap only limits the zoom)
         s = min(1.0, max(box[2] - box[0], box[3] - box[1], 1 / cap))
-        if s > 1 / TARGET_MIN_ZOOM:
-            continue
         cx = min(max((box[0] + box[2]) / 2, s / 2), 1 - s / 2)
         cy = min(max((box[1] + box[3]) / 2, s / 2), 1 - s / 2)
         view = [cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2]
@@ -492,6 +531,7 @@ def zoom_targets(doc: dict, duration: float) -> list[dict]:
                 "max_zoom_split": cap_split,
                 "view": [round(v, 4) for v in view],
                 "zoom": round(1 / s, 2),
+                "text_px": round(text_px((w, h), view_w, w * s), 1),
                 "score": round(tr["score"], 3),
                 "clicks": tr["clicks"],
             }
@@ -509,14 +549,25 @@ def screen(args) -> dict:
     work.mkdir(exist_ok=True)
     out = work / "screen.json"
     params = {"version": VERSION, "fps": SAMPLE_FPS, "long_side": LONG_SIDE}
+    fmt = job_format(read_job(job))
     if not args.force and is_fresh([out], [src]):
         try:
             doc = json.loads(out.read_text())
         except ValueError:
             doc = None
-        if doc and doc.get("params") == params:
-            print(f"{out.relative_to(job)} is up to date")
-            return _summary(job, out, doc, reused=True)
+        if isinstance(doc, dict) and doc.get("params") == params:
+            if doc.get("format") != fmt or "by_format" not in doc:  # e.g. a new format
+                try:
+                    doc = derive(doc, fmt)
+                except (KeyError, TypeError, ValueError):
+                    doc = None  # damaged: analyse again
+                if doc is not None:
+                    write_json(out, doc)
+                    print(f"{out.relative_to(job)}: zoom caps recomputed for {fmt}")
+            else:
+                print(f"{out.relative_to(job)} is up to date")
+            if doc is not None:
+                return _summary(job, out, doc, reused=True)
     info = probe_screen(src)
     w, h = info["size"]
     aw, ah = analysis_size(w, h)
@@ -531,11 +582,9 @@ def screen(args) -> dict:
         "duration": round(duration, 3),
         "source": str(src.relative_to(job)),
         "params": params,
-        "max_zoom": {"screen": max_zoom(w, h), "split": max_zoom(w, h, "split")},
         **res,
     }
-    doc["zoom_targets"] = zoom_targets(doc, duration)
-    write_json(out, doc)
+    write_json(out, derive(doc, fmt))
     print(
         f"{out.relative_to(job)}: {len(doc['activity'])} activity samples, "
         f"{len(doc['clicks'])} clicks, {len(doc['scenes'])} scene changes, "
@@ -558,7 +607,7 @@ def _summary(job: Path, out: Path, doc: dict, reused: bool) -> dict:
     for z in doc["zoom_targets"][:20]:
         t = {
             k: z[k]
-            for k in ("t0", "t1", "box", "view", "zoom", "max_zoom", "max_zoom_split")
+            for k in ("t0", "t1", "box", "view", "zoom", "max_zoom", "max_zoom_split", "text_px")
             if k in z
         }
         if off is not None:
@@ -573,7 +622,10 @@ def _summary(job: Path, out: Path, doc: dict, reused: bool) -> dict:
         "file": str(out.relative_to(job)),
         "reused": reused,
         "size": doc["size"],
+        "format": doc.get("format"),
         "max_zoom": doc.get("max_zoom"),
+        "ui_scale": doc.get("ui_scale"),
+        "by_format": doc.get("by_format"),
         "offset_s": off,
         "activity": len(doc["activity"]),
         "clicks": len(doc["clicks"]),

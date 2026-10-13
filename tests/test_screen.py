@@ -199,11 +199,41 @@ def test_pointer_alone_is_no_target(analysed):
 
 def test_max_zoom_follows_the_recording_width(analysed):
     w, _, _, doc = analysed
-    expect = {2880: 2.66, 1920: 1.77}[w]
-    assert doc["max_zoom"]["screen"] == expect
+    # A job with a screen recording defaults to 16:9: the view is 1728 (16:10) / 1920 wide.
+    expect = {2880: 1.66, 1920: 1.0}[w]
+    assert doc["format"] == "16:9" and doc["max_zoom"]["screen"] == expect
+    assert doc["max_zoom"] == {k: v["max_zoom"] for k, v in doc["by_format"]["16:9"].items()}
     assert doc["zoom_targets"]
     assert all(z["max_zoom"] == expect for z in doc["zoom_targets"])
     assert all(z["zoom"] <= expect for z in doc["zoom_targets"])
+    # Portrait: the view fills the 1080 px width.
+    assert doc["by_format"]["9:16"]["screen"]["max_zoom"] == {2880: 2.66, 1920: 1.77}[w]
+
+
+def test_text_size_per_format(analysed):
+    w, _, _, doc = analysed
+    # 2880 wide counts as HiDPI (26 source px of UI text), 1920 as 1x (13 px).
+    assert doc["ui_scale"] == {2880: 2, 1920: 1}[w]
+    portrait = doc["by_format"]["9:16"]["screen"]
+    assert portrait["text_px"] == round(13 * doc["ui_scale"] * 1080 / w, 1)
+    assert portrait["text_px"] < 18 < portrait["text_px"] * portrait["readable_zoom"] + 0.1
+    landscape = doc["by_format"]["16:9"]["screen"]
+    assert landscape["text_px"] > portrait["text_px"]
+    for z in doc["zoom_targets"]:
+        assert z["text_px"] == pytest.approx(landscape["text_px"] * z["zoom"], abs=0.2)
+
+
+def test_format_change_recomputes_the_caps_without_analysis(capsys, analysed):
+    w, _, job, doc = analysed
+    data = json.loads((job / "job.json").read_text())
+    (job / "job.json").write_text(json.dumps({**data, "format": "9:16"}))
+    code, s, out = run_tool(capsys, "screen", "--job", str(job))
+    assert code == 0 and s["reused"] is True, out
+    new = json.loads((job / "work" / "screen.json").read_text())
+    assert new["format"] == "9:16" and new["activity"] == doc["activity"]
+    assert new["max_zoom"]["screen"] == {2880: 2.66, 1920: 1.77}[w]
+    assert all(z["max_zoom"] == new["max_zoom"]["screen"] for z in new["zoom_targets"])
+    (job / "job.json").write_text(json.dumps(data))
 
 
 def test_cursor_only_recording_has_no_targets(capsys, clip_dir_):
