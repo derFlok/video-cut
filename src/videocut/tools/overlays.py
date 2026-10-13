@@ -1,12 +1,14 @@
 """`videocut tool overlays [--no-render]` (pipeline step 8): the transparent overlay track.
 
     work/edl.json + work/face.json + brand -> work/overlays.json
-        {"size", "fps", "duration", "tokens", "safe": {"top", "bottom", "side"},
+        {"size", "width", "height", "fps", "duration", "tokens", "safe": {"top", "bottom", "side"},
          "face": [{"t", "box"}], "captions": [...], "overlays": [...]}
     then  node renderer/render.js work/overlays.json --out work/overlay.mov
                                   --boxes work/overlay_boxes.json
 
-Everything is in OUTPUT time and px. `tokens` are the resolved tokens of the job's brand
+Everything is in OUTPUT time and px. The output size is the job's format (job.json "format",
+_format.py), also when the EDL's "size" says otherwise; "width"/"height" repeat it for the
+renderer's scenes. `tokens` are the resolved tokens of the job's brand
 (job.json "brand", default "_example"); the renderer draws only with them. `face` is the
 face track of a current work/face.json mapped through the segments and the very crop
 windows render uses (_geometry), so scenes can keep clear of the face. Screen layouts
@@ -43,7 +45,7 @@ from ..paths import RENDERER, state_dir, tool_env
 from ..redaction import same_asset
 from . import _layouts, _plates
 from . import _render_plan as plan_mod
-from ._geometry import face_track, framed, map_box, safe_zones
+from ._geometry import face_track, framed, map_box, safe_zones, sized
 from .common import (
     ToolError,
     binary,
@@ -101,6 +103,7 @@ def build(job: Path) -> dict:
             f"{len(e.errors)} problem(s) in edl.json: " + "; ".join(e.errors[:5])
         ) from None
     src_size = (int(info["size"][0]), int(info["size"][1]))
+    edl, _ = sized(job, edl)
     edl, _, face = framed(job, edl)
     layouts = [s.layout for s in edl.segments]
     use_layouts = any(lay != "face" for lay in layouts)
@@ -114,6 +117,8 @@ def build(job: Path) -> dict:
                    key=lambda f: f["t"])  # fmt: skip
     doc = {
         "size": list(edl.size),
+        "width": edl.size[0],
+        "height": edl.size[1],
         "fps": edl.fps,
         "duration": round(plan.duration, 6),
         "tokens": brand_tokens(read_job(job).get("brand") or DEFAULT_BRAND),

@@ -87,7 +87,7 @@ class FakeClaude:
         self.overlay_segments = None  # set to make the overlay run change the cut
 
     def __call__(self, prompt, job_dir, on_event, resume=None, log=None, max_turns=60):
-        phase = "plan" if prompt == run.PLAN_PROMPT else "cut"
+        phase = "plan" if prompt.startswith(run.PLAN_PROMPT) else "cut"
         phase = "overlays" if prompt.startswith(run.OVERLAYS_PROMPT) else phase
         self.calls.append((phase, resume, max_turns))
         self.prompts.append(prompt)
@@ -237,7 +237,7 @@ def test_run_rejects_a_cut_run_without_final_render(fake, monkeypatch):
 
     def preview_only(prompt, job_dir, *a, **k):
         res = claude(prompt, job_dir, *a, **k)
-        if prompt == run.CUT_PROMPT:
+        if prompt.startswith(run.CUT_PROMPT):
             (job_dir / "out" / "verify.json").write_text('{"ok": true, "preview": true}')
         return res
 
@@ -364,3 +364,55 @@ def test_demo_prep_order_and_sync_stop(monkeypatch, tmp_path):
     monkeypatch.setattr(run, "tool", failing)
     with pytest.raises(run.RunError, match="no audio.*--offset"):
         REAL_PREP(job, say=lambda _: None)
+
+
+def test_non_interactive_stop_names_the_full_commands(fake, monkeypatch):
+    claude, video = fake
+    monkeypatch.setattr(run.sys.stdin, "isatty", lambda: False)
+    lines = []
+
+    def plan_with_candidates(prompt, job_dir, *a, **k):
+        res = claude(prompt, job_dir, *a, **k)
+        box = [0, 0, 0.5, 0.1]
+        cands = [{"id": 1, "kind": "email", "t0": 1.0, "t1": 2.0, "box": box},
+                 {"id": 2, "kind": "name", "t0": 3.0, "t1": 4.0, "box": box}]  # fmt: skip
+        (job_dir / "work" / "redaction.json").write_text(json.dumps({"candidates": cands}))
+        return res
+
+    monkeypatch.setattr(run.agent, "run", plan_with_candidates)
+    assert run.run(str(video), say=lines.append) == 3
+    job = Path(lines[0].split("job: ")[1]).name
+    text = "\n".join(lines)
+    assert "no terminal to ask" in text
+    assert f"videocut run {job} --approve --demo-data" in text
+    assert f"videocut tool job redaction {job} --redact-all && videocut run {job} --approve" in text
+    assert f"videocut tool job redaction {job} --redact 1,2" in text
+
+
+def test_format_reaches_the_prompts_and_a_changed_format_cuts_again(fake):
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), approve=True, format_="1:1", say=lines.append) == 0
+    job = Path(lines[0].split("job: ")[1])
+    data = json.loads((job / "job.json").read_text())
+    assert data["format"] == "1:1" and data["cut"]["format"] == "1:1"
+    assert all('"size" is [1080, 1080]' in p for p in claude.prompts)
+    assert run.run(job.name, say=lines.append) == 0 and len(claude.calls) == 2  # cut done
+    assert run.run(job.name, format_="16:9", say=lines.append) == 0
+    assert [c[0] for c in claude.calls] == ["plan", "cut", "cut"]
+    assert "output format changed" in claude.prompts[2] and "[1920, 1080]" in claude.prompts[2]
+    assert any("made for 1:1" in x for x in lines)
+    assert json.loads((job / "job.json").read_text())["cut"]["format"] == "16:9"
+
+
+def test_a_cut_from_before_the_format_record_counts_as_9_16(fake):
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), approve=True, say=lines.append) == 0
+    job = Path(lines[0].split("job: ")[1])
+    data = json.loads((job / "job.json").read_text())
+    del data["cut"]["format"]
+    (job / "job.json").write_text(json.dumps(data))
+    assert run.cut_done(job)
+    (job / "job.json").write_text(json.dumps({**data, "screen": "input/s.mov"}))
+    assert not run.cut_done(job)  # a demo job now defaults to 16:9: cut again

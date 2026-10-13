@@ -40,7 +40,8 @@ track are in the output px of work/overlays.json)
     out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
     out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
-<= -1.0 dBTP, size 1080x1920, no black or frozen stretch longer than 0.5 s. A preview is
+<= -1.0 dBTP, size of the job's format (job.json "format": 1080x1920 for 9:16, 1920x1080 for
+16:9, ...), no black or frozen stretch longer than 0.5 s. A preview is
 checked at its half size, and its loudness (single-pass) is reported but not judged.
 
 The summary line has `ok` (all global checks pass and no cut or overlay is flagged),
@@ -62,7 +63,7 @@ from ..paths import tool_env
 from . import _image as im
 from . import _plates, _verify_screen
 from . import overlays as overlays_mod
-from ._geometry import overlap, safe_zones
+from ._geometry import job_size, overlap, safe_zones
 from .common import (
     ToolError,
     binary,
@@ -77,7 +78,6 @@ from .face import face_crops, in_blink, load_face
 
 RATE = 48000
 SMALL = (72, 128)  # luma frames for the difference score (w, h)
-TARGET_SIZE = (1080, 1920)
 LUFS_TARGET, LUFS_TOL = -14.0, 1.0
 TRUE_PEAK_MAX = -1.0
 MAX_STRETCH_S = 0.5
@@ -387,11 +387,14 @@ def _num(v) -> bool:
     return isinstance(v, int | float) and not isinstance(v, bool)
 
 
-def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, int], list[str]]:
-    """(boxes or None without work/overlay_boxes.json, face track, overlay size, warnings)."""
+def _load_boxes(
+    job: Path, target: tuple[int, int]
+) -> tuple[list[dict] | None, list[dict], tuple[int, int], list[str]]:
+    """(boxes or None without work/overlay_boxes.json, face track, overlay size (`target`
+    unless overlays.json says otherwise), warnings)."""
     path = job / "work" / "overlay_boxes.json"
     if not path.is_file():
-        return None, [], TARGET_SIZE, []
+        return None, [], target, []
     warnings = []
     edl_path = job / "work" / "edl.json"
     if edl_path.is_file() and not is_fresh([path], [edl_path]):
@@ -399,7 +402,7 @@ def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, in
     try:
         raw = json.loads(path.read_text())
     except ValueError:
-        return None, [], TARGET_SIZE, ["work/overlay_boxes.json is not valid JSON; not checked"]
+        return None, [], target, ["work/overlay_boxes.json is not valid JSON; not checked"]
     boxes = [
         b
         for b in (raw if isinstance(raw, list) else [])
@@ -412,7 +415,7 @@ def _load_boxes(job: Path) -> tuple[list[dict] | None, list[dict], tuple[int, in
     ]
     if not isinstance(raw, list) or len(boxes) != len(raw):
         warnings.append("work/overlay_boxes.json has malformed entries; they were skipped")
-    face, size = [], TARGET_SIZE
+    face, size = [], target
     try:
         doc = json.loads((job / "work" / "overlays.json").read_text())
         size = (int(doc["size"][0]), int(doc["size"][1]))
@@ -542,6 +545,7 @@ def verify(args) -> dict:
     reel = job / "out" / reel_name
     if not reel.is_file():
         raise ToolError(f"out/{reel_name} is missing; render first (`videocut tool render`)")
+    target = job_size(job)
     v = im.probe_video(reel)
     fps = v["fps"]
     frames, audio = luma_frames(reel), mono_audio(reel)
@@ -605,9 +609,8 @@ def verify(args) -> dict:
 
     demo = {}
     if edl is not None:
-        demo = _verify_screen.check(
-            job, json.loads(edl_path.read_text()), render, reel, (v["width"], v["height"])
-        )
+        edl_doc = {**json.loads(edl_path.read_text()), "size": list(target)}  # as render did
+        demo = _verify_screen.check(job, edl_doc, render, reel, (v["width"], v["height"]))
     elif read_job(job).get("screen"):  # a demo reel whose EDL cannot be read: unchecked
         demo = {"error": "work/edl.json is missing or invalid; screen layouts not checked"}
     still_screen = demo.get("spans", [])
@@ -628,7 +631,7 @@ def verify(args) -> dict:
         )
     ]
     want = float(render["output_duration"])
-    want_size = tuple(x // 4 * 2 for x in TARGET_SIZE) if preview else TARGET_SIZE
+    want_size = tuple(x // 4 * 2 for x in target) if preview else target
     lufs, peak = loud["integrated_lufs"], loud["true_peak_dbtp"]
     checks = {
         "duration": _check(
@@ -643,7 +646,11 @@ def verify(args) -> dict:
         "true_peak": _check(
             preview or (peak is not None and peak <= TRUE_PEAK_MAX), true_peak_dbtp=peak
         ),
-        "size": _check((v["width"], v["height"]) == want_size, size=[v["width"], v["height"]]),
+        "size": _check(
+            (v["width"], v["height"]) == want_size,
+            size=[v["width"], v["height"]],
+            want=list(want_size),
+        ),
         "black_or_frozen": _check(not stretches, stretches=stretches),
     }
     for old in vdir.glob("cut_*.jpg"):
@@ -655,7 +662,7 @@ def verify(args) -> dict:
     elif "overlap" in demo:
         checks["screen_overlap"] = _check(not demo["overlap"], problems=demo["overlap"])
 
-    boxes, face_track, ov_size, ov_warn = _load_boxes(job)
+    boxes, face_track, ov_size, ov_warn = _load_boxes(job, target)
     warnings += ov_warn
     last_word = sched.last_word if sched is not None else None
     overlay_docs = (

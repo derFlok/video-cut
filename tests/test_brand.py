@@ -204,3 +204,18 @@ def test_brand_sheet_is_refused_inside_an_agent_run(capsys, monkeypatch):
     monkeypatch.setenv("VIDEOCUT_AGENT", "1")
     code, s, _ = run_tool(capsys, "brand", "sheet", "_example", "--out", "job.json")
     assert code == 1 and "agent" in s["error"]
+
+
+def test_brand_sheet_spec_follows_the_format(capsys):
+    from videocut.tools import brand as brand_tool
+
+    tokens = brand_tool._tokens("_example")[0]
+    spec = brand_tool.sheet_spec(tokens, ["keyword"], (1920, 1080))
+    assert spec["size"] == [1920, 1080] and (spec["width"], spec["height"]) == (1920, 1080)
+    assert spec["safe"] == {"top": 65, "bottom": 130, "side": 77}
+    reel = brand_tool.sheet_spec(tokens, ["keyword"])
+    assert reel["size"] == [1080, 1920] and reel["safe"]["bottom"] == 350
+    assert brand_tool.sheet_name("9:16") == "preview.jpg"
+    assert brand_tool.sheet_name("16:9") == "preview-16x9.jpg"
+    code, s, _ = run_tool(capsys, "brand", "sheet", "_example", "--format", "wide")
+    assert code == 1 and "16:9" in s["error"]

@@ -1,10 +1,13 @@
-"""`videocut tool job new|show|approve|redaction|brand|screen`: create a job folder, inspect
-it, approve its plan, decide which personal-data candidates are demo data (human only,
-src/videocut/redaction.py), set its brand or its screen recording.
+"""`videocut tool job new|show|approve|redaction|brand|screen|format`: create a job folder,
+inspect it, approve its plan, decide which personal-data candidates are demo data (human
+only, src/videocut/redaction.py), set its brand, its screen recording or its output format.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
                screen (optional second source: a screen recording, product demos),
+               format (optional output format, _format.FORMATS: "9:16" | "16:9" | "1:1" |
+               "4:5"; absent: 16:9 with a screen recording or screenshot assets, else 9:16,
+               resolved when read, never written back),
                approval {at, project_sha256}: a display copy only, never trusted
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
@@ -25,6 +28,7 @@ from pathlib import Path
 
 from .. import brand
 from .. import redaction as red
+from . import _format
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -59,6 +63,10 @@ ARTEFACTS = [
     "work/cut_report.md",
 ]
 PROJECT = "work/project.md"
+FORMAT_HELP = (
+    f"output format: {', '.join(_format.FORMATS)} (default: 16:9 with a screen recording or "
+    "screenshots, else 9:16)"
+)
 # Set in the environment of agent runs (agent.py): the human gate cannot be passed by Claude.
 AGENT_ENV = "VIDEOCUT_AGENT"
 
@@ -179,10 +187,26 @@ def brand_id(ref: str) -> str:
         raise ToolError(str(e)) from None
 
 
+def format_arg(value: str) -> str:
+    try:
+        return _format.parse_format(value)
+    except _format.FormatError as e:
+        raise ToolError(str(e)) from None
+
+
+def resolved_format(data: dict) -> str:
+    """The job's output format; ToolError for an invalid job.json "format"."""
+    try:
+        return _format.job_format(data)
+    except _format.FormatError as e:
+        raise ToolError(f"job.json: {e}") from None
+
+
 def new(args) -> dict:
     video = Path(args.video).expanduser()
     if not video.is_file():
         raise ToolError(f"video not found: {args.video}")
+    fmt = format_arg(args.format) if args.format else None
     brand_ref = brand_id(args.brand) if args.brand else None
     assets = [Path(a).expanduser() for a in (args.asset or [])]
     screen = _screen_file(args.screen) if args.screen else None
@@ -231,6 +255,8 @@ def new(args) -> dict:
         data["assets"] = [f"input/{a.name}" for a in assets]
     if screen is not None:
         data["screen"] = f"input/{screen.name}"
+    if fmt:
+        data["format"] = fmt
     write_json(job / JOB_FILE, data)
     print(job)
     return {
@@ -241,6 +267,8 @@ def new(args) -> dict:
         "brand": brand_ref,
         "assets": data.get("assets", []),
         "screen": data.get("screen"),
+        "format": resolved_format(data),
+        "format_default": fmt is None,
     }
 
 
@@ -288,16 +316,50 @@ def set_brand(args) -> dict:
     return {"job": str(job), "id": job.name, "brand": brand_ref}
 
 
+def set_format(job: Path, value: str, say=print) -> dict:
+    """Set or replace the output format. A plan or cut made before was made for the old one:
+    the cut goes stale (run.cut_done compares the format of the cut record), and the hint
+    says how to redo it. Approval stays (the plan text did not change)."""
+    fmt = format_arg(value)
+    data = read_job(job)
+    old = resolved_format(data)
+    update_job(job, format=fmt)
+    w, h = _format.FORMATS[fmt]
+    say(f"{job.name}: format {fmt} ({w}x{h})")
+    redo = fmt != old and (job / PROJECT).is_file()
+    if redo:
+        say(
+            f"The plan (and any cut) of this job was made for {old}. Cut again for {fmt}: "
+            f"`videocut run {job.name}` (the cut is redone); plan again if the layouts "
+            f"should change: `videocut run {job.name} --replan`"
+        )
+    return {"job": str(job), "id": job.name, "format": fmt, "size": [w, h], "previous": old,
+            "redo": redo}  # fmt: skip
+
+
+def format_cmd(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human picks the output format (not available inside an agent run)")
+    return set_format(resolve_job(args.job_ref or args.job), args.format)
+
+
 def show(args) -> dict:
     job = resolve_job(args.job_ref or args.job)
     data = read_job(job)
     present = [a for a in ARTEFACTS if (job / a).is_file()]
     outputs = sorted(p.name for p in (job / "out").glob("*") if p.is_file())
+    fmt = resolved_format(data)
+    w, h = _format.FORMATS[fmt]
     print(job)
     print(json.dumps(data, ensure_ascii=False, indent=2))
+    how = "set" if "format" in data else "default"
+    print(f"format: {fmt} ({w}x{h}, {how})")
     out = {
         "job": str(job),
         **data,
+        "format": fmt,
+        "format_default": "format" not in data,
+        "size": [w, h],
         "approved": is_approved(job),
         "artefacts": present,
         "out": outputs,
@@ -363,6 +425,7 @@ def register(subparsers) -> None:
         metavar="FILE",
         help="screen recording of the same take (product demo), synced by `tool sync`",
     )
+    n.add_argument("--format", help=FORMAT_HELP)
     n.set_defaults(handler=run_tool("job new", new))
     s = sub.add_parser(
         "show", help="print job.json and which artefacts exist", parents=[job_parent()]
@@ -397,3 +460,11 @@ def register(subparsers) -> None:
     )
     sc.add_argument("file", help="screen recording (linked or copied, never moved)")
     sc.set_defaults(handler=run_tool("job screen", set_screen))
+    f = sub.add_parser(
+        "format",
+        help="set or replace the output format of a job (human only)",
+        parents=[job_parent()],
+    )
+    f.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    f.add_argument("format", help=FORMAT_HELP)
+    f.set_defaults(handler=run_tool("job format", format_cmd))

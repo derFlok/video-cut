@@ -273,3 +273,27 @@ def test_silent_source_renders_with_a_warning(capsys, clip_dir):
     assert code == 0, s
     assert s["loudness"]["integrated_lufs"] is None and "the reel is silent" in s["warnings"]
     json.loads((job / "out" / "render.json").read_text())  # strict JSON, no -Infinity
+
+
+@pytest.mark.parametrize(("fmt", "size"), [("16:9", (1920, 1080)), ("1:1", (1080, 1080))])
+def test_render_follows_the_job_format(capsys, landscape_clip, fmt, size):
+    """The job's format decides the output size (reel, cover, verify), also when the EDL
+    was written with the 9:16 size; the crop window has the output aspect."""
+    segs = [{"in": 0.3, "out": 1.0}, {"in": 1.9, "out": 2.6, "zoom_keys": [[2.2, 1.3]]}]
+    job = _job(capsys, landscape_clip, f"r-fmt-{size[0]}x{size[1]}", segments=segs)
+    code, s, _ = run_tool(capsys, "job", "format", str(job), fmt)
+    assert code == 0 and s["format"] == fmt and s["size"] == list(size), s
+    code, s, out = run_tool(capsys, "render", "--job", str(job))
+    assert code == 0, s
+    assert s["size"] == list(size)
+    assert any("is not the job's format" in w for w in s["warnings"])
+    v = next(x for x in _probe(job / "out" / "reel.mp4")["streams"] if x["codec_type"] == "video")
+    assert (v["width"], v["height"]) == size
+    (c,) = _probe(job / "out" / "cover.jpg")["streams"]
+    assert (c["width"], c["height"]) == size
+    crop = s["min_crop_width"]  # 1080p source: the zoomed window keeps the output aspect
+    assert crop == round(1080 * size[0] / size[1] / 1.3 / 2) * 2
+    code, v, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and "size" not in v["failed"], v
+    doc = json.loads((job / "out" / "verify.json").read_text())
+    assert doc["checks"]["size"] == {"ok": True, "size": list(size), "want": list(size)}

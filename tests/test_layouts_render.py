@@ -83,7 +83,9 @@ def _job(capsys, material, job_id) -> Path:
     job = Path(s["job"])
     shutil.copy(screen, job / "input" / "screen.mp4")
     meta = json.loads((job / "job.json").read_text())
-    (job / "job.json").write_text(json.dumps({**meta, "screen": "input/screen.mp4"}))
+    (job / "job.json").write_text(
+        json.dumps({**meta, "screen": "input/screen.mp4", "format": "9:16"})
+    )
     sync = {"offset_s": OFFSET, "method": "manual", "confidence": 1.0, "drift_ppm": None,
             "overlap": [0, 8]}  # fmt: skip
     (job / "work" / "sync.json").write_text(json.dumps(sync))
@@ -312,7 +314,9 @@ def test_hdr_camera_in_pip_and_split_is_tonemapped(capsys, material, tmp_path):
         job = Path(s["job"])
         shutil.copy(screen, job / "input" / "screen.mp4")
         meta = json.loads((job / "job.json").read_text())
-        (job / "job.json").write_text(json.dumps({**meta, "screen": "input/screen.mp4"}))
+        (job / "job.json").write_text(
+            json.dumps({**meta, "screen": "input/screen.mp4", "format": "9:16"})
+        )
         sync = {"offset_s": OFFSET, "method": "manual", "confidence": 1.0, "drift_ppm": None,
                 "overlap": [0, 3]}  # fmt: skip
         (job / "work" / "sync.json").write_text(json.dumps(sync))

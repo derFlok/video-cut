@@ -3,10 +3,13 @@
     cut      every segment [in, out] in source time, frame accurate (decode-side trim),
              audio faded by fade_ms at every boundary
     reframe  crop window of the output aspect around crop.cx/cy, `zoom`× tighter, scaled
-             to the EDL size at the EDL fps; zoom_keys are hard punch-ins from that
-             source time on (no animated zoom yet). A segment without a crop is centred
-             on the face median of a current work/face.json (following the face only on
-             a large move, face.face_crops), else on the frame centre
+             to the job's output size (job.json "format", _format.py; an EDL "size" of
+             another format is overridden with a warning) at the EDL fps; zoom_keys are
+             hard punch-ins from that source time on (no animated zoom yet). A segment
+             without a crop is centred on the face median of a current work/face.json
+             (following the face only on a large move, face.face_crops), else on the frame
+             centre. Soft-crop warning below _render_plan.sharp_min_width (scaled with the
+             output width)
     loudness loudnorm two-pass to -14 LUFS / -1 dBTP / LRA 11 (preview: single pass);
              the finished file is measured again
     colour   HDR sources (HLG/PQ) are tonemapped to SDR BT.709 and tagged so (_color.py)
@@ -50,7 +53,7 @@ from ..edl import EdlError, load, read_sync
 from . import _layouts, _plates
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
-from ._geometry import framed
+from ._geometry import framed, sized
 from .common import (
     ToolError,
     binary,
@@ -228,6 +231,7 @@ def render(args) -> dict:
         ) from None
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
+    edl, size_note = sized(job, edl)
     edl, followed, face = framed(job, edl)
     # Personal data: every candidate the human did not mark as demo data is redacted, also
     # when the EDL forgot one (redaction.enforced; no decision = all of them).
@@ -269,6 +273,8 @@ def render(args) -> dict:
     elif preview:
         measured = None  # single pass
     warnings, v_out, video, clamped, screen_rel = [], "[v]", None, [], None
+    if size_note:
+        warnings.append(size_note)
     if use_layouts:
         video, screen, clamped = _layout_video(job, plan, edl, info, face, video_in, inputs)
         screen_rel = str(screen.relative_to(job))
@@ -354,9 +360,9 @@ def render(args) -> dict:
 
     loud = measure(dst)
     min_w = plan.min_crop_width()
-    if min_w < plan_mod.SHARP_MIN_WIDTH:
+    if min_w < (sharp := plan_mod.sharp_min_width(edl.size)):
         warnings.append(
-            f"crop is only {min_w} px wide (< {plan_mod.SHARP_MIN_WIDTH}); the reel will look soft"
+            f"crop is only {min_w} px wide (< {sharp}); the reel will look soft"
             " — use less zoom or record in 4K / portrait"
         )
     report = {
