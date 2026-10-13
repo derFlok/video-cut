@@ -75,7 +75,8 @@ def map_box(
 def face_track(plan, face: dict | None, src: tuple[int, int]) -> list[dict]:
     """Face boxes of work/face.json (source time, normalised) in OUTPUT time and px:
     [{"t", "box": [x0, y0, x1, y1]}] for every face sample that lies in a rendered range,
-    mapped through that range's crop window. `plan` is a _render_plan.Plan."""
+    mapped through that range's crop window (face-layout ranges only). `plan` is a
+    _render_plan.Plan."""
     if not face:
         return []
     frames = sorted(
@@ -84,6 +85,9 @@ def face_track(plan, face: dict | None, src: tuple[int, int]) -> list[dict]:
     )
     out, f0 = [], 0
     for r in plan.ranges:
+        if getattr(r, "layout", "face") != "face":  # screen layouts: no camera face here
+            f0 += r.frames
+            continue
         dur = float(r.frames / plan.fps)
         t_out0 = float(f0 / plan.fps)
         for f in frames:

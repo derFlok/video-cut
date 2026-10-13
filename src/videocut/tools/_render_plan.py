@@ -30,6 +30,8 @@ class Range:
     frames: int
     zoom: float
     window: Window
+    layout: str = "face"  # EDL segment layout; non-face segments are one range (_layouts)
+    seg: int = 0  # index of the EDL segment
 
 
 @dataclass
@@ -53,22 +55,32 @@ class Plan:
         return float(self.frames / self.fps)
 
     def min_crop_width(self) -> int:
-        return min(r.window.w for r in self.ranges)
+        face = [r for r in self.ranges if r.layout == "face"] or self.ranges
+        return min(r.window.w for r in face)
 
 
-def build(edl: Edl, src_size: tuple[int, int], out_size: tuple[int, int]) -> Plan:
+def build(
+    edl: Edl,
+    src_size: tuple[int, int],
+    out_size: tuple[int, int],
+    layouts: list[str] | None = None,
+) -> Plan:
+    """`layouts`: per segment its EDL layout (default all "face"); a non-face segment
+    becomes one range without zoom steps (_layouts draws it)."""
     fps = Fraction(edl.fps).limit_denominator(1001)
     ranges: list[Range] = []
     audio: list[AudioPart] = []
     t_out = 0.0
     frame0 = 0
-    for seg in edl.segments:
+    for k, seg in enumerate(edl.segments):
         f_end = round((t_out + seg.duration) * fps)
         crop = seg.crop
         cx, cy, base = (crop.cx, crop.cy, crop.zoom) if crop else (0.5, 0.5, 1.0)
+        layout = layouts[k] if layouts else "face"
         # Zoom steps: (output frame where it starts, zoom). Hard punch-ins, no animation.
         steps = [(frame0, base)]
-        for t, z in sorted(seg.zoom_keys, key=lambda k: k[0]):  # ties: last in file wins
+        keys = seg.zoom_keys if layout == "face" else []
+        for t, z in sorted(keys, key=lambda k: k[0]):  # ties: last in file wins
             f = round((t_out + t - seg.start) * fps)
             f = min(max(f, frame0), f_end)
             steps = [s for s in steps if s[0] < f] + [(f, z)]
@@ -81,6 +93,8 @@ def build(edl: Edl, src_size: tuple[int, int], out_size: tuple[int, int]) -> Pla
                         frames=nxt - f,
                         zoom=z,
                         window=crop_window(src_size, out_size, cx, cy, z),
+                        layout=layout,
+                        seg=k,
                     )
                 )
         dur = float((f_end - frame0) / fps)
@@ -141,29 +155,34 @@ def loudnorm(measured: dict | str | None) -> str:
     return f + f",aresample={RATE}"
 
 
+def range_filters(plan: Plan, r: Range) -> list[str]:
+    """Filters (no labels) that cut, crop and scale the source into face range `r`."""
+    ow, oh = plan.out_size
+    w = r.window
+    end = r.src_in + float(r.frames / plan.fps)
+    # Decode-side trim (frame accurate; a range starts with the first source frame at or
+    # after src_in, so video may trail audio by < 1 source frame there, never drifting),
+    # then a constant frame rate with the last frame
+    # held if the source runs short, then exactly `frames` frames.
+    return [
+        f"trim=start={_t(r.src_in)}:end={_t(end)}",
+        "setpts=PTS-STARTPTS",
+        f"fps={plan.fps}",
+        "tpad=stop_mode=clone:stop=-1",
+        f"trim=end_frame={r.frames}",
+        f"crop={w.w}:{w.h}:{w.x}:{w.y}",
+        f"scale={ow}:{oh}:flags=lanczos",
+        "setsar=1",
+    ]
+
+
 def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
     """Filter lines that cut, crop and scale `video_in` (e.g. "0:0") into the ranges and join
     them as [v]; `to_sdr` (a tonemap chain) runs once on the joined output-size frames."""
-    ow, oh = plan.out_size
     n = len(plan.ranges)
     lines = [f"[{video_in}]split={n}" + "".join(f"[v{i}]" for i in range(n)) + ";"]
     for i, r in enumerate(plan.ranges):
-        w = r.window
-        end = r.src_in + float(r.frames / plan.fps)
-        # Decode-side trim (frame accurate; a range starts with the first source frame at or
-        # after src_in, so video may trail audio by < 1 source frame there, never drifting),
-        # then a constant frame rate with the last frame
-        # held if the source runs short, then exactly `frames` frames.
-        f = [
-            f"trim=start={_t(r.src_in)}:end={_t(end)}",
-            "setpts=PTS-STARTPTS",
-            f"fps={plan.fps}",
-            "tpad=stop_mode=clone:stop=-1",
-            f"trim=end_frame={r.frames}",
-            f"crop={w.w}:{w.h}:{w.x}:{w.y}",
-            f"scale={ow}:{oh}:flags=lanczos",
-            "setsar=1",
-        ]
+        f = range_filters(plan, r)
         lines.append(f"[v{i}]" + ",".join(f) + f"[vc{i}];")
     tail = ",".join(f for f in (to_sdr, "format=yuv420p") if f)
     if plan.tail:
@@ -173,12 +192,18 @@ def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
 
 
 def graph(
-    plan: Plan, measured: dict | str | None, video_in: str, audio_in: str, to_sdr: str = ""
+    plan: Plan,
+    measured: dict | str | None,
+    video_in: str,
+    audio_in: str,
+    to_sdr: str = "",
+    video: list[str] | None = None,
 ) -> str:
-    """Full render graph: [v] video, [a] normalised audio (+ the silent tail)."""
+    """Full render graph: [v] video, [a] normalised audio (+ the silent tail). `video`
+    replaces the face-only video lines (a render with layouts, _layouts.video_chain)."""
     pad = f",apad=whole_dur={_t(plan.duration)}" if plan.tail else ""
     lines = [
-        *video_chain(plan, video_in, to_sdr),
+        *(video if video is not None else video_chain(plan, video_in, to_sdr)),
         ";",
         *audio_chain(plan, audio_in),
         ";",
