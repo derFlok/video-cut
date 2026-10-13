@@ -331,3 +331,51 @@
   checks cannot run or a demo reel's EDL is unreadable.
 - `work/screen.json` is removed with the other screen outputs when the screen recording is
   replaced (a hard link keeps the old mtime, so freshness could not tell).
+
+### Added — Output format per job (16:9, 9:16, 1:1, 4:5)
+- Output format per job (`tools/_format.py`): job.json `format` (`9:16` 1080×1920, `16:9`
+  1920×1080, `1:1` 1080×1080, `4:5` 1080×1350); absent, the default is resolved on read
+  (16:9 with a screen recording or screenshots, else 9:16; never written back).
+  `job new --format`, `job format <job> <f>` (human only), `run --format`; `job show`
+  prints format and size. A changed format re-cuts (the cut record carries the format).
+- Reel, preview, cover, overlays.json (`width`/`height`, safe zones per aspect), verify's
+  size check and `brand sheet --format` follow the format; the job format beats the EDL
+  `size` (with a warning). The soft-crop warning scales with the output width. The
+  non-interactive stop names the full approve and redaction commands. Selftest renders and
+  verifies a short 16:9 job.
+- Demo layouts per format: 16:9 `screen` fills the frame, `pip` = round speaker bubble 26 %
+  of the height in a bottom corner above the caption strip (the corner covering less of the
+  zoom targets), `split` side by side 64/36; 1:1 bubble pip and stacked split; 4:5 and
+  9:16 portrait rules as before. Layout geometry follows the job format (`plan_all`
+  `full_out`), also for previews and verify.
+- Speaker inset/part centred on the segment's face median, head and shoulders (face height
+  × 2.6), ≥ 0.75 camera px per output px (the EDL crop cap no longer limits it); render.json
+  `speaker` lists `px_ratio` per segment, render warns when the speaker is upscaled.
+- Face second pass for small faces (tile scan + upscaled region of interest) when the first
+  pass finds the face in < 50 % of the samples: face.json `small_pass`, FACE_VERSION 2.
+- Readability: screen.json per format (`by_format`: `max_zoom`, `text_px`,
+  `readable_zoom`; `ui_scale`); `screen_text_small` (`edl check` warning, verify info
+  `screen.readability`).
+- Renderer: every scene lays out from `width`/`height` and the aspect class, type scale from
+  the short side. Landscape: bottom-centre captions (≤ 70 % width, 2 lines), side-column
+  cards and keyword, bottom-left lower third, aspect-keeping screenshots, centred `cta_end`;
+  square and 4:5 caption at the foot. Node tests for every scene at all four presets;
+  `check.js` follows width/height.
+- Overlays in a frame-filling screen view (16:9 screen/pip): overlays.json `views` has
+  `screen` null and lists the zoom targets (`focus`, with times); captions and scenes keep
+  off the active target and the speaker bubble instead of the whole frame.
+  `overlay_on_screen` covers the targets too.
+- Skills follow the format: the cut skill writes the job's size (from `job show`), the plan
+  states the format in its header, 16:9 prefers `screen`/`pip` and zooms only where
+  `screen_text_small` / `readable_zoom` say so; the overlays skill explains the layout
+  differences by aspect.
+- Docs: output format in README / README.de (with a recording tip for 16:9 demos) and
+  ARCHITECTURE.
+
+### Known — Output formats
+- The selftest 16:9 clip is too short for a loudness reading; only its size is judged.
+- The HiDPI threshold (2700 px long side → 2× UI scale) is a heuristic; a 1920 px wide
+  screen recording in 16:9 has no sharp zoom at all.
+- 1:1 with a centred head, a card and a caption is cramped; a landscape screenshot fills
+  only ~55 % of the height.
+- The web UI has no job-creation form yet, so no format picker there.
