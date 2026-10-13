@@ -20,14 +20,19 @@ an ffmpeg pipe and writes work/screen.json:
                     clicks}] activity and clicks merged into regions that stay put for
                     >= 1.2 s. max_zoom (max_zoom_split) keeps >= 1 source px per output
                     px in the "screen" ("split") view of the job's format; view is the
-                    screen-shaped box to show at zoom = min(1/box size, max_zoom); text_px
-                    the estimated UI text height in output px there ("screen" view)
+                    box of the "screen" view's aspect (the screen's, or the frame's when
+                    the view fills it) to show at the zoom that fits the box, at most
+                    max_zoom; zoom is relative to the no-zoom window (the widest one of
+                    that aspect, _layouts.full_width); text_px the estimated UI text
+                    height in output px there ("screen" view)
     format          the job's output format the zoom caps above were computed for
+    geometry        GEOMETRY, the layout geometry they follow (a new one re-derives them
+                    without a new analysis, like a new format)
     max_zoom        {screen, pip, split} caps of that format
     ui_scale        source px per logical px assumed for the UI (HiDPI recordings: 2)
     by_format       {format: {screen|pip|split: {max_zoom, text_px, readable_zoom}}} for
                     EVERY output format (_format.FORMATS): the sharpness cap, the UI text
-                    height in output px with the whole screen shown, and the zoom at which
+                    height in output px at no zoom, and the zoom at which
                     it reaches _layouts.TEXT_MIN_PX (readable); readable_zoom > max_zoom
                     means the text cannot be both sharp and readable in that view
 
@@ -50,8 +55,9 @@ import numpy as np
 
 from .. import edl
 from ..paths import tool_env
+from . import _layouts
 from ._format import FORMATS, job_format
-from ._layouts import readable_zoom, text_px, ui_scale, view_rect
+from ._layouts import full_width, readable_zoom, text_px, ui_scale, view_aspect, view_rect
 from .common import (
     ToolError,
     binary,
@@ -66,6 +72,7 @@ from .common import (
 from .ingest import _rotation
 
 VERSION = 1
+GEOMETRY = 2  # layout geometry of the derived fields; another value re-derives them
 SAMPLE_FPS = 10.0
 LONG_SIDE = 960
 CELL = 8  # analysis px per grid cell
@@ -125,9 +132,10 @@ def probe_screen(src: Path) -> dict:
 
 
 def max_zoom(w: int, h: int, layout: str = "screen", out: tuple[int, int] = (1080, 1920)) -> float:
-    """Largest zoom (1 / shown share of the screen) that keeps >= 1 source px per output
-    px in the `layout` view of an `out`-sized output; rounded down to 0.01."""
-    return math.floor(w / view_rect(layout, out, (w, h)).w * 100 + 1e-6) / 100
+    """Largest zoom (relative to the no-zoom window, _layouts.full_width) that keeps >= 1
+    source px per output px in the `layout` view of an `out`-sized output; rounded down to
+    0.01."""
+    return _layouts.max_zoom(layout, out, (w, h))
 
 
 def by_format(w: int, h: int) -> dict:
@@ -137,7 +145,14 @@ def by_format(w: int, h: int) -> dict:
         out[fmt] = {
             lay: {
                 "max_zoom": max_zoom(w, h, lay, size),
-                "text_px": round(text_px((w, h), view_rect(lay, size, (w, h)).w, w), 1),
+                "text_px": round(
+                    text_px(
+                        (w, h),
+                        view_rect(lay, size, (w, h)).w,
+                        full_width((w, h), view_aspect(lay, size, (w, h))),
+                    ),
+                    1,
+                ),
                 "readable_zoom": round(readable_zoom(lay, size, (w, h)), 2),
             }
             for lay in VIEWS
@@ -151,6 +166,7 @@ def derive(doc: dict, fmt: str) -> dict:
     w, h = doc["size"]
     size = FORMATS[fmt]
     doc["format"] = fmt
+    doc["geometry"] = GEOMETRY
     doc["max_zoom"] = {lay: max_zoom(w, h, lay, size) for lay in VIEWS}
     doc["ui_scale"] = ui_scale((w, h))
     doc["by_format"] = by_format(w, h)
@@ -446,6 +462,8 @@ def zoom_targets(doc: dict, duration: float, out: tuple[int, int] = (1080, 1920)
     w, h = doc["size"]
     cap, cap_split = max_zoom(w, h, "screen", out), max_zoom(w, h, "split", out)
     view_w = view_rect("screen", out, (w, h)).w
+    aspect = view_aspect("screen", out, (w, h))  # windows of the "screen" view
+    full = full_width((w, h), aspect)
     scenes = doc["scenes"]
     events = [(a["t"], a["box"], a["score"] / SAMPLE_FPS, 0) for a in doc["activity"]]
     hw, hh = CLICK_BOX / 2, CLICK_BOX / 2 * w / h
@@ -518,10 +536,12 @@ def zoom_targets(doc: dict, duration: float, out: tuple[int, int] = (1080, 1920)
         box = [max(0.0, x0 - pad), max(0.0, y0 - pad), min(1.0, x1 + pad), min(1.0, y1 + pad)]
         if max(box[2] - box[0], box[3] - box[1]) > 1 / TARGET_MIN_ZOOM:
             continue  # too large to be worth a zoom (a low cap only limits the zoom)
-        s = min(1.0, max(box[2] - box[0], box[3] - box[1], 1 / cap))
-        cx = min(max((box[0] + box[2]) / 2, s / 2), 1 - s / 2)
-        cy = min(max((box[1] + box[3]) / 2, s / 2), 1 - s / 2)
-        view = [cx - s / 2, cy - s / 2, cx + s / 2, cy + s / 2]
+        # window width in source px: the box fits, at most `cap`, at least no zoom
+        win = min(full, max((box[2] - box[0]) * w, (box[3] - box[1]) * h * aspect, full / cap))
+        sx, sy = win / w, win / aspect / h  # its normalised size
+        cx = min(max((box[0] + box[2]) / 2, sx / 2), 1 - sx / 2)
+        cy = min(max((box[1] + box[3]) / 2, sy / 2), 1 - sy / 2)
+        view = [cx - sx / 2, cy - sy / 2, cx + sx / 2, cy + sy / 2]
         out.append(
             {
                 "t0": round(t0, 2),
@@ -530,8 +550,8 @@ def zoom_targets(doc: dict, duration: float, out: tuple[int, int] = (1080, 1920)
                 "max_zoom": cap,
                 "max_zoom_split": cap_split,
                 "view": [round(v, 4) for v in view],
-                "zoom": round(1 / s, 2),
-                "text_px": round(text_px((w, h), view_w, w * s), 1),
+                "zoom": round(full / win, 2),
+                "text_px": round(text_px((w, h), view_w, win), 1),
                 "score": round(tr["score"], 3),
                 "clicks": tr["clicks"],
             }
@@ -556,7 +576,8 @@ def screen(args) -> dict:
         except ValueError:
             doc = None
         if isinstance(doc, dict) and doc.get("params") == params:
-            if doc.get("format") != fmt or "by_format" not in doc:  # e.g. a new format
+            stale = doc.get("format") != fmt or doc.get("geometry") != GEOMETRY
+            if stale or "by_format" not in doc:  # e.g. a new format
                 try:
                     doc = derive(doc, fmt)
                 except (KeyError, TypeError, ValueError):

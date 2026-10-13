@@ -74,7 +74,8 @@ Write the approved views into the segments (all times **camera seconds**, like `
 - `screen_zoom`: one key per zoom target of the plan, at the camera time of the click or
   change (`videocut tool screen` → `zoom_targets[].camera_t0`, `click_list[].camera_t`),
   box = its `view` (or `box`); the view arrives there at `t` with a 0.6 s ease. Before the
-  first key the whole screen shows; to zoom back out, add a key with `[0, 0, 1, 1]`. Keys
+  first key the whole screen shows (16:9: its full width, cropped to the frame's aspect);
+  to zoom back out, add a key with `[0, 0, 1, 1]`. Keys
   only inside the segment. Never ask for more than `max_zoom` (`max_zoom_split` in split):
   render widens such a key so the screen stays sharp and reports `screen_zoom_clamped`.
 - `redact`: `videocut tool job show` → `redaction.redact` lists the candidate ids of

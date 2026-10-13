@@ -273,7 +273,7 @@ minute at most).
 persistent change against one second earlier), the pointer (reported, never a target),
 clicks (the expanding ring of "show mouse clicks", or a pointer stop followed by a change),
 hard scene changes and text density. Activity and clicks merge into zoom targets that stay
-put ≥ 1.2 s, each with `max_zoom` / `max_zoom_split` and a screen-shaped `view` box. The
+put ≥ 1.2 s, each with `max_zoom` / `max_zoom_split` and a `view` box of the "screen" view's aspect. The
 summary adds camera times (`camera_t0`, `camera_t`) from the current sync.json, because the
 EDL is in camera time. `sheet screen` draws the analysis onto a strip of frames (activity
 yellow, clicks red, targets green).
@@ -285,12 +285,15 @@ reel width, centred in the safe area, on the brand's `colors.bg`), `pip` (screen
 of the safe area, the speaker as a rounded inset of 34 % of the width below it, on the side
 away from the zoom targets, so it never covers screen content; the strip below the inset
 is the caption room), `split` (screen in the top 58 %, the speaker face-centred below).
-**16:9:** `screen` fills the frame (letterboxed in `colors.bg` when the recording's aspect
-differs), `pip` adds the speaker as a round bubble 26 % of the frame height in a bottom
-corner above the caption strip, in the corner that covers less of the zoom targets,
-`split` puts the screen in the left 64 % and the speaker face-centred in the right 36 %.
-**1:1:** the screen between the top and bottom safe zones, the bubble pip, `split`
-stacked. The speaker crop (inset, split part) is centred on the segment's face median,
+**16:9:** `screen` fills the frame: the recording is cropped to the frame's aspect (zoom
+windows have the view's aspect; no zoom = the full screen width, placed around the first
+zoom target), letterboxed in `colors.bg` only when the aspects differ by more than 25 %
+(`LETTERBOX`, e.g. a portrait phone screen). `pip` adds the speaker as a round bubble 26 %
+of the frame height in a bottom corner above the caption strip, in the corner that covers
+clearly less of the zoom targets (right on a near tie), `split` fills the left 64 % with
+the screen (`LETTERBOX_SPLIT` 50 %) and the speaker face-centred in the right 36 %.
+**1:1:** the screen fills the band between the top and bottom safe zones (same rule), the
+bubble pip, `split` stacked. The speaker crop (inset, split part) is centred on the segment's face median,
 head and shoulders (face height × 2.6), and at least 0.75 camera px per output px; render
 reports the ratio per segment in render.json `speaker` (`px_ratio`) and warns when it is
 below 1 (upscaled). For a small face (e.g. a video-call tile) `face` runs a second pass
@@ -318,7 +321,7 @@ the caps of the job format as `max_zoom` and of every format in `by_format`.
 **Readability.** UI text is taken as 13 logical px (`ui_scale` 2 for recordings with a
 long side ≥ 2700 px, a heuristic); shown smaller than 18 output px it is hard to read.
 `screen.json` `by_format` gives per format and layout `text_px` (whole screen) and
-`readable_zoom`; `edl check` warns `screen_text_small` per window that stays too small,
+`readable_zoom` (zoom counts from the no-zoom window); `edl check` warns `screen_text_small` per window that stays too small,
 verify lists the same as info (`screen.readability`). In 16:9 the whole screen is often
 readable, so the skills zoom only where this says so.
 

@@ -199,8 +199,8 @@ def test_pointer_alone_is_no_target(analysed):
 
 def test_max_zoom_follows_the_recording_width(analysed):
     w, _, _, doc = analysed
-    # A job with a screen recording defaults to 16:9: the view is 1728 (16:10) / 1920 wide.
-    expect = {2880: 1.66, 1920: 1.0}[w]
+    # A job with a screen recording defaults to 16:9: the view fills the 1920 px width.
+    expect = {2880: 1.5, 1920: 1.0}[w]
     assert doc["format"] == "16:9" and doc["max_zoom"]["screen"] == expect
     assert doc["max_zoom"] == {k: v["max_zoom"] for k, v in doc["by_format"]["16:9"].items()}
     assert doc["zoom_targets"]
@@ -234,6 +234,27 @@ def test_format_change_recomputes_the_caps_without_analysis(capsys, analysed):
     assert new["max_zoom"]["screen"] == {2880: 2.66, 1920: 1.77}[w]
     assert all(z["max_zoom"] == new["max_zoom"]["screen"] for z in new["zoom_targets"])
     (job / "job.json").write_text(json.dumps(data))
+
+
+def test_zoom_views_have_the_view_aspect(analysed):
+    w, h, _, doc = analysed
+    # 16:9 fills the frame: the view boxes are 16:9 in source px, zoom 1 = the full width.
+    for z in doc["zoom_targets"]:
+        v = z["view"]
+        assert (v[2] - v[0]) * w / ((v[3] - v[1]) * h) == pytest.approx(16 / 9, abs=0.01)
+        assert z["zoom"] == pytest.approx(1 / (v[2] - v[0]), abs=0.02)
+        b = z["box"]
+        assert v[0] <= b[0] + 1e-4 and b[2] <= v[2] + 1e-4 or z["zoom"] == z["max_zoom"]
+
+
+def test_new_geometry_recomputes_the_caps_without_analysis(capsys, analysed):
+    w, _, job, doc = analysed
+    out = job / "work" / "screen.json"
+    old = {**doc, "geometry": 1, "max_zoom": {"screen": 9.0}}
+    out.write_text(json.dumps(old))
+    code, s, text = run_tool(capsys, "screen", "--job", str(job))
+    assert code == 0 and s["reused"] is True, text
+    assert json.loads(out.read_text()) == doc
 
 
 def test_cursor_only_recording_has_no_targets(capsys, clip_dir_):

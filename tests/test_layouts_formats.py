@@ -39,15 +39,65 @@ def test_shapes():
     ]  # fmt: skip
 
 
-@pytest.mark.parametrize("screen", [(2880, 1800), (1920, 1080), (4096, 2304), (1170, 2532)])
-def test_landscape_screen_fills_the_frame(screen):
+@pytest.mark.parametrize("screen", [(2880, 1800), (1920, 1080), (4096, 2304), (4096, 2648)])
+@pytest.mark.parametrize("layout", ["screen", "pip"])
+def test_landscape_screen_fills_the_frame(screen, layout):
+    # 16:10, 16:9 and a Mac screen (1.55): the view is the whole frame, no bars.
+    assert lay.view_rect(layout, (1920, 1080), screen) == lay.Rect(0, 0, 1920, 1080)
+    assert lay.filled(layout, (1920, 1080), screen)
+    assert lay.view_aspect(layout, (1920, 1080), screen) == 1920 / 1080
+
+
+@pytest.mark.parametrize("screen", [(1170, 2532), (2048, 1536)])
+def test_landscape_letterboxes_a_screen_of_another_shape(screen):
+    # A portrait phone screen (and a 4:3 one, 33 % narrower) are fitted with bars.
     v = lay.view_rect("screen", (1920, 1080), screen)
-    assert v.w == 1920 or v.h == 1080  # one side fills, the other is letterboxed
-    assert _inside(v, (1920, 1080)) and v.w % 2 == v.h % 2 == 0
+    assert not lay.filled("screen", (1920, 1080), screen)
+    assert v.h == 1080 and v.w < 1920 and _inside(v, (1920, 1080)) and v.w % 2 == 0
     assert abs(v.w / v.h - screen[0] / screen[1]) < 0.01
-    assert abs(v.x - (1920 - v.x - v.w)) <= 1 and abs(v.y - (1080 - v.y - v.h)) <= 1
-    if screen == (1920, 1080):
-        assert (v.x, v.y, v.w, v.h) == (0, 0, 1920, 1080)
+    assert abs(v.x - (1920 - v.x - v.w)) <= 1
+    assert lay.view_aspect("screen", (1920, 1080), screen) == screen[0] / screen[1]
+    seg, _ = _plan("16:9", screen=screen)
+    assert seg.initial == (0.0, 0.0, screen[0])  # the whole screen
+
+
+def test_landscape_zoom_windows_have_the_view_aspect():
+    screen = (4096, 2648)
+    keys = [
+        {"t": 11.0, "box": [0.45, 0.02, 0.95, 0.15]},
+        {"t": 12.5, "box": [0.05, 0.75, 0.55, 0.95]},
+    ]
+    seg, clamped = _plan("16:9", spec={"screen_zoom": keys}, screen=screen)
+    assert not clamped
+    # No zoom: the full width, 4096 / (16 / 9) = 2304 high, placed around the first target
+    # (at the top), so the first move only zooms.
+    x, y, w = seg.initial
+    assert (x, y, w) == (0.0, 0.0, 4096)
+    for n in range(0, seg.frames, 7):
+        x, y, w = lay.window_at(seg, n)
+        h = w * seg.view.h / seg.view.w
+        assert 0 <= x and x + w <= 4096 + 1e-6 and 0 <= y and y + h <= 2648 + 1e-6
+    for m, k in zip(seg.moves, keys, strict=True):  # each window holds its target
+        x, y, w = m.win
+        b = k["box"]
+        assert x <= b[0] * 4096 + 1e-6 and b[2] * 4096 <= x + w + 1e-6
+        assert y <= b[1] * 2648 + 1e-6 and b[3] * 2648 <= y + w * 1080 / 1920 + 1e-6
+    # The sharpness cap counts from the 1920 px view: 4096 / 1920.
+    big = {"screen_zoom": [{"t": 11.0, "box": [0.5, 0.5, 0.52, 0.52]}]}
+    _, clamped = _plan("16:9", spec=big, screen=screen)
+    assert clamped[0]["max_zoom"] == round(4096 / 1920, 2)
+    assert lay.max_zoom("screen", (1920, 1080), screen) == 2.13
+    # Without a target the no-zoom window is centred.
+    seg, _ = _plan("16:9", screen=screen)
+    assert seg.initial == ((0.0, (2648 - 2304) / 2, 4096))
+
+
+def test_portrait_keeps_the_screen_aspect():
+    for fmt in ("9:16", "4:5"):
+        for layout in ("screen", "pip", "split"):
+            assert not lay.filled(layout, FORMATS[fmt], (4096, 2648))
+            v = lay.view_rect(layout, FORMATS[fmt], (4096, 2648))
+            assert abs(v.w / v.h - 4096 / 2648) < 0.01
 
 
 def test_landscape_pip_bubble_in_the_corner_above_the_captions():
@@ -65,14 +115,22 @@ def test_landscape_pip_bubble_in_the_corner_above_the_captions():
     # ... one on the left keeps it right.
     seg, _ = _plan("16:9", "pip", {"screen_zoom": [{"t": 10.0, "box": [0.0, 0.6, 0.3, 1.0]}]})
     assert seg.inset.x + seg.inset.w == 1920 - z["side"]
+    # ... and a centred one, which both corners cover about equally, too (a tie).
+    centred = {"screen_zoom": [{"t": 10.0, "box": [0.205, 0.0, 0.795, 0.59]}]}
+    seg, _ = _plan("16:9", "pip", centred, screen=(4096, 2648))
+    assert seg.inset.x + seg.inset.w == 1920 - z["side"]
 
 
 def test_landscape_split_side_by_side():
     out = FORMATS["16:9"]
     seg, _ = _plan("16:9", "split", face={"median": {"box": [0.45, 0.3, 0.55, 0.5]}, "frames": []})
     left = round(1920 * lay.SPLIT_SIDE / 2) * 2
-    assert seg.view.x + seg.view.w <= left and seg.view.w == left  # 16:10 fits by the width
-    assert abs(seg.view.y - (1080 - seg.view.y - seg.view.h)) <= 1  # vertically centred
+    # 16:10 fills the left part (within LETTERBOX_SPLIT of its aspect), cropped to it
+    assert (seg.view.x, seg.view.y, seg.view.w, seg.view.h) == (0, 0, left, 1080)
+    assert lay.view_aspect("split", out, SCREEN) == left / 1080
+    assert seg.initial == ((2880 - 1800 * left / 1080) / 2, 0.0, 1800 * left / 1080)
+    phone = lay.view_rect("split", out, (1170, 2532))  # a portrait screen: fitted
+    assert phone.h == 1080 and phone.w < left
     assert (seg.face.x, seg.face.y, seg.face.w, seg.face.h) == (left, 0, 1920 - left, 1080)
     cam = seg.camera
     assert cam.w / cam.h == pytest.approx(seg.face.w / seg.face.h, abs=0.01)
@@ -106,8 +164,8 @@ def test_sharpness_cap_follows_the_format():
     _, clamped = _plan("9:16", spec=key, screen=(1920, 1080))
     assert clamped[0]["max_zoom"] == round(1920 / 1080, 2)
     seg, clamped = _plan("16:9", spec=key, screen=(2880, 1800))
-    assert clamped[0]["max_zoom"] == round(2880 / 1728, 2)
-    assert min(lay.window_at(seg, n)[2] for n in range(seg.frames)) == pytest.approx(1728)
+    assert clamped[0]["max_zoom"] == round(2880 / 1920, 2)  # the view is 1920 wide
+    assert min(lay.window_at(seg, n)[2] for n in range(seg.frames)) == pytest.approx(1920)
 
 
 # --- speaker crop -------------------------------------------------------------------------
