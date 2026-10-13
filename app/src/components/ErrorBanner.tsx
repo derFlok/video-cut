@@ -7,8 +7,11 @@ export function errorText(t: T, e: unknown): string {
     if (e.status === 0) return t("error.network");
     if (e.status === 401 || e.status === 403) return t("error.forbidden");
     if (e.status === 409) {
-      const m = e.message.toLowerCase();
-      return m.includes("sha") || m.includes("stale") || m.includes("changed") ? t("error.stale") : t("error.busy");
+      // The server says which conflict it is: busy (a run is active), stale (the plan
+      // changed since it was read), or another state problem (shown with its message).
+      if (e.code === "busy") return t("error.busy");
+      if (e.code === "stale") return t("error.stale");
+      return t("error.generic", { msg: e.message });
     }
     return t("error.generic", { msg: e.message });
   }

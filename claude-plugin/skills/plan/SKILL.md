@@ -58,7 +58,7 @@ When the prompt says *revise-the-plan mode*, a plan exists and the human gave fe
   these rules (no cutting, no approval, personal-data candidates stay listed).
 - Add one line right under the title of `work/project.md`:
   `Changed after feedback: <what changed, in a few words>` (replace an older such line).
-- Update `work/plan.json` to match (and `work/redaction.json` only if the change shows new
+- Update `work/plan.json` to match, with `"change_note": "<the same few words>"` (and `work/redaction.json` only if the change shows new
   screen time with personal data), then `videocut tool plan check` and
   `videocut tool sheet plan` as in step 6. The human approves the changed plan again.
 
@@ -220,7 +220,7 @@ The same plan as data, for the app (it must say exactly what project.md says):
 ```json
 {"title": "<working title>", "format": "<job format>", "target_s": 45,
  "hook": {"text": "<exact words>", "src": [12.48, 14.20]},
- "core": "<core message>",
+ "core_message": "<core message>",
  "keep_list": [{"n": 1, "src": [12.48, 17.92], "text": "<short>", "why": "hook"}],
  "views": [{"n": 1, "src": [17.92, 24.10], "layout": "screen",
             "zoom_box": [0.52, 0.30, 0.78, 0.46], "zoom_t": 19.20, "why": "the click"}],
@@ -237,3 +237,5 @@ The same plan as data, for the app (it must say exactly what project.md says):
 - `personal_data` repeats `work/redaction.json` exactly (same ids, kinds, times or
   `asset`, boxes); none → `[]`.
 - Leave out `still`: `videocut tool sheet plan` fills it in.
+- `change_note` only in revise-the-plan mode (what the feedback changed, in a few words);
+  a fresh plan has none.

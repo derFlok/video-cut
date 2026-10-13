@@ -90,14 +90,34 @@ export interface Run {
   cost_usd: number | null;
 }
 
+/** One line of work/revisions.jsonl. A successful revision made `version`; `video_url`
+ * plays that version while its file is kept. */
 export interface Revision {
   n?: number;
   time: string;
   text: string;
   at_s?: number | null;
+  ok?: boolean;
+  error?: string | null;
+  summary?: string | null;
   changed?: Record<string, unknown>;
+  verify_ok?: boolean;
   cost?: number | null;
+  turns?: number | null;
+  wall_s?: number | null;
+  version?: number;
+  previous_version?: number;
   video_url?: string;
+}
+
+/** A playable state of the reel: version 1 is the first cut, each successful revision
+ * makes the next one. `video_url` is null once out/history dropped the file. */
+export interface Version {
+  version: number;
+  revision: number | null;
+  text: string | null;
+  video_url: string | null;
+  current: boolean;
 }
 
 export interface VerifySummary {
@@ -125,6 +145,7 @@ export interface JobDetail {
   verify: VerifySummary | null;
   runs: Run[];
   revisions: Revision[];
+  versions?: Version[];
   title?: string | null;
   brief?: string | null;
   created?: string;
@@ -148,7 +169,7 @@ export interface PlanView {
 export interface PlanJson {
   title?: string;
   format?: string;
-  hook?: string;
+  hook?: string | { text?: string; src?: [number, number] };
   core_message?: string;
   keep_list?: PlanKeep[];
   views?: PlanView[];

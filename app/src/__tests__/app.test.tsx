@@ -215,15 +215,22 @@ describe("result", () => {
     await user.click(screen.getByRole("button", { name: t("result.feedback.send") }));
     expect(lastCall(mock, "/api/jobs/job-done/feedback")!.body).toEqual({ text: "Musik leiser" });
     expect(await screen.findByText("„Musik leiser“", {}, { timeout: 3000 })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: t("result.history.play") }).length).toBe(2);
+    // versions 1–3 were there, the revision made version 4 (now current, playing)
+    expect(screen.getByText(t("result.version", { n: 4 }))).toBeInTheDocument();
+    const plays = screen.getAllByRole("button", { name: new RegExp(`^${t("result.history.play")}:`) });
+    expect(plays.map((b) => b.getAttribute("aria-label"))).toEqual([3, 2, 1].map((n) => `${t("result.history.play")}: ${t("result.version", { n })}`));
+    await user.click(plays[1]);
+    expect(screen.getByRole("status", { name: "" }).textContent).toContain(t("result.version.playing", { n: 2 }));
+    expect(document.querySelector("video")!.getAttribute("data-version")).toBe("2");
   });
 
   it("describes verify findings in plain words", () => {
     const lines = verifyLines(
-      { ok: false, flagged: [{ cut: 1, t: 21.4, flags: ["blink_at_cut"] }], checks: { loudness: { ok: false } } },
+      { ok: false, flagged: [{ cut: 1, t: 21.4, flags: ["blink_at_cut", "new_flag_x"] }], checks: { loudness: { ok: false } } },
       t,
     );
-    expect(lines).toEqual(["Schnitt bei 0:21: blink at cut", "Prüfung „loudness“ nicht bestanden"]);
+    // known ids in plain words, an unknown one readable as it is
+    expect(lines).toEqual(["Schnitt bei 0:21: Blinzeln am Schnitt, new flag x", "Prüfung „Lautstärke“ nicht bestanden"]);
   });
 });
 

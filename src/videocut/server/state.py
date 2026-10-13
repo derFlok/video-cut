@@ -187,6 +187,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
     data = read_job(job)
     st, stage = status(job, data, ch)
     fmt, resolved = _format(data)
+    revs, versions = revisions(job)
     verify = _json(job / "out" / "verify.json")
     runs = [
         {k: r.get(k) for k in ("phase", "wall_s", "turns", "cost_usd", "ok", "at")}
@@ -215,21 +216,59 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "outputs": outputs(job),
         "verify": verify if isinstance(verify, dict) else None,
         "runs": runs,
-        "revisions": revisions(job),
+        "revisions": revs,
+        "versions": versions,
     }
 
 
-def revisions(job: Path) -> list[dict]:
-    """work/revisions.jsonl; an entry gets `video_url` while the reel it replaced is kept
-    in out/history/ (the revise step keeps the last five)."""
-    out = []
-    for n, rev in enumerate(_jsonl(job / "work" / "revisions.jsonl"), 1):
-        rev = dict(rev)
-        num = rev.get("n") if isinstance(rev.get("n"), int) else n
-        if (job / "out" / "history" / f"reel-{num}.mp4").is_file():
-            rev["video_url"] = f"/api/jobs/{job.name}/media/history/reel-{num}.mp4"
-        out.append(rev)
-    return out
+def _history_url(job: Path, rel) -> str | None:
+    """The media URL of a kept reel ("out/history/reel-<k>.mp4") while the file exists."""
+    if not isinstance(rel, str) or not rel.startswith("out/"):
+        return None
+    name = rel[len("out/") :]
+    if not HISTORY_RE.fullmatch(name) or not (job / rel).is_file():
+        return None
+    return f"/api/jobs/{job.name}/media/{name}"
+
+
+def revisions(job: Path) -> tuple[list[dict], list[dict]]:
+    """(revisions, versions) from work/revisions.jsonl.
+
+    Version 1 is the reel of the approved plan; every successful revision makes the next
+    version. A revision's `previous_reel` is the reel BEFORE it (kept in out/history/, the
+    last five), so the reel a revision made is the next successful revision's
+    `previous_reel`, or out/reel.mp4 for the latest one. A revision entry gets `version`
+    (the one it made) and `video_url` while that reel is still there; `versions` lists
+    every version newest first with its `video_url` (None once out/history dropped it)."""
+    revs = [dict(r) for r in _jsonl(job / "work" / "revisions.jsonl")]
+    good = [r for r in revs if r.get("ok") is not False and not r.get("error")]
+    current = f"/api/jobs/{job.name}/media/reel" if (job / MEDIA["reel"]).is_file() else None
+    versions = [
+        {
+            "version": 1,
+            "revision": None,
+            "text": None,
+            "video_url": _history_url(job, good[0].get("previous_reel")) if good else current,
+            "current": not good,
+        }
+    ]
+    for i, rev in enumerate(good):
+        last = i == len(good) - 1
+        url = current if last else _history_url(job, good[i + 1].get("previous_reel"))
+        rev["version"] = i + 2
+        rev["previous_version"] = i + 1
+        if url:
+            rev["video_url"] = url
+        versions.append(
+            {
+                "version": i + 2,
+                "revision": rev.get("n"),
+                "text": rev.get("text"),
+                "video_url": url,
+                "current": last,
+            }
+        )
+    return revs, versions[::-1]
 
 
 SAFE_PART = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}")

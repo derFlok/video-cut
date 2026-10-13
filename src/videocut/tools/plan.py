@@ -3,7 +3,8 @@ work/project.md that the plan run writes for the app.
 
     {"title": "...", "format": "16:9",
      "hook": {"text": "...", "src": [t0, t1]},
-     "core": "...",                                       # optional
+     "core_message": "...",                               # optional
+     "change_note": "...",                 # optional: after plan feedback, what changed
      "target_s": 45,                                      # optional
      "keep_list": [{"n": 1, "src": [t0, t1], "text": "...", "why": "..."}],
      "views": [{"n": 1, "src": [t0, t1], "layout": "screen",
@@ -89,7 +90,7 @@ def validate(
         errs.append('$.hook: must be {"text": "...", "src": [t0, t1]}')
     elif "src" in hook:
         errs += _src_errors(hook["src"], "$.hook.src", duration)
-    for key in ("core", "why"):
+    for key in ("core_message", "change_note", "why"):
         if key in data and not isinstance(data[key], str):
             errs.append(f"$.{key}: must be a string")
     if "target_s" in data and not (_num(data["target_s"]) and data["target_s"] > 0):

@@ -240,14 +240,15 @@ function riskText(r: PlanJson["risks"] extends (infer U)[] | undefined ? U : nev
 export function StructuredPlan({ jobId, plan, changed }: { jobId: string; plan: PlanJson; changed: Set<number> }) {
   const { t } = useI18n();
   const core = plan.core_message ?? (plan as { core?: string }).core;
+  const hook = typeof plan.hook === "string" ? plan.hook : plan.hook?.text;
   return (
     <div className="plan stack">
-      {(plan.hook || core) && (
+      {(hook || core) && (
         <div className="grid-2">
-          {plan.hook && (
+          {hook && (
             <div className="callout">
               <span className="label">{t("plan.hook")}</span>
-              <p className="callout-text">{plan.hook}</p>
+              <p className="callout-text">{hook}</p>
             </div>
           )}
           {core && (

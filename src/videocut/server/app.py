@@ -4,7 +4,6 @@ local app (docs/BRIEF.md, Phase 3)."""
 
 import asyncio
 import functools
-import inspect
 import json
 import re
 import shutil
@@ -13,9 +12,11 @@ from importlib import resources
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import __version__, agent, settings
 from .. import redaction as red
@@ -121,10 +122,6 @@ DIST = "web/dist"
 # ------------------------------------------------------------------ pipeline adapters
 
 
-def _run_accepts(name: str) -> bool:
-    return name in inspect.signature(pipeline.run).parameters
-
-
 class Pipeline:
     """How the API drives src/videocut/run.py. Tests replace it with a fake."""
 
@@ -136,16 +133,42 @@ class Pipeline:
         return pipeline.run(str(job), say=say, ask=ask)
 
     def plan_feedback(self, job: Path, text: str, say, ask) -> int:
-        """`videocut run <job> --replan --plan-feedback <text>` (the revise step)."""
-        if not _run_accepts("plan_feedback"):
-            raise NotImplementedError("plan feedback needs the revise step (not installed yet)")
+        """`videocut run <job> --plan-feedback <text>`: the plan run revises the plan."""
         return pipeline.run(str(job), replan=True, plan_feedback=text, say=say, ask=ask)
 
     def feedback(self, job: Path, text: str, at_s: float | None, say, ask) -> int:
-        """`videocut run <job> --feedback <text> [--at <output_s>]` (the revise step)."""
-        if not _run_accepts("feedback"):
-            raise NotImplementedError("feedback runs need the revise step (not installed yet)")
+        """`videocut run <job> --feedback <text> [--at <output_s>]`: run.revise()."""
         return pipeline.run(str(job), feedback=text, at_s=at_s, say=say, ask=ask)
+
+
+# ------------------------------------------------------------------ errors
+# Every error body is {"detail": {"message": str, "code"?: str, "errors"?: [str]}}.
+# 409 codes: busy (a run is queued or active), stale (the plan changed since it was read),
+# state (the job is not at the step the request needs), exists, read_only.
+
+
+def conflict(code: str, message: str) -> HTTPException:
+    return HTTPException(409, {"message": message, "code": code})
+
+
+async def _http_error(request: Request, exc) -> JSONResponse:
+    d = exc.detail
+    if not isinstance(d, dict):
+        d = {"message": str(d)}
+    elif "message" not in d:
+        d = {"message": "; ".join(map(str, d.get("errors") or [])) or "error", **d}
+    return JSONResponse({"detail": d}, status_code=exc.status_code, headers=exc.headers)
+
+
+async def _invalid(request: Request, exc: RequestValidationError) -> JSONResponse:
+    errors = [
+        f"{'.'.join(str(x) for x in e.get('loc', ())[1:]) or 'body'}: {e.get('msg')}"
+        for e in exc.errors()
+    ]
+    return JSONResponse(
+        {"detail": {"message": "invalid request: " + "; ".join(errors[:3]), "errors": errors}},
+        status_code=422,
+    )
 
 
 # ------------------------------------------------------------------ request bodies
@@ -193,6 +216,8 @@ def create_app(
     runs = Runs()
     run_with = runner or Pipeline()
     app.state.runs = runs
+    app.add_exception_handler(StarletteHTTPException, _http_error)
+    app.add_exception_handler(RequestValidationError, _invalid)
     app.state.ui_built = _ui_dir() is not None
 
     def job_or_404(job_id: str) -> Path:
@@ -205,12 +230,12 @@ def create_app(
         try:
             ch = runs.submit(job.name, kind, fn)
         except Busy:
-            raise HTTPException(409, "a run of this job is already queued or active") from None
+            raise conflict("busy", "a run of this job is already queued or active") from None
         return {"id": job.name, "run": kind, "state": ch.state}
 
     def not_running(job: Path) -> None:
         if runs.busy(job.name):
-            raise HTTPException(409, "a run of this job is queued or active")
+            raise conflict("busy", "a run of this job is queued or active")
 
     def decision(fn):
         """A request that checks for runs, changes the job and may queue a run: one at a
@@ -363,18 +388,18 @@ def create_app(
         if not project.is_file():
             raise HTTPException(404, "no plan yet")
         if body.sha != project_sha(job):
-            raise HTTPException(409, "the plan changed since you loaded it; reload it")
+            raise conflict("stale", "the plan changed since you loaded it; reload it")
         tmp = project.with_name(project.name + ".tmp")
         tmp.write_text(body.markdown)
         tmp.replace(project)  # an earlier approval no longer matches (sha-bound)
-        return {"sha": project_sha(job), "approved": is_approved(job)}
+        return get_plan(job_id)
 
     @app.post("/api/jobs/{job_id}/plan/feedback")
     @decision
     def plan_feedback(job_id: str, body: TextBody) -> dict:
         job = job_or_404(job_id)
         if not (job / "work" / "project.md").is_file():
-            raise HTTPException(409, "there is no plan to revise yet; start the job first")
+            raise conflict("state", "there is no plan to revise yet; start the job first")
         not_running(job)
         if read_approval(job):
             revoke_approval(job)  # the plan will change; approve the new one
@@ -392,13 +417,13 @@ def create_app(
         not_running(job)
         sha = project_sha(job)
         if sha is None:
-            raise HTTPException(409, "there is no plan to approve yet")
+            raise conflict("state", "there is no plan to approve yet")
         if body.plan_sha != sha:
-            raise HTTPException(409, "the plan changed since you read it; read it again")
+            raise conflict("stale", "the plan changed since you read it; read it again")
         try:
             cands = red.load(job) or []
         except red.RedactionError as e:
-            raise HTTPException(409, f"cannot approve: {e}") from None
+            raise conflict("state", f"cannot approve: {e}") from None
         ids: list[int] | None = None
         if cands:
             r = body.redaction
@@ -417,7 +442,7 @@ def create_app(
             if cands:
                 red.decide(job, ids, "app")  # same store as `videocut tool job redaction`
         except (ToolError, red.RedactionError) as e:
-            raise HTTPException(409, str(e)) from None
+            raise conflict("state", str(e)) from None
         out = submit(job, "approve", lambda say, ask: run_with.cont(job, say, ask))
         return {**out, "approved": True, "redaction": state.redaction_view(job)["decision"]}
 
@@ -426,7 +451,7 @@ def create_app(
     def feedback(job_id: str, body: FeedbackBody) -> dict:
         job = job_or_404(job_id)
         if not is_approved(job) or not (job / "out" / "reel.mp4").is_file():
-            raise HTTPException(409, "feedback needs an approved plan and a finished reel")
+            raise conflict("state", "feedback needs an approved plan and a finished reel")
         text, at_s = body.text.strip(), body.at_s
         return submit(
             job, "feedback", lambda say, ask: run_with.feedback(job, text, at_s, say, ask)

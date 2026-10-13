@@ -79,7 +79,7 @@ function planFor(title: string, variant = 0, note?: string): Plan {
   const plan: PlanJson = {
     title,
     format: "16:9",
-    hook: "Die eine Frage, die fast jeder stellt – und warum die Antwort einfacher ist.",
+    hook: { text: "Die eine Frage, die fast jeder stellt – und warum die Antwort einfacher ist.", src: [0.4, 3.1] },
     core_message: "Ein klarer Ablauf spart jede Woche Zeit.",
     keep_list: keep,
     views: [
@@ -198,8 +198,13 @@ function seedJobs(): Map<string, MockJob> {
         { phase: "overlays", wall_s: 210, turns: 30, cost_usd: 0.52 },
       ],
       revisions: [
-        { n: 1, time: "2026-10-10T17:20:00", text: "Bei 0:12 weniger rauszoomen.", at_s: 12.0, changed: { segments: [3] }, cost: 0.21, video_url: "/api/jobs/job-done/media/history/reel-1.mp4" },
-        { n: 2, time: "2026-10-10T17:41:00", text: "Die Frage zu den Anrufen weglassen.", changed: { segments: [5, 6] }, cost: 0.18 },
+        { n: 1, time: "2026-10-10T17:20:00", text: "Bei 0:12 weniger rauszoomen.", at_s: 12.0, ok: true, changed: { segments: [3] }, cost: 0.21, version: 2, video_url: "/api/jobs/job-done/media/history/reel-2.mp4" },
+        { n: 2, time: "2026-10-10T17:41:00", text: "Die Frage zu den Anrufen weglassen.", ok: true, changed: { segments: [5, 6] }, cost: 0.18, version: 3, video_url: "/api/jobs/job-done/media/reel" },
+      ],
+      versions: [
+        { version: 3, revision: 2, text: "Die Frage zu den Anrufen weglassen.", video_url: "/api/jobs/job-done/media/reel", current: true },
+        { version: 2, revision: 1, text: "Bei 0:12 weniger rauszoomen.", video_url: "/api/jobs/job-done/media/history/reel-2.mp4", current: false },
+        { version: 1, revision: null, text: null, video_url: "/api/jobs/job-done/media/history/reel-1.mp4", current: false },
       ],
     },
     planFor("Drei Tipps für den Start"),
@@ -311,7 +316,7 @@ export function createMock(opts: MockOptions = {}) {
       if (!br) return json(404, { detail: `no brand ${id}` });
       if (!b && method === "GET") return json(200, br);
       if (!b && method === "PUT") {
-        if (id === "_example") return json(403, { detail: "the bundled example is read-only" });
+        if (id === "_example") return json(409, { detail: { message: "the bundled example brand is read-only; create a new brand", code: "read_only" } });
         const tokens = body as Brand;
         const errors: string[] = [];
         if (!tokens.name || !String(tokens.name).trim()) errors.push("$.name: required, a non-empty string");
@@ -346,7 +351,7 @@ export function createMock(opts: MockOptions = {}) {
         return json(200, { ok: true });
       }
       if (b === "start" && method === "POST") {
-        if (state.active) return json(409, { detail: "a run is active" });
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
         void simulate(id, ["prep", "plan"], "plan", () => {
           job.plan = planFor(job.title ?? "Neues Video");
           d.plan_sha = job.plan.sha;
@@ -357,14 +362,14 @@ export function createMock(opts: MockOptions = {}) {
       if (b === "plan" && !c && method === "GET") return job.plan ? json(200, job.plan) : json(404, { detail: "no plan yet" });
       if (b === "plan" && !c && method === "PUT") {
         const { markdown, sha: s } = body as { markdown: string; sha: string };
-        if (!job.plan || s !== job.plan.sha) return json(409, { detail: "stale plan sha" });
+        if (!job.plan || s !== job.plan.sha) return json(409, { detail: { message: "the plan changed since you read it; read it again", code: "stale" } });
         job.plan = { markdown, plan: job.plan.plan, sha: sha(markdown) };
         d.plan_sha = job.plan.sha;
         d.approved = false;
         return json(200, job.plan);
       }
       if (b === "plan" && c === "feedback" && method === "POST") {
-        if (state.active) return json(409, { detail: "a run is active" });
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
         const text = String((body as { text?: string }).text ?? "");
         d.approved = false;
         void simulate(id, ["plan_revise"], "plan", () => {
@@ -374,9 +379,9 @@ export function createMock(opts: MockOptions = {}) {
         return json(202, { ok: true });
       }
       if (b === "approve" && method === "POST") {
-        if (state.active) return json(409, { detail: "a run is active" });
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
         const req = body as { plan_sha: string; redaction?: { mode: string; ids: number[] } };
-        if (!job.plan || req.plan_sha !== job.plan.sha) return json(409, { detail: "stale plan sha" });
+        if (!job.plan || req.plan_sha !== job.plan.sha) return json(409, { detail: { message: "the plan changed since you read it; read it again", code: "stale" } });
         d.approved = true;
         d.redaction.decision = req.redaction ? { ...req.redaction } : null;
         void simulate(id, ["cut", "overlays", "verify"], "result", () => {
@@ -386,11 +391,20 @@ export function createMock(opts: MockOptions = {}) {
         return json(202, { ok: true });
       }
       if (b === "feedback" && method === "POST") {
-        if (state.active) return json(409, { detail: "a run is active" });
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
         const fb = body as { text: string; at_s?: number };
         const n = d.revisions.length + 1;
         void simulate(id, ["revise", "verify"], "result", () => {
-          d.revisions.push({ n, time: new Date().toISOString(), text: fb.text, at_s: fb.at_s ?? null, changed: { segments: [2] }, cost: 0.19, video_url: `/api/jobs/${id}/media/history/reel-${n}.mp4` });
+          // Like the server: the reel before revision n is kept as out/history/reel-<n>.mp4,
+          // so version k (k < latest) plays history/reel-k, the latest one the current reel.
+          const version = d.revisions.filter((r) => r.ok !== false).length + 2;
+          d.revisions.push({ n, time: new Date().toISOString(), text: fb.text, at_s: fb.at_s ?? null, ok: true, changed: { segments: [2] }, cost: 0.19, previous_reel: `out/history/reel-${version - 1}.mp4`, version } as never);
+          const reel = `/api/jobs/${id}/media/reel`;
+          d.versions = [
+            ...d.revisions.filter((r) => r.version).map((r) => ({ version: r.version!, revision: r.n ?? null, text: r.text, video_url: r.version === version ? reel : `/api/jobs/${id}/media/history/reel-${r.version}.mp4`, current: r.version === version })).reverse(),
+            { version: 1, revision: null, text: null, video_url: `/api/jobs/${id}/media/history/reel-1.mp4`, current: false },
+          ];
+          for (const r of d.revisions) if (r.version) r.video_url = d.versions.find((v) => v.version === r.version)?.video_url ?? undefined;
         });
         return json(202, { ok: true });
       }

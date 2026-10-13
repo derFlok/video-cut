@@ -25,6 +25,11 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
+  /** The conflict kind of a 409 ({detail: {code}}): busy | stale | state | exists | read_only. */
+  get code(): string | null {
+    const d = (this.detail as { detail?: { code?: unknown } } | null)?.detail;
+    return d && typeof d === "object" && typeof d.code === "string" ? d.code : null;
+  }
   /** Validation messages the server sent (brand check, upload check), if any. */
   get errors(): string[] {
     const d = this.detail as { errors?: unknown; detail?: unknown } | undefined;

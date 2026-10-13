@@ -32,3 +32,5 @@ __pycache__/
 # The local app: built from app/ by `videocut setup`, never committed
 /src/videocut/web/dist/
 /app/node_modules/
+/app/dist-mock/
+/app/e2e/out/

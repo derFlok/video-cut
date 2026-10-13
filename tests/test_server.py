@@ -204,11 +204,16 @@ def test_brand_create_edit_and_validate(client):
     data = client.get("/api/brands/my-test").json()
     assert data["name"] == "My Test" and data["editable"]
     data["colors"]["accent"] = "#3366FF"
-    assert client.put("/api/brands/my-test", json=data).status_code == 200
+    saved = client.put("/api/brands/my-test", json=data)
+    assert saved.status_code == 200 and saved.json()["colors"]["accent"] == "#3366FF"
+    assert saved.json()["name"] == "My Test" and "files" in saved.json()  # the brand, as GET
     assert client.get("/api/brands/my-test").json()["colors"]["accent"] == "#3366FF"
     data["colors"]["bg"] = "not a colour"
     bad = client.put("/api/brands/my-test", json=data)
     assert bad.status_code == 422 and bad.json()["detail"]["errors"]
+    assert bad.json()["detail"]["message"]
+    dup = client.post("/api/brands", json={"name": "My Test"}).json()["detail"]
+    assert dup["code"] == "exists" and "already exists" in dup["message"]
 
 
 def test_brand_file_upload_checks_content(client):
@@ -220,6 +225,19 @@ def test_brand_file_upload_checks_content(client):
     assert fake.status_code == 415
     exe = client.post("/api/brands/b/files", files={"font": ("x.sh", b"#!/bin/sh", "text/plain")})
     assert exe.status_code == 415
+    dark = client.post(
+        "/api/brands/b/files",
+        files={"logo": ("dark.png", png, "image/png")},
+        data={"role": "dark"},
+    )
+    assert dark.status_code == 200, dark.text
+    assert dark.json()["logo"]["dark"] == "logo/dark.png"  # the updated brand
+    assert "logo/dark.png" in dark.json()["files"]
+    assert client.get("/api/brands/b").json()["logo"]["dark"] == "logo/dark.png"
+    bad_role = client.post(
+        "/api/brands/b/files", files={"logo": ("y.png", png, "image/png")}, data={"role": "x"}
+    )
+    assert bad_role.status_code == 400
     sneaky = client.post(
         "/api/brands/b/files", files={"logo": ("../../evil.svg", b"<svg></svg>", "image/svg+xml")}
     )
@@ -336,6 +354,14 @@ def test_job_detail_reports_runs_redaction_and_outputs(client):
     assert d["plan_sha"] == project_sha(job)
 
 
+def test_invalid_body_reports_message_and_errors(client):
+    planned_job()
+    r = client.post("/api/jobs/j1/feedback", json={"text": ""})
+    assert r.status_code == 422
+    d = r.json()["detail"]
+    assert d["message"].startswith("invalid request") and d["errors"][0].startswith("text:")
+
+
 def test_delete_moves_the_job_to_trash(client):
     make_job()
     r = client.delete("/api/jobs/j1")
@@ -354,9 +380,10 @@ def test_plan_get_and_put_with_sha(client):
     (job / "work" / "plan.json").write_text(json.dumps({"title": "A title"}))
     assert client.get("/api/jobs/j1/plan").json()["plan"] == {"title": "A title"}
     stale = client.put("/api/jobs/j1/plan", json={"markdown": "# Mine\n", "sha": "0" * 64})
-    assert stale.status_code == 409
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "stale"
     ok = client.put("/api/jobs/j1/plan", json={"markdown": "# Mine\n", "sha": p["sha"]})
     assert ok.status_code == 200 and ok.json()["sha"] == project_sha(job)
+    assert ok.json()["markdown"] == "# Mine\n" and ok.json()["plan"] == {"title": "A title"}
     assert (job / "work" / "project.md").read_text() == "# Mine\n"
     again = client.put("/api/jobs/j1/plan", json={"markdown": "# Again\n", "sha": p["sha"]})
     assert again.status_code == 409
@@ -479,7 +506,8 @@ def test_one_run_at_a_time(client, fake):
     make_job("j2")
     fake.gate.clear()
     assert client.post("/api/jobs/j1/start").status_code == 200
-    assert client.post("/api/jobs/j1/start").status_code == 409
+    busy = client.post("/api/jobs/j1/start")
+    assert busy.status_code == 409 and busy.json()["detail"]["code"] == "busy"
     assert client.post("/api/jobs/j2/start").json()["state"] == "queued"
     assert client.get("/api/jobs/j1").json()["status"] == "running"
     j2 = client.get("/api/jobs/j2").json()
@@ -594,33 +622,57 @@ def test_stills_are_confined_to_the_allowed_folders(client, tmp_path):
         assert client.get(f"/api/jobs/j1/stills/{bad}").status_code == 404, bad
 
 
-def test_revision_history_is_playable_while_kept(client):
+def test_versions_map_the_kept_reels(client):
+    """previous_reel is the reel BEFORE a revision: version 1 = the first revision's
+    previous_reel, the latest version = out/reel.mp4; a failed revision makes no version."""
     job = make_job()
-    (job / "out" / "history").mkdir()
-    (job / "out" / "history" / "reel-1.mp4").write_bytes(b"\x00" * 100)
-    (job / "work" / "revisions.jsonl").write_text(
-        json.dumps({"text": "less zoom", "at_s": 12}) + "\n" + json.dumps({"text": "b"}) + "\n"
-    )
-    revs = client.get("/api/jobs/j1").json()["revisions"]
-    assert revs[0]["video_url"] == "/api/jobs/j1/media/history/reel-1.mp4"
+    hist = job / "out" / "history"
+    hist.mkdir()
+    (job / "out" / "reel.mp4").write_bytes(b"\x03" * 100)
+    for k in (1, 2):
+        (hist / f"reel-{k}.mp4").write_bytes(bytes([k]) * 100)
+    kept = "out/history/reel-{}.mp4"
+    lines = [
+        {"n": 1, "text": "less zoom", "at_s": 12, "ok": True, "previous_reel": kept.format(1)},
+        {"n": 2, "text": "broken", "ok": False, "error": "x"},
+        {"n": 3, "text": "drop the question", "ok": True, "previous_reel": kept.format(2)},
+    ]
+    (job / "work" / "revisions.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+    d = client.get("/api/jobs/j1").json()
+    revs, versions = d["revisions"], d["versions"]
+    assert [r.get("version") for r in revs] == [2, None, 3]
+    assert revs[0]["video_url"] == "/api/jobs/j1/media/history/reel-2.mp4"
     assert "video_url" not in revs[1]
-    r = client.get(revs[0]["video_url"], headers={"Range": "bytes=0-9"})
-    assert r.status_code == 206 and len(r.content) == 10
-    for bad in ("history/reel-x.mp4", "history/../job.json", "history/reel-2.mp4"):
+    assert revs[2]["video_url"] == "/api/jobs/j1/media/reel"
+    assert [(v["version"], v["video_url"], v["current"]) for v in versions] == [
+        (3, "/api/jobs/j1/media/reel", True),
+        (2, "/api/jobs/j1/media/history/reel-2.mp4", False),
+        (1, "/api/jobs/j1/media/history/reel-1.mp4", False),
+    ]
+    r = client.get(versions[2]["video_url"], headers={"Range": "bytes=0-9"})
+    assert r.status_code == 206 and r.content == b"\x01" * 10
+    (hist / "reel-1.mp4").unlink()  # dropped from the history: listed, not playable
+    assert client.get("/api/jobs/j1").json()["versions"][2]["video_url"] is None
+    for bad in ("history/reel-x.mp4", "history/../job.json", "history/reel-9.mp4"):
         assert client.get(f"/api/jobs/j1/media/{bad}").status_code == 404, bad
+
+
+def test_no_revisions_one_version(client):
+    job = make_job()
+    (job / "out" / "reel.mp4").write_bytes(b"\x00" * 10)
+    d = client.get("/api/jobs/j1").json()
+    assert d["revisions"] == []
+    assert d["versions"] == [
+        {"version": 1, "revision": None, "text": None, "video_url": "/api/jobs/j1/media/reel",
+         "current": True}
+    ]  # fmt: skip
 
 
 # ---------------------------------------------------------------- adapters, internals
 
 
-def test_revision_adapters_wait_for_the_revise_step(monkeypatch, tmp_path):
+def test_revision_adapters_drive_run(monkeypatch, tmp_path):
     p = server_app.Pipeline()
-    if not server_app._run_accepts("plan_feedback"):
-        with pytest.raises(NotImplementedError):
-            p.plan_feedback(tmp_path, "x", print, input)
-    if not server_app._run_accepts("feedback"):
-        with pytest.raises(NotImplementedError):
-            p.feedback(tmp_path, "x", 1.0, print, input)
     seen = {}
 
     def fake_run(ref, plan_feedback=None, feedback=None, at_s=None, replan=False, **kw):

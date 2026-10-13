@@ -40,7 +40,11 @@ def _dir(brand_id: str) -> Path:
 def _editable(brand_id: str) -> Path:
     d = _dir(brand_id)
     if brand_id == brand.EXAMPLE_ID:
-        raise HTTPException(409, "the bundled example brand is read-only; create a new brand")
+        raise HTTPException(
+            409,
+            {"message": "the bundled example brand is read-only; create a new brand",
+             "code": "read_only"},
+        )  # fmt: skip
     return d
 
 
@@ -105,10 +109,12 @@ async def put_brand(brand_id: str, request: Request) -> dict:
     except (TypeError, ValueError, AttributeError) as e:
         errors, warnings = [f"$: {e}"], []
     if errors:
-        raise HTTPException(422, {"errors": errors, "warnings": warnings})
+        raise HTTPException(
+            422,
+            {"message": "the brand has problems", "errors": errors, "warnings": warnings},
+        )
     write_json(d / brand.BRAND_FILE, data)
-    _, _, warnings = brand.inspect(brand_id)
-    return {"ok": True, "id": brand_id, "warnings": warnings}
+    return get_brand(brand_id)
 
 
 @router.post("")
@@ -124,7 +130,7 @@ async def new_brand(request: Request) -> dict:
         raise HTTPException(400, f"invalid brand id {brand_id!r}")
     d = brand.brands_root() / brand_id
     if d.exists():
-        raise HTTPException(409, f"brand {brand_id} already exists")
+        raise HTTPException(409, {"message": f"brand {brand_id} already exists", "code": "exists"})
     data = _read(brand.BUNDLED_ROOT / brand.EXAMPLE_ID)
     data.pop("$comment", None)
     data["name"] = name
@@ -142,16 +148,22 @@ def _magic_ok(path: Path) -> bool:
     return any(head.startswith(m) for m in MAGIC.get(ext, ()))
 
 
+# Which brand.json token an upload may set: logo variants and the two font roles.
+FILE_ROLES = {"logo": set(brand.LOGO_KEYS), "font": {"display", "body"}}
+
+
 @router.post("/{brand_id}/files")
 async def upload_brand_file(brand_id: str, request: Request) -> dict:
-    """Multipart field `logo` (.svg/.png) or `font` (.woff2/.ttf/.otf); saved as
-    logo/<name> or fonts/<name>, the path the brand.json tokens then refer to."""
+    """Multipart field `logo` (.svg/.png) or `font` (.woff2/.ttf/.otf), optional field
+    `role` (logo: light|dark|icon_light|icon_dark, font: display|body); saved as
+    logo/<name> or fonts/<name>. With a role, brand.json's logo.<role> or fonts.<role>
+    then points at the file. Returns the updated brand (as GET)."""
     d = _editable(brand_id)
     try:
         form = await read_form(
             request,
             {"logo": set(brand.LOGO_EXT), "font": set(brand.FONT_EXT)},
-            set(),
+            {"role"},
             max_file_bytes=MAX_BRAND_FILE,
         )
     except UploadError as e:
@@ -161,6 +173,11 @@ async def upload_brand_file(brand_id: str, request: Request) -> dict:
         if len(got) != 1:
             raise HTTPException(400, "send exactly one file (field logo or font)")
         kind, src = got[0]
+        role = (form.fields.get("role") or "").strip() or None
+        if role is not None and role not in FILE_ROLES[kind]:
+            raise HTTPException(
+                400, f"role for a {kind} must be one of {', '.join(sorted(FILE_ROLES[kind]))}"
+            )
         if not _magic_ok(src):
             raise HTTPException(415, f"{src.name} is not a valid {src.suffix} file")
         sub = "logo" if kind == "logo" else "fonts"
@@ -169,7 +186,20 @@ async def upload_brand_file(brand_id: str, request: Request) -> dict:
         shutil.move(src, dst)
     finally:
         shutil.rmtree(form.folder, ignore_errors=True)
-    return {"path": f"{sub}/{dst.name}", "files": _files(d)}
+    if role is not None:
+        data = _read(d)
+        section = data.get("logo" if kind == "logo" else "fonts")
+        section = section if isinstance(section, dict) else {}
+        section[role] = f"{sub}/{dst.name}"
+        data["logo" if kind == "logo" else "fonts"] = section
+        _, errors, warnings = brand._validate(json.loads(json.dumps(data)), d)
+        if errors:  # the file stays in the folder; brand.json keeps its valid state
+            raise HTTPException(
+                422,
+                {"message": "the brand has problems", "errors": errors, "warnings": warnings},
+            )
+        write_json(d / brand.BRAND_FILE, data)
+    return {**get_brand(brand_id), "path": f"{sub}/{dst.name}"}
 
 
 @router.get("/{brand_id}/sheet")
