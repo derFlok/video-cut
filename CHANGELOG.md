@@ -351,6 +351,9 @@
 - Speaker inset/part centred on the segment's face median, head and shoulders (face height
   × 2.6), ≥ 0.75 camera px per output px (the EDL crop cap no longer limits it); render.json
   `speaker` lists `px_ratio` per segment, render warns when the speaker is upscaled.
+  Intended change for 9:16 demo layouts too: pip and split no longer show the plain EDL
+  crop (which showed a whole video-call tile), they show the speaker's head and shoulders.
+  Talking-head (face-only) 9:16 renders are unchanged (byte-identical re-render).
 - Face second pass for small faces (tile scan + upscaled region of interest) when the first
   pass finds the face in < 50 % of the samples: face.json `small_pass`, FACE_VERSION 2.
 - Readability: screen.json per format (`by_format`: `max_zoom`, `text_px`,
