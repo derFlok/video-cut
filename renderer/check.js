@@ -6,7 +6,7 @@ const { spawn } = require("child_process");
 const { chromium } = require("playwright-core");
 
 const [out, frames = "30", w = "1080", h = "1920"] = process.argv.slice(2);
-if (!out) {
+if (!out || !(+frames > 0) || !(+w > 0) || !(+h > 0)) {
   console.error("usage: node check.js <out.mov> [frames] [width] [height]");
   process.exit(2);
 }
@@ -20,7 +20,7 @@ window.frame = (i, n) => {
   const t = i / Math.max(1, n - 1);
   x.fillStyle = "rgba(255,255,255,0.9)";
   x.beginPath();
-  x.roundRect(c.width * (0.1 + 0.5 * t), c.height * 0.45, c.width * 0.3, c.height * 0.1, 24);
+  x.roundRect(c.width * (0.1 + 0.5 * t), c.height * 0.45, c.width * 0.3, c.height * 0.1, Math.min(c.width, c.height) * 0.022);
   x.fill();
   return c.toDataURL("image/png");
 };

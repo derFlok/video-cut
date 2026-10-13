@@ -10,15 +10,21 @@ const textOf = (item) => String((item.props && item.props.text) || "").trim();
 
 // Placed once per card (the renderer calls this for every item, in time order).
 function layout(ctx, item, env) {
-  const { tokens, size } = env;
+  const { tokens } = env;
+  const f = style.frame(env);
   const text = textOf(item);
   if (!text) return null;
   return env.once(item, () =>
     layoutBlock(ctx, env, style.setCase(tokens, text).split(/\s+/), {
-      px: size[0] * 0.12,
+      px: f.unit * 0.12,
       role: "display",
       maxLines: 3,
+      // Landscape: a side column (right edge first), two or three lines.
       position: "center",
+      anchor: f.landscape ? "sides" : undefined,
+      share: f.landscape ? 0.36 : undefined,
+      // Not tall: the caption keeps its strip at the foot.
+      reserve: f.tall ? 0 : style.captionReserve(env),
       t0: item.t0,
       t1: item.t1,
     }),

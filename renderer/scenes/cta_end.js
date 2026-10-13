@@ -44,7 +44,10 @@ function layout(ctx, item, env) {
     const area = [s.side || 0, s.top || 0, size[0] - (s.side || 0), size[1] - (s.bottom || 0)];
     const aw = area[2] - area[0];
     const ah = area[3] - area[1];
-    const px = size[0] * 0.09;
+    const f = style.frame(env);
+    const px = f.unit * 0.09;
+    // Landscape: the text block stays within 70 % of the frame width, centred.
+    const textW = f.landscape ? Math.min(aw, f.w * 0.7) : aw;
     const ref = logoRef(item, tokens);
     const img = ref ? env.image(ref) : null;
     const rules = { ...(tokens.logo || {}), ...((tokens.logo && typeof tokens.logo.rules === "object" && tokens.logo.rules) || {}) };
@@ -58,7 +61,7 @@ function layout(ctx, item, env) {
       logo = { ref, w: lh * ar, h: lh, gap: Math.round(lh * clear) };
     }
     const text = textOf(item)
-      ? card.textRun(ctx, env, style.setCase(tokens, textOf(item)), { px, role: "display", maxWidth: aw - 2 * style.bleed(px), maxLines: 4, minPx: px * 0.5 })
+      ? card.textRun(ctx, env, style.setCase(tokens, textOf(item)), { px, role: "display", maxWidth: textW - 2 * style.bleed(px), maxLines: 4, minPx: px * 0.5 })
       : null;
     const h = (logo ? logo.h + (text ? logo.gap : 0) : 0) + (text ? text.height : 0);
     const top = Math.round(area[1] + (ah - h) / 2);

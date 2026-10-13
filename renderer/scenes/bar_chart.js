@@ -30,9 +30,9 @@ function layout(ctx, item, env) {
   const bars = barsOf(item);
   if (!bars.length) return null;
   return env.once(item, () => {
-    const { size } = env;
+    const unit = style.frame(env).unit;
     return card.layoutCard(env, item, (k) => {
-      const px = size[0] * 0.042 * k;
+      const px = unit * 0.042 * k;
       const pad = Math.round(px * 0.8);
       const innerW = card.maxCardWidth(env, px, pad);
       const barH = Math.round(px * 0.8);

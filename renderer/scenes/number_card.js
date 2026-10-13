@@ -43,10 +43,11 @@ function layout(ctx, item, env) {
   const value = valueOf(item);
   if (!value) return null;
   return env.once(item, () => {
-    const { tokens, size } = env;
+    const { tokens } = env;
+    const unit = style.frame(env).unit;
     return card.layoutCard(env, item, (k) => {
       // px (the label size) drives padding and transition; the figure is four times it.
-      const px = size[0] * 0.055 * k;
+      const px = unit * 0.055 * k;
       const pad = Math.round(px * 0.9);
       const maxW = card.maxCardWidth(env, px, pad);
       const big = card.textRun(ctx, env, style.setCase(tokens, value), { px: px * 4, role: "display", maxWidth: maxW, maxLines: 1, minPx: px * 2 });
