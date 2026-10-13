@@ -133,6 +133,14 @@ def test_edl_check_tool_uses_probe_duration(capsys, tmp_path):
     assert "$.segments[2].out: 9.0 is beyond the source duration 8.5" in out
 
 
+def test_edl_check_warns_when_the_edl_size_is_not_the_job_format(capsys, tmp_path):
+    job = _job_with_edl(capsys, tmp_path, _valid(), duration=10.0)
+    run_tool(capsys, "job", "format", "e1", "16:9")
+    code, s, out = run_tool(capsys, "edl", "check", "--job", str(job))
+    assert code == 0, s
+    assert "is not the job's format 16:9 (1920x1080)" in out
+
+
 def test_edl_check_tool_explicit_file(capsys, tmp_path, monkeypatch):
     p = tmp_path / "draft.json"
     p.write_text(json.dumps(_valid()))

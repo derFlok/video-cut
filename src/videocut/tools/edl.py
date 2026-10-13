@@ -24,6 +24,7 @@ from pathlib import Path
 from .. import redaction
 from ..edl import EdlError, blink_warnings, load, read_sync
 from . import _layouts
+from ._geometry import sized
 from .common import ToolError, job_parent, resolve_job, run_tool
 from .face import load_face
 from .job import redaction_enforced
@@ -65,7 +66,11 @@ def check(args) -> dict:
             for err in errs:
                 print(err)
             raise ToolError(f"{len(errs)} problem(s) in {path.name}: " + "; ".join(errs[:5]))
-    warnings = _blinks(job, edl, duration) + _text(job, edl) if job is not None else []
+    warnings = []
+    if job is not None:  # readability at the job's output size, as render draws it
+        sized_edl, size_note = sized(job, edl)
+        warnings = [size_note] if size_note else []
+        warnings += _blinks(job, edl, duration) + _text(job, sized_edl)
     for w in warnings:
         print(f"warning: {w}")
     points = edl.cut_points()

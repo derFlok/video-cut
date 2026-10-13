@@ -100,8 +100,17 @@ def test_render_composites_a_fresh_overlay(capsys, source):
     f = _rgb(job / "out" / "preview.mp4", 1.0)
     assert f[inside][..., 0].mean() > 200 and f[inside][..., 1].mean() < 60
 
-    # an EDL newer than the overlay: the stale overlay is left out with a warning
+    # an overlay made for another output size (the job's format changed) is left out
+    (job / "work" / "overlays.json").write_text(json.dumps({"size": [1920, 1080]}))
     later = time.time() + 5
+    os.utime(job / "work" / "overlay.mov", (later, later))
+    code, s, _ = run_tool(capsys, "render", "--preview", "--job", str(job))
+    assert code == 0 and s["overlay"] is False
+    assert any("another output size" in w for w in s["warnings"])
+    (job / "work" / "overlays.json").unlink()
+
+    # an EDL newer than the overlay: the stale overlay is left out with a warning
+    later = time.time() + 10
     os.utime(edl_path, (later, later))
     code, s, _ = run_tool(capsys, "render", "--preview", "--job", str(job))
     assert code == 0 and s["overlay"] is False

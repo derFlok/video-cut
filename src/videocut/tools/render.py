@@ -186,6 +186,15 @@ def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709
     )
 
 
+def _overlay_size(path: Path) -> tuple[int, int] | None:
+    """The output size overlays.json was made for (None when unreadable)."""
+    try:
+        size = json.loads(path.read_text()).get("size")
+        return (int(size[0]), int(size[1]))
+    except (OSError, ValueError, TypeError, AttributeError, IndexError):
+        return None
+
+
 def _layout_video(job, plan, edl, info, face, video_in, inputs):
     """Video lines of a render with screen layouts (the screen is the next input after
     `inputs`) and the _layouts.plan_all doc (screen, clamped, speaker, warnings)."""
@@ -250,6 +259,9 @@ def render(args) -> dict:
     # words.json too: the end card's tail is computed from it (_plates), like overlays did.
     ov_inputs = [p for p in (ov_json, work / "words.json") if p.is_file()]
     use_overlay = is_fresh([overlay], [edl_path, *ov_inputs])
+    made_for = _overlay_size(ov_json)
+    if use_overlay and made_for and made_for != tuple(edl.size):  # made for another format
+        use_overlay = False
     if use_overlay and plan.frames:  # the end card's held tail (same schedule as overlays)
         plan = plan_mod.with_tail(plan, _plates.for_job(job, edl, plan.duration).tail_frames)
     audio_args, audio_in, audio_from = _audio_input(job, src, edl.source, info)
@@ -293,8 +305,8 @@ def render(args) -> dict:
         v_out = "[vo]"
     elif overlay.is_file():
         warnings.append(
-            "work/overlay.mov is older than edl.json, overlays.json or words.json and was left "
-            "out; run `videocut tool overlays` again"
+            "work/overlay.mov is older than edl.json, overlays.json or words.json, or was made "
+            "for another output size, and was left out; run `videocut tool overlays` again"
         )
     elif edl.captions or edl.overlays:
         warnings.append(

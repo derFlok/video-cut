@@ -322,14 +322,18 @@ def set_format(job: Path, value: str, say=print) -> dict:
     says how to redo it. Approval stays (the plan text did not change)."""
     fmt = format_arg(value)
     data = read_job(job)
-    old = resolved_format(data)
+    try:
+        old = resolved_format(data)
+    except ToolError:  # an invalid value is what this command repairs
+        old = None
     update_job(job, format=fmt)
     w, h = _format.FORMATS[fmt]
     say(f"{job.name}: format {fmt} ({w}x{h})")
     redo = fmt != old and (job / PROJECT).is_file()
     if redo:
         say(
-            f"The plan (and any cut) of this job was made for {old}. Cut again for {fmt}: "
+            f"The plan (and any cut) of this job was made for {old or 'another format'}. "
+            f"Cut again for {fmt}: "
             f"`videocut run {job.name}` (the cut is redone); plan again if the layouts "
             f"should change: `videocut run {job.name} --replan`"
         )

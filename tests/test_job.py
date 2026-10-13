@@ -244,5 +244,11 @@ def test_job_format_sets_replaces_and_says_to_redo_a_plan(capsys, tmp_path, monk
     assert code == 0 and s["redo"] and "made for 4:5" in out and "videocut run f4" in out
     code, s, _ = run_tool(capsys, "job", "format", "f4", "square")
     assert code == 1 and "1:1" in s["error"]
+    # an invalid value in job.json is what the command repairs
+    (job / "job.json").write_text(json.dumps({**json.loads((job / "job.json").read_text()),
+                                              "format": "21:9"}))  # fmt: skip
+    assert run_tool(capsys, "job", "show", "f4")[0] == 1
+    code, s, out = run_tool(capsys, "job", "format", "f4", "9:16")
+    assert code == 0 and s["previous"] is None and s["redo"] and "another format" in out
     monkeypatch.setenv("VIDEOCUT_AGENT", "1")
     assert run_tool(capsys, "job", "format", "f4", "16:9")[0] == 1

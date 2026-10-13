@@ -415,7 +415,8 @@ def plan_segment(
 
     s = Segment(layout, frames, round((seg.start + offset) * fps), initial, moves, redact, view)
     s.focus = focus
-    s.focus_at = [max(f, 0) for f, _, _ in keys]
+    # from the start of the move towards each target (the box is on its way there)
+    s.focus_at = [max(f - ease, 0) for f, _, _ in keys]
     s.screen = screen
     crop = seg.crop
     cx, cy = (crop.cx, crop.cy) if crop else (0.5, 0.5)
