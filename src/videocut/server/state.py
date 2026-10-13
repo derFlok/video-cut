@@ -87,12 +87,26 @@ def title(job: Path, data: dict) -> str:
 
 
 def _done(job: Path, data: dict) -> bool:
+    """The reel of the approved plan is there, with the brand's overlays composited onto the
+    current EDL. Unlike `run.overlays_done`, a flagged verify still counts: the result page
+    shows the findings and takes feedback, while /start would redo the overlay run."""
     try:
         if not pipeline.cut_done(job):
             return False
         b = data.get("brand")
-        return not b or pipeline.overlays_done(job, b)
-    except (ToolError, OSError, ValueError, KeyError, TypeError):
+        if not b or pipeline.overlays_done(job, b):
+            return True
+        rec = data.get("overlays")
+        edl = pipeline._file_sha(job / "work" / "edl.json")
+        render = _json(job / "out" / "render.json") or {}
+        return (
+            isinstance(rec, dict)
+            and rec.get("brand") == b
+            and rec.get("edl_sha256") == edl
+            and bool(render.get("overlay"))
+            and render.get("edl_sha256") == edl
+        )
+    except (ToolError, OSError, ValueError, KeyError, TypeError, AttributeError):
         return False
 
 

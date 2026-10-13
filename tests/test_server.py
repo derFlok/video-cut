@@ -622,6 +622,32 @@ def test_stills_are_confined_to_the_allowed_folders(client, tmp_path):
         assert client.get(f"/api/jobs/j1/stills/{bad}").status_code == 404, bad
 
 
+def test_a_reel_with_flagged_overlays_is_done_not_restartable(client):
+    """The brand's overlays are composited onto the current EDL but their verify flagged
+    something (or was re-run by hand later): the result gate, not "new" with a Start."""
+    from videocut.tools.job import approve_job
+
+    job = make_job(brand="_example", format="16:9")
+    (job / "work" / "project.md").write_text("# Plan\n")
+    approve_job(job)
+    edl = {"fps": 30, "size": [1920, 1080], "source": "input/take.mov",
+           "segments": [{"in": 0.0, "out": 2.0}]}  # fmt: skip
+    (job / "work" / "edl.json").write_text(json.dumps(edl))
+    edl_sha = pipeline._file_sha(job / "work" / "edl.json")
+    (job / "out" / "reel.mp4").write_bytes(b"reel")
+    (job / "out" / "verify.json").write_text(json.dumps({"ok": True, "reel": "out/reel.mp4"}))
+    (job / "out" / "render.json").write_text(json.dumps({"edl_sha256": edl_sha, "overlay": True}))
+    pipeline.record_cut(job, project_sha(job))
+    data = json.loads((job / "job.json").read_text())
+    data["overlays"] = {"brand": "_example", "edl_sha256": edl_sha, "verify_ok": False}
+    (job / "job.json").write_text(json.dumps(data))
+    d = client.get("/api/jobs/j1").json()
+    assert (d["status"], d["stage"], d["gate"]) == ("done", "done", "result")
+    (job / "out" / "render.json").write_text(json.dumps({"edl_sha256": edl_sha}))  # not composited
+    d = client.get("/api/jobs/j1").json()
+    assert (d["status"], d["gate"]) == ("new", None)
+
+
 def test_versions_map_the_kept_reels(client):
     """previous_reel is the reel BEFORE a revision: version 1 = the first revision's
     previous_reel, the latest version = out/reel.mp4; a failed revision makes no version."""

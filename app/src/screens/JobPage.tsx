@@ -129,6 +129,7 @@ export function JobPage({ id }: { id: string }) {
   const live = useLiveJob(id);
   const { job, running } = live;
   const [actionErr, setActionErr] = useState<unknown>(null);
+  const [planOpen, setPlanOpen] = useState(false);
   const live_s = useElapsed(running);
 
   if (live.error && !job) return <ErrorBanner error={live.error} onRetry={() => void live.reload()} />;
@@ -175,7 +176,7 @@ export function JobPage({ id }: { id: string }) {
       <section className="panel stack">
         <Stepper stage={job.stage} status={running ? "running" : job.status} lastGood={live.lastStage} />
         <div className="meta-row">
-          <span>{running ? t("job.working") : job.status === "error" ? t("job.failed") : t("job.idle")}</span>
+          <span>{running ? t(job.stage === "prep" ? "job.working.prep" : "job.working") : job.status === "error" ? t("job.failed") : t("job.idle")}</span>
           <span>{t("job.elapsed", { t: clock(wall) })}</span>
           <span>{t("job.cost", { c: hasCost ? money(cost, lang) : "—" })}</span>
         </div>
@@ -191,7 +192,15 @@ export function JobPage({ id }: { id: string }) {
       </section>
 
       {showPlan && <PlanReview live={live} />}
-      {job.outputs?.reel && job.approved && job.stage !== "plan_revise" && <Result live={live} />}
+      {job.outputs?.reel && job.approved && job.stage !== "plan_revise" && (
+        <>
+          <Result live={live} />
+          <details className="details panel" onToggle={(e) => setPlanOpen(e.currentTarget.open)}>
+            <summary>{t("job.plan.show")}</summary>
+            {planOpen && <PlanReview live={live} />}
+          </details>
+        </>
+      )}
 
       <div className="actions actions-end">
         <button type="button" className="btn btn-ghost btn-danger" onClick={remove} disabled={running}>
