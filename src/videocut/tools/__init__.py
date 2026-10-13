@@ -23,6 +23,7 @@ MODULES = [
     "overlays",
     "sync",
     "screen",
+    "plan",
 ]
 
 
