@@ -39,7 +39,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import edl  # noqa
+from .. import edl
 from .common import ToolError, is_fresh, job_parent, resolve_job, run_tool, write_json
 
 RATE = 48000
@@ -77,6 +77,8 @@ def _envelope(x: np.ndarray, rate: int) -> np.ndarray:
         return np.zeros(0, np.float32)
     e = np.sqrt(np.sqrt(np.mean(x[: n * block].reshape(n, block) ** 2, axis=1)))
     k = ENV_RATE // 2
+    if n < k:  # too short for the slow-level filter; callers reject it as too short
+        return np.zeros(n, np.float32)
     slow = np.convolve(e, np.ones(k) / k, mode="same")
     f = e - slow
     rms = np.sqrt(np.mean(f**2))
@@ -244,6 +246,8 @@ def sync(args) -> dict:
         raise ToolError("work/screen_probe.json describes another file; run ingest again")
     # Screen time counts from the first screen frame; its wav starts at the audio stream.
     scr_shift = (scr_probe.get("audio_start") or 0.0) - (scr_probe.get("video_start") or 0.0)
+    # Camera time counts from the camera's first video frame; audio_raw.wav starts at its audio.
+    cam_shift = (cam_probe.get("audio_start") or 0.0) - (cam_probe.get("video_start") or 0.0)
 
     if args.offset is not None:
         result = {"offset_s": float(args.offset), "method": "manual", "confidence": 1.0}
@@ -266,13 +270,13 @@ def sync(args) -> dict:
                 return _report(job, prev, kept=True)
         est = estimate(read_wav(cam_wav), read_wav(scr_wav))
         result = {
-            "offset_s": round(est["lag"] + scr_shift, 4),
+            "offset_s": round(est["lag"] + scr_shift - cam_shift, 4),
             "method": est["method"],
             "confidence": round(est["confidence"], 3),
             "drift_ppm": None if est["drift_ppm"] is None else round(est["drift_ppm"], 1),
         }
         if est.get("drift_ref") is not None:
-            result["drift_ref"] = round(est["drift_ref"], 3)
+            result["drift_ref"] = round(est["drift_ref"] + cam_shift, 3)
     result["overlap"] = overlap(result["offset_s"], cam_probe["duration"], scr_probe["duration"])
     if result["overlap"][1] - result["overlap"][0] <= 0:
         raise SyncError(

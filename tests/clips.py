@@ -212,7 +212,6 @@ SCREEN_SIZE = (2880, 1800)
 
 
 def _say_wav(folder: Path, name: str, text: str):
-    import numpy as np
 
     wav = folder / f"{name}.wav"
     if not wav.is_file():
