@@ -55,6 +55,30 @@ captions and overlays are added after it by the `overlays` skill, not in this ru
   `videocut tool sheet burst <t>` (frames ±0.5 s + waveform) or
   `videocut tool sheet timeline <t0> <t1>` (words, pauses, filler shading). Sparingly.
 
+### Product demos (`job.json` has `screen`; the plan has a *Views* table)
+
+Write the approved views into the segments (all times **camera seconds**, like `in`/`out`):
+
+```json
+{"in": 17.92, "out": 24.10, "layout": "screen",
+ "screen_zoom": [{"t": 19.20, "box": [0.52, 0.30, 0.78, 0.46]}],
+ "redact": [{"t0": 17.92, "t1": 24.10, "box": [0.05, 0.10, 0.30, 0.14]}]}
+```
+
+- `layout`: `face` (default), `screen`, `pip` or `split`, as the plan says. A view change
+  is a segment boundary; keep **≥ 2–4 s** of output between two view changes (split a long
+  keep range into segments of different views only at word gaps).
+- `screen_zoom`: one key per zoom target of the plan, at the camera time of the click or
+  change (`videocut tool screen` → `zoom_targets[].camera_t0`, `click_list[].camera_t`),
+  box = its `view` (or `box`); the view arrives there at `t` with a 0.6 s ease. Before the
+  first key the whole screen shows; to zoom back out, add a key with `[0, 0, 1, 1]`. Keys
+  only inside the segment. Never ask for more than `max_zoom` (`max_zoom_split` in split):
+  render widens such a key so the screen stays sharp and reports `screen_zoom_clamped`.
+- `redact`: every redaction of the plan that overlaps the segment, clipped to it. Never
+  drop one; when the plan is unsure, keep it.
+- Screen layouts must lie inside the sync `overlap` (`edl check` says so otherwise; use
+  `face` there). `zoom_keys` (camera punch-ins) only apply to `face` segments.
+
 Then `videocut tool edl check`. Fix every reported path until it passes. Its `warnings`
 name cut points inside a blink: move each to the suggested time (a cut is never in a blink).
 
@@ -66,6 +90,11 @@ Each round:
 2. `videocut tool verify`. Its summary lists `flagged` cuts (`click`, `visual_jump` = a jump
    far larger than the other cuts, `blink_at_cut`) and `failed` global checks (duration, black/frozen
    stretches, size). `info` lists normal talking-head jump cuts — **expected, not errors.**
+   Product demos also have `screen_flagged`: `redaction_missing` (a redact block is not
+   solid in some frame: check the box and its times), `screen_time_mismatch` (the screen
+   picture does not match the synced time: write it in the report; never change
+   `work/sync.json`). `screen_zoom_clamped` is info: the zoom was widened for sharpness.
+   A cut into or out of a screen view is a view change (info `reframe`), not a jump.
 3. Read only the images of **flagged** cuts (`out/verify/cut_NN.jpg`: frames −2…+2 around the
    cut, waveform ±100 ms, red marker at the cut). Decide whether it is real.
 4. Fix in `work/edl.json` (move the boundary into the gap, drop a stray syllable, raise

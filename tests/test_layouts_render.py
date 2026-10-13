@@ -21,6 +21,7 @@ pytestmark = pytest.mark.media
 
 OFFSET = 3.27
 SW, SH = 2880, 1800
+OUT_SIZE = (1080, 1920)
 BITS, BIT, BIT_STEP, BIT_X, BIT_Y = 11, 160, 170, 40, 40  # frame counter blocks (source px)
 SECRET = [1800, 1000, 2400, 1400]  # red block, source px
 SECRET_BOX = [SECRET[0] / SW, SECRET[1] / SH, SECRET[2] / SW, SECRET[3] / SH]
@@ -269,3 +270,47 @@ def test_layouts_overlays_doc(capsys, material):
         inside = [v for v in views if v["t0"] <= f["t"] < v["t1"]]
         if inside:
             assert inside[0]["layout"] != "screen" and f["box"] == inside[0]["speaker"], f
+
+
+def test_hdr_camera_in_pip_and_split_is_tonemapped(capsys, material, tmp_path):
+    from test_render import _hlg_clip
+
+    sdr, hlg = _hlg_clip(tmp_path)
+    _, screen = material
+    segs = [{"in": 0.2, "out": 1.0}, {"in": 1.0, "out": 2.0, "layout": "pip"},
+            {"in": 2.0, "out": 2.9, "layout": "split"}]  # fmt: skip
+    means = {}
+    for name, cam in (("sdr", sdr), ("hlg", hlg)):
+        code, s, _ = run_tool(capsys, "job", "new", str(cam), "--id", f"hdr-{name}")
+        assert code == 0, s
+        job = Path(s["job"])
+        shutil.copy(screen, job / "input" / "screen.mp4")
+        meta = json.loads((job / "job.json").read_text())
+        (job / "job.json").write_text(json.dumps({**meta, "screen": "input/screen.mp4"}))
+        sync = {"offset_s": OFFSET, "method": "manual", "confidence": 1.0, "drift_ppm": None,
+                "overlap": [0, 3]}  # fmt: skip
+        (job / "work" / "sync.json").write_text(json.dumps(sync))
+        edl = {"fps": 30, "size": [1080, 1920], "source": s["source"], "segments": segs}
+        (job / "work" / "edl.json").write_text(json.dumps(edl))
+        (job / "work" / "project.md").write_text("# Plan: hdr layout test\n")
+        approve_job(job)
+        code, s, out = run_tool(capsys, "render", "--job", str(job))
+        assert code == 0, (s, out)
+        assert s["hdr_tonemapped"] == (name == "hlg") and s["layouts"]["pip"] == 1
+        reel = job / "out" / "reel.mp4"
+        v = next(x for x in json.loads(subprocess.run(
+            [clips.ffprobe(), "-v", "error", "-show_streams", "-of", "json", reel],
+            capture_output=True, text=True, check=True).stdout)["streams"]
+            if x["codec_type"] == "video")  # fmt: skip
+        assert v["pix_fmt"] == "yuv420p"
+        if name == "hlg":
+            assert (v["color_transfer"], v["color_primaries"]) == ("bt709", "bt709")
+        inset = lay.inset_rects(OUT_SIZE, lay.view_rect("pip", OUT_SIZE, (SW, SH)))[0]  # right
+        means[name] = (
+            _frames(reel, 15, 16, (1080, 1920, 0, 0))[0].mean(),  # face segment
+            _frames(reel, 40, 41, (inset.w, inset.h, inset.x, inset.y))[0].mean(),  # pip inset
+            _frames(reel, 70, 71, (1080, 700, 0, 1150))[0].mean(),  # split speaker part
+        )
+    assert 40 < means["sdr"][1] < 200, means  # the inset shows the camera, not the background
+    for a, b in zip(means["sdr"], means["hlg"], strict=True):
+        assert abs(a - b) < 45, means  # tonemapped, not washed out or crushed

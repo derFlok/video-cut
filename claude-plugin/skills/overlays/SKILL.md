@@ -49,7 +49,17 @@ whichever is smaller, so a full-width focus box never zooms; give a box around t
 being talked about (e.g. `[0.05, 0.12, 0.6, 0.26]`). The zoom plays from ~1 s into the item,
 so keep such an item ≥ 2.5 s. Look at each image in `job.json` `assets` once (it counts toward the
 image budget) to choose `focus` and to `redact` anything personal (names, e-mail
-addresses, phone numbers, other people's faces).
+addresses, phone numbers, other people's faces). With **more than two** screenshots (a
+screenshot walkthrough) take file, sentence, `focus` and `redact` from the plan's
+*Screenshots* table and look at `work/sheets/assets_01.jpg` (`videocut tool sheet assets`)
+once instead of every image; keep every `redact` box of the plan. A portrait screenshot is
+drawn as tall as the safe area allows (it may cover the speaker, verify marks it `stage`).
+
+**Product demos with a screen recording:** captions and overlays keep off the screen view
+and the speaker inset by themselves (overlays.json `views`); a caption then sits below the
+screen view. Do not put a `screenshot_frame` over a screen segment (the screen is already
+shown). `overlay_on_screen` means an item covers the screen view: move it into a `face`
+segment or drop it.
 
 ## 3. Overlays
 
