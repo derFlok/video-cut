@@ -725,7 +725,9 @@ def verify(args) -> dict:
         "info": info,
         "overlays": overlay_docs,
         "overlay_flagged": overlay_flagged,
-        "screen": {k: demo[k] for k in ("redaction", "screen_time", "clamped") if k in demo},
+        "screen": {
+            k: demo[k] for k in ("redaction", "screen_time", "clamped", "readability") if k in demo
+        },
         "screen_flagged": screen_flagged,
         "screen_zoom_clamped": demo.get("clamped", []),
         "caption_sheets": [str(p.relative_to(job)) for p in sheets],

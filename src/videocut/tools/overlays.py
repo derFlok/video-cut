@@ -108,7 +108,7 @@ def build(job: Path) -> dict:
     layouts = [s.layout for s in edl.segments]
     use_layouts = any(lay != "face" for lay in layouts)
     plan = plan_mod.build(edl, src_size, edl.size, layouts if use_layouts else None)
-    views = _views(plan, _layouts.plan_all(job, edl, plan, src_size, face)["segs"], face,
+    views = _views(plan, _layouts.plan_all(job, edl, plan, src_size, face, edl.size)["segs"], face,
                    src_size) if use_layouts else []  # fmt: skip
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
@@ -157,9 +157,12 @@ def _redacted(job: Path, item: dict, cands: list[dict]) -> dict:
 
 
 def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[dict]:
-    """Per non-face range (output time and px): `screen`, the screen view, and `speaker`,
-    where the speaker is (pip: the inset; split: the face box inside the lower part, else
-    that part's top half; screen: none)."""
+    """Per non-face range (output time and px): `screen`, the screen view to keep clear,
+    `focus`, the zoom targets to keep clear ([{"t0", "t1", "box"}]: from the frame a target
+    is reached to the next one), and `speaker`, where the speaker is (pip: the inset; split:
+    the face box inside the speaker part, else that part's upper half; screen: none). A view
+    that fills the frame (_layouts.fills: landscape screen/pip) has `screen` None: the
+    screen is the picture, overlays avoid only its targets and the speaker."""
     out, f0 = [], 0
     median = ((face or {}).get("median") or {}).get("box")
     for i, r in enumerate(plan.ranges):
@@ -175,12 +178,22 @@ def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[di
                 if box:
                     speaker = [box[0] + part.x, box[1] + part.y, box[2] + part.x,
                                box[3] + part.y]  # fmt: skip
+            t0, t1 = round(float(f0 / plan.fps), 6), round(float((f0 + r.frames) / plan.fps), 6)
+            ends = [*seg.focus_at[1:], r.frames][: len(seg.focus_at)]
+            focus = [
+                {"t0": round(float((f0 + a) / plan.fps), 6),
+                 "t1": round(float((f0 + b) / plan.fps), 6), "box": [round(v) for v in box]}
+                for a, b, box in zip(seg.focus_at, ends, seg.focus, strict=True)
+                if b > a
+            ]  # fmt: skip
+            fills = _layouts.fills(seg.view, plan.out_size)
             out.append(
                 {
-                    "t0": round(float(f0 / plan.fps), 6),
-                    "t1": round(float((f0 + r.frames) / plan.fps), 6),
+                    "t0": t0,
+                    "t1": t1,
                     "layout": seg.layout,
-                    "screen": seg.view.box(),
+                    "screen": None if fills else seg.view.box(),
+                    "focus": focus,
                     "speaker": speaker,
                 }
             )

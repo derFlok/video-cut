@@ -188,14 +188,14 @@ def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709
 
 def _layout_video(job, plan, edl, info, face, video_in, inputs):
     """Video lines of a render with screen layouts (the screen is the next input after
-    `inputs`), the screen recording and the clamped zoom keys."""
-    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
+    `inputs`) and the _layouts.plan_all doc (screen, clamped, speaker, warnings)."""
+    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
     video = _layouts.video_chain(
         plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in,
         f"{len(inputs) // 2}:v:0", bg=_layouts.background(job), matrix=overlay_matrix(info),
         cam_sdr=to_sdr(info), screen_sdr=to_sdr(drawn["info"]),
     )  # fmt: skip
-    return video, drawn["screen"], drawn["clamped"]
+    return video, drawn
 
 
 def render(args) -> dict:
@@ -272,13 +272,15 @@ def render(args) -> dict:
         measured = "silent"
     elif preview:
         measured = None  # single pass
-    warnings, v_out, video, clamped, screen_rel = [], "[v]", None, [], None
+    warnings, v_out, video, clamped, screen_rel, speaker = [], "[v]", None, [], None, []
     if size_note:
         warnings.append(size_note)
     if use_layouts:
-        video, screen, clamped = _layout_video(job, plan, edl, info, face, video_in, inputs)
-        screen_rel = str(screen.relative_to(job))
-        inputs += ["-i", str(screen)]
+        video, drawn = _layout_video(job, plan, edl, info, face, video_in, inputs)
+        clamped, speaker = drawn["clamped"], drawn["speaker"]
+        warnings += drawn["warnings"]
+        screen_rel = str(drawn["screen"].relative_to(job))
+        inputs += ["-i", str(drawn["screen"])]
         for c in clamped:
             warnings.append(
                 f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
@@ -412,6 +414,7 @@ def render(args) -> dict:
         "layouts": report.get("layouts"),
         "screen": screen_rel,
         "screen_zoom_clamped": clamped,
+        "speaker": speaker,
         "redaction": report.get("redaction"),
         "warnings": warnings,
     }

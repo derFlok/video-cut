@@ -15,6 +15,7 @@ from helpers import run_tool
 
 from videocut.edl import from_dict
 from videocut.tools import _layouts as lay
+from videocut.tools import _verify_screen
 from videocut.tools._format import safe_zones
 from videocut.tools.job import approve_job
 
@@ -304,6 +305,26 @@ def test_layouts_overlays_doc(capsys, material):
         inside = [v for v in views if v["t0"] <= f["t"] < v["t1"]]
         if inside:
             assert inside[0]["layout"] != "screen" and f["box"] == inside[0]["speaker"], f
+
+
+def test_landscape_views_keep_off_the_targets_not_the_whole_screen(capsys, material):
+    job = _job(capsys, material, "layouts-ov-16x9", size=(1920, 1080))
+    code, s, out = run_tool(capsys, "overlays", "--no-render", "--job", str(job))
+    assert code == 0, (s, out)
+    doc = json.loads((job / "work" / "overlays.json").read_text())
+    views = {v["layout"]: v for v in doc["views"]}
+    # The screen fills a 16:9 frame: no whole-screen block in screen/pip, only in split.
+    assert views["screen"]["screen"] is None and views["pip"]["screen"] is None
+    assert views["split"]["screen"] == _seg_plan(3, (1920, 1080)).view.box()
+    pip = _seg_plan(2, (1920, 1080))
+    (focus,) = views["pip"]["focus"]
+    assert focus["box"] == [round(v) for v in pip.focus[0]]
+    assert views["pip"]["t0"] < focus["t0"] and focus["t1"] == views["pip"]["t1"]
+    assert views["pip"]["speaker"] == pip.inset.box()
+    # verify reads the same areas: the targets, never the whole frame.
+    blocks = _verify_screen.load_views(job)
+    assert all(b["screen"] != [0, 0, 1920, 1080] for b in blocks)
+    assert any(b["screen"] == focus["box"] for b in blocks)
 
 
 def test_hdr_camera_in_pip_and_split_is_tonemapped(capsys, material, tmp_path):

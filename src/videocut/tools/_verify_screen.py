@@ -41,7 +41,7 @@ from .. import redaction as red_mod
 from ..paths import tool_env
 from . import _layouts
 from . import _render_plan as plan_mod
-from ._geometry import framed
+from ._geometry import framed, sized
 from .common import ToolError, binary
 from .ingest import probe
 from .job import redaction_enforced
@@ -65,11 +65,12 @@ def context(job: Path, data: dict, size: tuple[int, int]) -> dict | None:
     src = (job / data["source"]).resolve()
     info = probe(src)
     edl = edl_mod.from_dict(data, info["duration"])
+    edl, _ = sized(job, edl)  # the job's format, as render drew it
     edl, _, face = framed(job, edl)
     edl = _layouts.with_redaction(edl, redaction_enforced(job)[0])  # what render drew
     layouts = [s.layout for s in edl.segments]
     plan = plan_mod.build(edl, tuple(info["size"]), size, layouts)
-    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
+    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
     starts, f0 = [], 0
     for r in plan.ranges:
         starts.append(f0)
@@ -276,16 +277,28 @@ def clamped_info(render: dict) -> list[dict]:
 
 
 def load_views(job: Path) -> list[dict]:
+    """The areas overlays keep clear in a product demo, from overlays.json "views":
+    [{"t0", "t1", "screen": box}], a screen view that does not fill the frame and every
+    zoom target ("focus")."""
     try:
         doc = json.loads((job / "work" / "overlays.json").read_text())
     except (OSError, ValueError):
         return []
     views = doc.get("views") if isinstance(doc, dict) else None
-    return [
-        v
-        for v in (views if isinstance(views, list) else [])
-        if isinstance(v, dict) and isinstance(v.get("screen"), list) and len(v["screen"]) == 4
-    ]
+    out = []
+    for v in views if isinstance(views, list) else []:
+        if not isinstance(v, dict):
+            continue
+        focus = v.get("focus") if isinstance(v.get("focus"), list) else []
+        for b in [v, *(f for f in focus if isinstance(f, dict))]:
+            box = b.get("screen", b.get("box"))
+            if isinstance(box, list) and len(box) == 4 and _num(b.get("t0"), b.get("t1")):
+                out.append({"t0": b["t0"], "t1": b["t1"], "screen": box})
+    return out
+
+
+def _num(*vals) -> bool:
+    return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals)
 
 
 def decision_gaps(job: Path, data: dict) -> list[dict]:

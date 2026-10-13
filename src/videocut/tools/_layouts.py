@@ -95,6 +95,7 @@ SPLIT_TOP = 0.58  # portrait/square split: the screen part, fraction of the outp
 SPLIT_SIDE = 0.64  # landscape split: the screen part, fraction of the output width
 TEXT_PT = 13  # typical UI text height, logical px
 TEXT_MIN_PX = 18  # UI text lower than this on the output is hard to read
+VIEW_FILLS = 0.8  # a screen view this share of the frame's width and height fills it
 HIDPI_MIN = 2700  # recordings with a long side this large count as 2x (HiDPI) screens
 DEFAULT_BRAND = brand.EXAMPLE_ID
 
@@ -138,6 +139,7 @@ class Segment:
     radius: float = PIP_RADIUS  # inset corner radius, fraction of its side
     speaker_px: float | None = None  # camera source px per output px of the speaker part
     focus: list[list[float]] = field(default_factory=list)  # zoom targets, output px
+    focus_at: list[int] = field(default_factory=list)  # local frame each target is reached
     screen: tuple[int, int] = (0, 0)  # size of the screen recording
 
 
@@ -254,6 +256,12 @@ def view_rect(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> Rec
 
 def _gap(out: tuple[int, int]) -> int:
     return safe_zones(out)["side"] // 2
+
+
+def fills(view: Rect, out: tuple[int, int]) -> bool:
+    """Whether the screen view (nearly) fills the frame (VIEW_FILLS of both sides): then
+    the screen is the picture itself and overlays keep off its zoom targets, not all of it."""
+    return view.w >= VIEW_FILLS * out[0] and view.h >= VIEW_FILLS * out[1]
 
 
 def inset_side(out: tuple[int, int]) -> int:
@@ -407,6 +415,7 @@ def plan_segment(
 
     s = Segment(layout, frames, round((seg.start + offset) * fps), initial, moves, redact, view)
     s.focus = focus
+    s.focus_at = [max(f, 0) for f, _, _ in keys]
     s.screen = screen
     crop = seg.crop
     cx, cy = (crop.cx, crop.cy) if crop else (0.5, 0.5)
@@ -484,12 +493,22 @@ def segment_offset(sync_doc: dict, start: float, duration: float, fps) -> tuple[
     return off, 1 + math.ceil(abs(drift) * 1e-6 * duration * float(fps))
 
 
-def plan_all(job: Path, edl, plan, camera: tuple[int, int], face: dict | None) -> dict:
+def plan_all(
+    job: Path,
+    edl,
+    plan,
+    camera: tuple[int, int],
+    face: dict | None,
+    full_out: tuple[int, int] | None = None,
+) -> dict:
     """Every non-face range of `plan` (a _render_plan.Plan of the framed `edl`) drawn:
     {"segs": {range index: Segment}, "clamped": [{"segment", "t", "zoom", "max_zoom"}],
     "speaker": [{"segment", "layout", "px_ratio"}], "warnings": [str] (upscaled speaker
     crops), "screen": the recording, "info": probe_screen, "sync": work/sync.json}. Shared
-    by render, overlays (where the screen view and the speaker are) and verify."""
+    by render, overlays (where the screen view and the speaker are) and verify. `full_out`
+    is the job's output size (the geometry follows the job format; `plan` may be a preview
+    at a smaller size); default edl.size."""
+    full_out = tuple(full_out or edl.size)
     src = screen_source(job)
     sync_doc = sync(job)
     info = probe_screen(src)
@@ -502,7 +521,7 @@ def plan_all(job: Path, edl, plan, camera: tuple[int, int], face: dict | None) -
         offset, slack = segment_offset(sync_doc, seg_in.start, seg_in.duration, plan.fps)
         seg, cl = plan_segment(
             seg_in, r.frames, plan.fps, offset=offset, screen=tuple(info["size"]),
-            camera=camera, out=plan.out_size, full_out=tuple(edl.size), face=face,
+            camera=camera, out=plan.out_size, full_out=full_out, face=face,
             redact_slack=slack,
         )  # fmt: skip
         if seg.screen_frame + seg.frames <= 0 or seg.screen_frame >= screen_frames:
