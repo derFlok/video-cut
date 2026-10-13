@@ -33,14 +33,16 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--asset FILE]… [--id]`, `job show [job]`, `job approve [job]`, `job brand <id>` | `job.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--id]`, `job show [job]`, `job approve [job]`, `job brand <id>`, `job screen <file>` | `job.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]` | `brand.py` |
 | `captions [--force]` | `captions.py` |
 | `overlays [--no-render]` | `overlays.py` |
 | `ingest [--denoise]` | `ingest.py` |
+| `sync [--offset S] [--redo]` | `sync.py` |
+| `screen [--force]` | `screen.py` |
 | `face` | `face.py` |
 | `transcribe [--model turbo\|parakeet] [--language]`, `candidates` | `transcribe.py` |
-| `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>` | `sheets.py` |
+| `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets` | `sheets.py` |
 | `edl check [file]` | `edl.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
@@ -49,18 +51,24 @@ Helpers: `_transcribe_energy.py` (pauses, voiced gaps), `_transcribe_pack.py`
 (`takes_packed.md`), `_image.py` (ffmpeg-drawn pictures, peak-normalised waveforms),
 `_render_plan.py` (frame grid, filter graph), `_geometry.py` (crop windows, face-centred
 framing, face track in output px, safe zones; shared by render, overlays and verify),
-`_color.py` (HDR → SDR).
+`_color.py` (HDR → SDR), `_layouts.py` (screen/pip/split geometry, zoom windows and their
+filter graph; shared by render, overlays and verify), `_verify_screen.py` (the product-demo
+checks of verify).
 
 ## Job folder (`$VIDEOCUT_HOME/jobs/<id>/`)
 
 ```
 job.json   id, created, source (relative), type, brief, status, approval, brand, assets,
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand)
-input/     source recording and assets (screenshots), hard-linked or copied
+input/     source recording, screen recording and assets (screenshots), hard-linked or copied
 work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4        ingest
+           screen_probe.json, screen_audio.wav, screen_proxy.mp4                ingest (demo)
+           sync.json                                                            sync
+           screen.json                                                          screen
            face.json                                                             face
            words.json, transcribe.json, candidates.json, takes_packed.md         transcribe
-           sheets/contact_NN.jpg, burst_*.jpg, timeline_*.jpg                    sheet
+           sheets/contact_NN.jpg, burst_*.jpg, timeline_*.jpg, screen_*.jpg,
+           assets_NN.jpg                                                         sheet
            contract.md (reel contract of the type, copied by `run` if one exists)
            project.md                                                            plan run
            edl.json, render_filter.txt, cut_report.md                            cut run
@@ -87,7 +95,7 @@ between plan and cut (BRIEF §5):
 
 | Skill | Reads | Writes | Images |
 |---|---|---|---|
-| `plan` | `takes_packed.md`, `job.json`, `contract.md`, 1–2 contact sheets | `work/project.md`: hook, core message, target length, keep/cut list in source time, emphasis words, risks | ≤ 4 |
+| `plan` | `takes_packed.md`, `job.json`, `contract.md`, 1–2 contact sheets; demos: `sync` + `screen` summaries, the screen overview or the assets sheet | `work/project.md`: hook, core message, target length, keep/cut list in source time, emphasis words, risks; demos: views, zoom targets, redactions, screenshot matches | ≤ 4 |
 | `cut` | `project.md` (must be approved), `words.json`, flagged verify pictures | `work/edl.json` (segments), renders, `work/cut_report.md` | ~8, only at doubts |
 | `overlays` | `project.md` overlay ideas, `edl.json`, `brand show`, overlay/caption sheets | `captions` + `overlays` in `work/edl.json`, overlay render, renders, `work/overlay_report.md` | ≤ 4 |
 
@@ -95,7 +103,10 @@ between plan and cut (BRIEF §5):
 
 1. **prep** (no Claude): `job new` when a file is given, `ingest --denoise`, `face`, `transcribe`
    (also candidates and the packed transcript), `sheet contact`; copies `templates/<type>.md`
-   to `work/contract.md` when it exists.
+   to `work/contract.md` when it exists. A product demo (`--screen`, job.json `screen`) runs
+   `ingest` (camera and screen) → `sync` → `screen` → `face` → `transcribe` → `sheet contact`
+   → `sheet screen` (one overview) and stops with a `tool sync --offset` hint when sync fails
+   or its confidence is below 0.3.
 2. **plan run**: `claude -p` with the `plan` skill. Fails if `project.md` is missing or
    `edl.json` was touched. An existing plan is offered again instead (`--replan` redoes it).
 3. **approval**: prompt in the terminal (`--approve` skips it, for tests), or later
@@ -209,12 +220,94 @@ group change) and `overlays_NN.jpg` (one tile per overlay, at its middle). Globa
 loudness, true peak, size, black/frozen stretches. After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
 
+## Product demos
+
+A demo job has the camera recording (`source`, the speaker; its time is "camera time", the
+time of every EDL segment) plus a screen recording (`screen`) made at the same time, or only
+screenshots (`assets`).
+
+**Screen source.** `job new --screen` / `job screen` link the recording into `input/`;
+replacing it deletes everything made from the old one. `ingest` writes `screen_probe.json`
+(audio fields null without a microphone), `screen_audio.wav` (48 kHz mono) and
+`screen_proxy.mp4` (long side 960, constant 30 fps, SDR; screen time 0 = its first video
+frame). macOS recordings are variable frame rate; the proxy and render put them on a fixed
+grid (sample and hold), so long static stretches keep their timing. The original stays the
+render input.
+
+**Sync** (`tool sync` → `work/sync.json`). Both recordings carry the voice, so the offset is
+found by audio: loudness envelopes cross-correlated over all lags (confidence = 1 − second
+peak / peak), refined with GCC-PHAT on the raw samples of the loudest 12 s, drift measured
+from two windows (ppm; offset_s is exact at `drift_ref`, the middle of the overlap). Below
+0.3 confidence a single clap in both tracks is tried; otherwise the tool fails and asks for
+`--offset` (method `manual`). `screen_time = camera_time + offset_s`; `overlap` is the
+camera time in which both have pictures. Drift is reported, not applied (a few frames per
+minute at most).
+
+**Screen analysis** (`tool screen` → `work/screen.json`, screen time). A grey 10 fps stream
+(long side 960) gives activity boxes (change against the previous sample plus the
+persistent change against one second earlier), the pointer (reported, never a target),
+clicks (the expanding ring of "show mouse clicks", or a pointer stop followed by a change),
+hard scene changes and text density. Activity and clicks merge into zoom targets that stay
+put ≥ 1.2 s, each with `max_zoom` / `max_zoom_split` and a screen-shaped `view` box. The
+summary adds camera times (`camera_t0`, `camera_t`) from the current sync.json, because the
+EDL is in camera time. `sheet screen` draws the analysis onto a strip of frames (activity
+yellow, clicks red, targets green).
+
+**Layouts** (`_layouts.py`, per segment `layout`): `face` (unchanged render path; an EDL of
+face segments renders byte-identically, golden test), `screen` (the screen fills the reel
+width, centred in the safe area, on the brand's `colors.bg`), `pip` (screen at the top of
+the safe area, the speaker as a rounded inset of 34 % of the width below it, on the side away
+from the zoom targets, so it never covers screen content; the strip below the inset is the
+caption room), `split` (screen in the top 58 %, the speaker face-centred below). The screen
+frame shown at camera time t is screen time t + offset_s, drawn from the original
+recording. `screen_zoom` keys move the window with a 0.6 s smoothstep: a segment with one
+window is a plain crop + scale; a moving one goes through `perspective` (sense=source,
+eval=frame) with the same piecewise function of the frame number that `window_at`
+computes in Python. (A per-frame `scale` followed by `crop` does not work: crop clamps to
+its input link size, fixed at configuration, so every zoom ended in the top-left corner.)
+`redact` blocks are drawn in `colors.bg` onto the screen frames before any scaling, on
+every frame that overlaps their range, snapped outward to even pixels. HDR cameras are
+tonemapped per branch (inset, split part) like the face path.
+
+**Sharpness rule.** A zoom window narrower than the view's width at the reel size would
+upscale the screen (< 1 source px per output px); render widens it to that width, warns,
+and lists it in render.json `screen_zoom_clamped` (verify repeats it as info). For a
+2880 px wide recording in a 1080 px reel that is 2.67×; `screen.json` reports the same cap
+as `max_zoom`.
+
+**Overlays.** overlays.json `views` lists per screen/pip/split stretch the screen view and
+the speaker area (from the same plan render draws). The renderer registers each screen view
+as a block before laying out any item, so captions and scenes keep off it; the face track
+there is the speaker area (pip inset; the speaker's face in split). Captions therefore sit
+below the screen view, outside the speaker. A portrait `screenshot_frame` (screenshot-only
+demos) is drawn as tall as the safe area allows minus room for one caption block and may
+cover the speaker (`stage`: verify does not flag `overlay_on_face` for it).
+
+**Verify** (`_verify_screen.py`): every redact block is sampled on up to 5 output frames of
+its range through the drawn zoom window; ≥ 90 % of its pixels must be the brand background
+(`redaction_missing`). The middle frame of each screen segment is compared with the screen
+recording at the mapped time and at ±0.5 s / ±1 s (`screen_time_mismatch` when another time
+matches clearly better). `screen_overlap` repeats the overlap rule of `edl check`. A cut
+into, out of or between screen views counts as a reframe (no `visual_jump`), a still screen
+in a `screen` segment is not a frozen picture, and blinks are only checked where the camera
+is visible. `overlay_on_screen` flags an item that covers a screen view.
+
+**Screenshots only.** `job new --asset FILE...` takes many images; `sheet assets` puts them
+on one numbered contact sheet (≤ 1080×1920, with sizes and orientation in the summary), so
+the plan can match each screenshot to its sentence with one image and propose
+`screenshot_frame` overlays with focus and redaction boxes.
+
 ## EDL (`src/videocut/edl.py`)
 
 Schema from BRIEF §6. Segment times (`in`, `out`, `zoom_keys`) are source time, everything else
 output time. `validate()` returns every problem with a JSON path (`$.segments[2].out`); it checks
 `in < out`, segments within the source duration (from `work/probe.json`), crop `cx/cy` in 0..1,
-zoom 1.0..2.0, `fade_ms` 0..200 and that all file paths stay inside the job folder. Captions,
+zoom 1.0..2.0, `fade_ms` 0..200 and that all file paths stay inside the job folder. Product
+demos: `layout` (face|screen|pip|split), `screen_zoom` [{t, box}] (increasing t inside the
+segment, boxes 0..1 of the screen) and `redact` [{t0, t1, box}] inside the segment, both
+only on non-face segments; with a job, every non-face segment must lie inside the sync
+overlap (`overlap_errors`). edl.py is the only reader of these fields (render, overlays and
+verify get them from `edl.Segment`). Captions,
 overlays, b-roll and music are validated loosely until their phase. `output_duration()` and
 `cut_points()` (output time of every segment boundary, including 0 and the end) serve render
 and verify.

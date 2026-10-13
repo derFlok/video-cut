@@ -231,3 +231,51 @@
   Verify is ok.
 - Phase 2 accepted by the speaker on 2026-10-12: all three brand reels (brand-a, brand-b,
   brand-c) approved as they are after the calm caption pacing; no further corrections.
+
+### Added — Product demos: screen recording, sync, layouts, screenshot walkthroughs
+- `job new --screen` / `job screen`; screen ingest (`screen_probe.json`, `screen_audio.wav`,
+  CFR 30 fps `screen_proxy.mp4`); `tool sync` (audio xcorr + GCC-PHAT, drift ppm, clap
+  fallback, `--offset` manual) → `work/sync.json`; EDL segment `layout` face|screen|pip|split,
+  `screen_zoom` keyframes, `redact` blocks, overlap check in `edl check`.
+- `tool screen`: activity, ring/stop clicks, scenes, zoom targets with `max_zoom`
+  (`work/screen.json`); `tool sheet screen`: contact strip with analysis overlays.
+- Render draws per-segment layouts screen/pip/split from the original screen recording at
+  camera time + offset; eased `screen_zoom` (smoothstep 0.6 s); redact blocks in brand bg
+  before scaling; sharpness guard (`screen_zoom_clamped`); pip inset below the screen view;
+  split 58/42; face-only render unchanged (golden test).
+- One source of truth: render, overlays and verify read `layout`, `screen_zoom` and `redact`
+  from `edl.Segment` (the raw-dict reader in `_layouts` is gone), and render and overlays
+  check the sync overlap like `edl check`. `_layouts.plan_all` is the one plan of the drawn
+  screen segments for render, overlays and verify.
+- `videocut run <camera> --screen <file>`: demo prep ingest (camera + screen) → sync →
+  screen → face → transcribe → candidates → `sheet contact` + one `sheet screen` overview
+  (no times = the whole recording). A failed or low-confidence sync (< 0.3) stops the run
+  with the `videocut tool sync --offset` command to run.
+- `tool screen` summary: camera times of zoom targets and clicks from the current sync.json,
+  and each target's `view` box.
+- Overlays in screen layouts: overlays.json `views` (screen view + speaker area per
+  stretch); the renderer keeps every caption and scene off the screen view, the face track
+  there is the speaker area, so captions sit below the screen view, outside the speaker.
+  Verify flag `overlay_on_screen`.
+- Verify for demos: redaction sampled in up to 5 frames per block through the drawn zoom
+  window (`redaction_missing`), screen time mapping checked against the recording at ±0.5 s
+  / ±1 s (`screen_time_mismatch`), `screen_overlap` check, `screen_zoom_clamped` as info.
+  View changes count as reframes, a still screen is not a frozen picture, blinks only where
+  the camera shows.
+- Skills: `plan` gets a *Views* section (face for hook/close/emotional moments; screen, pip,
+  split per step; zoom targets with reasons within `max_zoom`; redaction of anything that
+  looks like personal or customer data) and a *Screenshots* table for screenshot-only
+  demos; `cut` writes `layout`/`screen_zoom`/`redact` from the approved plan (≥ 2–4 s
+  between view changes, never above `max_zoom`); `overlays` keeps items off screen views.
+- Screenshot-only demos: `job new --asset` / `run --asset` take many files; `tool sheet
+  assets` numbers them on one contact sheet (≤ 1080×1920) with size and orientation.
+  Portrait screenshots in `screenshot_frame` use the safe height (minus room for a caption
+  block) instead of a landscape-sized box and may cover the speaker (`stage`).
+- README / README.de: "Recording a product demo" / "Produktdemo aufnehmen".
+
+### Fixed — Product demos
+- Moving screen zooms ended in the top-left corner: `crop` after a per-frame `scale` clamps
+  x/y to its configured input size. Moving windows now go through `perspective`
+  (sub-pixel, eval=frame); a test checks that the zoomed view shows the target region.
+- `work/screen.json` is removed with the other screen outputs when the screen recording is
+  replaced (a hard link keeps the old mtime, so freshness could not tell).
