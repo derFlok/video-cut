@@ -104,18 +104,36 @@ Then decide the **views** per kept range:
 - **Zoom targets** per step: take them from `zoom_targets` / `click_list` (the time the
   click or change happens, its `view` box), with one reason each. Never more than
   `max_zoom` (`max_zoom_split` in split); a whole-screen view needs no zoom.
-- **Redaction:** anything that looks like personal or customer data on the screen —
+- **Personal data:** anything that looks like personal or customer data on the screen —
   e-mail addresses, phone numbers, names, addresses, account or order numbers, other
-  people's faces or chats — gets a redaction: box `[x0, y0, x1, y1]` (0..1 of the screen,
-  generous) and the camera time range it is visible. When unsure, redact.
+  people's faces or chats — is a **candidate** (see *Personal data* below). You do not
+  decide whether it is redacted: the human does at approval (it may be demo data).
 
 **With screenshots only** — `videocut tool sheet assets` → one numbered contact sheet of
 all screenshots (1 image) and the list number → file, size, orientation. Match each
 screenshot to the sentence that talks about it, and propose one `screenshot_frame`
 overlay idea per screenshot: the file, the sentence (camera time), a `focus` box (0..1 of
-the image) on the part being talked about, and `redact` boxes for personal data as above.
+the image) on the part being talked about; personal data in a screenshot is a candidate too.
 Portrait screenshots (phones) are shown tall and may cover the speaker for that moment;
 keep each ≥ 2.5 s and at least ~1 s apart.
+
+### Personal data → `work/redaction.json`
+
+Write **every** suspected item (when unsure, list it; boxes generous), numbered from 1:
+
+```json
+{"candidates": [
+  {"id": 1, "kind": "email", "t0": 0.0, "t1": 24.8, "box": [0.47, 0.0, 0.80, 0.07],
+   "reason": "e-mail address in the top bar"},
+  {"id": 2, "kind": "name", "asset": "input/shot-2.png", "box": [0.05, 0.10, 0.40, 0.16],
+   "reason": "customer name in the header"}
+]}
+```
+
+`kind`: `email`, `phone`, `name`, `customer` or `other`. Screen recording: `t0`/`t1` in
+**camera** seconds (the whole time it is visible), `box` 0..1 of the screen. Screenshot:
+`asset` (the file from `job.json` `assets`) and `box` 0..1 of the image. List the same
+items numbered under **Personal data** in project.md. No candidates: do not write the file.
 
 ## `work/project.md` format
 
@@ -145,14 +163,17 @@ Type: <type> · Target length: <n> s · Estimated length of the keep list: <n> s
 | 1 | 021.30–023.10 | keyword | "<2–4 spoken words>" | the thesis |
 
 ## Views (product demos only; camera seconds)
-| # | Source | View | Zoom target (camera t, box) | Redact (camera t0–t1, box, what) | Why |
+| # | Source | View | Zoom target (camera t, box) | Personal data shown | Why |
 |---|---|---|---|---|---|
 | 1 | 012.48–017.92 | face | — | — | hook |
-| 2 | 017.92–024.10 | screen | 019.20, [0.52, 0.30, 0.78, 0.46] (≤ max_zoom 2.66) | 018.0–024.1, [0.05, 0.10, 0.30, 0.14], e-mail | the click on "Save" |
+| 2 | 017.92–024.10 | screen | 019.20, [0.52, 0.30, 0.78, 0.46] (≤ max_zoom 2.66) | 1 | the click on "Save" |
 
 ## Screenshots (screenshot-only demos)
-| # | File | Sentence (source) | Focus | Redact | Why |
+| # | File | Sentence (source) | Focus | Personal data | Why |
 |---|---|---|---|---|---|
+
+## Personal data (demo jobs; the human decides at approval: demo data or redact)
+1. email — 000.0–024.8 s, top bar: e-mail address (box [0.47, 0.00, 0.80, 0.07])
 
 ## Risks and doubts
 - <cut points that may be hard (word run-ons, breaths, looking away), unclear retakes,

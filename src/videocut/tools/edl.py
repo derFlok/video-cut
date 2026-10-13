@@ -7,6 +7,10 @@ Screen layouts (product demos): `layout`, `screen_zoom` and `redact` of a segmen
 validated, and every non-face segment must lie inside the "overlap" of work/sync.json
 (`tool sync`), the camera time in which both recordings have pictures.
 
+Personal data: every candidate of work/redaction.json that is to be redacted (the human
+decision of `job redaction`; without one: all) must be covered by a redact block of each
+screen segment it overlaps, and by a props.redact box of each screenshot_frame of its image
+(`redaction_missing`).
 Blink warnings (never a failure): with a current work/face.json, every segment `in`/`out`
 inside a blink (+-1 frame) is reported with the nearest blink-free time within +-150 ms that
 also lies outside every word of work/words.json (when present) as a suggestion.
@@ -15,9 +19,11 @@ also lies outside every word of work/words.json (when present) as a suggestion.
 import json
 from pathlib import Path
 
+from .. import redaction
 from ..edl import EdlError, blink_warnings, load, read_sync
 from .common import ToolError, job_parent, resolve_job, run_tool
 from .face import load_face
+from .job import redaction_enforced
 
 
 def check(args) -> dict:
@@ -44,6 +50,18 @@ def check(args) -> dict:
         raise ToolError(
             f"{len(e.errors)} problem(s) in {path.name}: " + "; ".join(e.errors[:5])
         ) from None
+    if job is not None:  # personal data the human decided to redact (or all, by default)
+        cands, _ = redaction_enforced(job)
+        gaps = redaction.missing(cands, json.loads(path.read_text()))
+        if gaps:
+            errs = [
+                f"{g['where']}: redaction_missing: candidate {g['id']} of work/redaction.json "
+                "is not covered (a redact block over its box for its whole time)"
+                for g in gaps
+            ]
+            for err in errs:
+                print(err)
+            raise ToolError(f"{len(errs)} problem(s) in {path.name}: " + "; ".join(errs[:5]))
     warnings = _blinks(job, edl, duration) if job is not None else []
     for w in warnings:
         print(f"warning: {w}")

@@ -53,6 +53,7 @@ from .common import (
     write_json,
 )
 from .ingest import probe
+from .job import redaction_enforced
 
 DEFAULT_BRAND = brand.EXAMPLE_ID
 SPEAKER_STEP_S = 0.25
@@ -107,6 +108,7 @@ def build(job: Path) -> dict:
                    src_size) if use_layouts else []  # fmt: skip
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
+    cands, _ = redaction_enforced(job)
     track = sorted(face_track(plan, face, src_size) + _speaker_track(views, plan.fps),
                    key=lambda f: f["t"])  # fmt: skip
     doc = {
@@ -117,7 +119,7 @@ def build(job: Path) -> dict:
         "safe": safe_zones(edl.size),
         "face": track,
         "captions": edl.captions,
-        "overlays": plates.overlays,
+        "overlays": [_redacted(o, cands) for o in plates.overlays],
         "plates": {
             "last_word": plates.last_word,
             "tail_s": round(float(plates.tail_frames / plan.fps), 3),
@@ -127,6 +129,22 @@ def build(job: Path) -> dict:
     if views:
         doc["views"] = views
     return doc
+
+
+def _redacted(item: dict, cands: list[dict]) -> dict:
+    """A screenshot_frame item with the boxes of every enforced candidate of its image
+    added to props.redact (the safe default, also when the EDL forgot one)."""
+    props = item.get("props") if isinstance(item, dict) else None
+    if item.get("scene") != "screenshot_frame" or not isinstance(props, dict):
+        return item
+    boxes = [c["box"] for c in cands if c.get("asset") == str(props.get("file", "")).strip()]
+    if not boxes:
+        return item
+    have = props.get("redact")
+    have = have if isinstance(have, list) else ([] if have is None else have)
+    if not isinstance(have, list):
+        return item  # malformed: the renderer fails closed on it
+    return {**item, "props": {**props, "redact": [*have, *boxes]}}
 
 
 def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[dict]:

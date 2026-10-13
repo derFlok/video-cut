@@ -50,9 +50,13 @@ being talked about (e.g. `[0.05, 0.12, 0.6, 0.26]`). The zoom plays from ~1 s in
 so keep such an item ≥ 2.5 s. Look at each image in `job.json` `assets` once (it counts toward the
 image budget) to choose `focus` and to `redact` anything personal (names, e-mail
 addresses, phone numbers, other people's faces). With **more than two** screenshots (a
-screenshot walkthrough) take file, sentence, `focus` and `redact` from the plan's
-*Screenshots* table and look at `work/sheets/assets_01.jpg` (`videocut tool sheet assets`)
-once instead of every image; keep every `redact` box of the plan. A portrait screenshot is
+screenshot walkthrough) take file, sentence and `focus` from the plan's *Screenshots*
+table and look at `work/sheets/assets_01.jpg` (`videocut tool sheet assets`) once instead
+of every image. `redact`: `videocut tool job show` → `redaction.redact` are the candidate
+ids of `work/redaction.json` to redact (the human's decision; without one: all); put the
+`box` of each of them whose `asset` is the item's `file` into its `redact` list
+(`redaction.demo` ids are demo data: leave them visible). verify flags a missing one as
+`redaction_missing`. A portrait screenshot is
 drawn as tall as the safe area allows (it may cover the speaker, verify marks it `stage`).
 
 **Product demos with a screen recording:** captions and overlays keep off the screen view

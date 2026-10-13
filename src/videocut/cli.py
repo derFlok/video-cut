@@ -55,6 +55,11 @@ def main(argv: list[str] | None = None) -> int:
         help="extra input images (screenshots) for a new job; several files, repeatable",
     )
     r.add_argument(
+        "--demo-data",
+        action="store_true",
+        help="the personal data the plan found is demo data: redact nothing (your decision)",
+    )
+    r.add_argument(
         "--screen",
         metavar="FILE",
         help="screen recording made at the same time (product demo) for a new job",

@@ -30,7 +30,8 @@ Writes work/sync.json:
     drift_ref   camera time at which offset_s is exact (optional, with drift_ppm)
     overlap     [camera_t0, camera_t1] where both recordings have pictures
 
-Idempotent: a sync.json newer than both audio tracks is kept unless --redo or --offset.
+Idempotent: a sync.json newer than both audio tracks is kept unless --redo or --offset; a
+manual one is kept while it is newer than both probes (so `videocut run` reuses it).
 """
 
 import json
@@ -253,6 +254,12 @@ def sync(args) -> dict:
         result = {"offset_s": float(args.offset), "method": "manual", "confidence": 1.0}
         result["drift_ppm"] = None
     else:
+        prev = edl.read_sync(out)
+        probes = [work / "probe.json", work / "screen_probe.json"]
+        if not args.redo and prev and prev["method"] == "manual" and is_fresh([out], probes):
+            # A human set it (also the only way for a screen recording without audio).
+            print(f"kept {out.name} (manual); --redo detects again")
+            return _report(job, prev, kept=True)
         cam_wav = work / "audio_raw.wav"
         if not cam_wav.is_file():
             cam_wav = work / "audio.wav"

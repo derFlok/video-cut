@@ -21,7 +21,10 @@
              recording (job.json "screen") at camera time + work/sync.json offset_s, with
              eased screen_zoom, redact blocks and brand background (_layouts.py); render.json
              gets "layouts" and "screen_zoom_clamped" (keys widened to stay >= 1 source px
-             per output px). An EDL of face segments only renders exactly as before
+             per output px). An EDL of face segments only renders exactly as before.
+             Personal data: every candidate of work/redaction.json the human did not
+             mark as demo data (no decision: all) is added as a redact block to the
+             screen segments it overlaps (render.json "redaction")
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
 
@@ -61,7 +64,7 @@ from .common import (
     write_json,
 )
 from .ingest import probe
-from .job import PROJECT, is_approved
+from .job import PROJECT, is_approved, redaction_enforced
 
 CRF, PRESET = "18", "medium"
 PREVIEW_PRESET = "veryfast"
@@ -226,6 +229,10 @@ def render(args) -> dict:
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
     edl, followed, face = framed(job, edl)
+    # Personal data: every candidate the human did not mark as demo data is redacted, also
+    # when the EDL forgot one (redaction.enforced; no decision = all of them).
+    cands, red_source = redaction_enforced(job)
+    edl = _layouts.with_redaction(edl, cands)
     layouts = [s.layout for s in edl.segments]
     use_layouts = any(lay != "face" for lay in layouts)
 
@@ -364,6 +371,8 @@ def render(args) -> dict:
     if use_layouts:
         report["layouts"] = {k: layouts.count(k) for k in _layouts.LAYOUTS if k in layouts}
         report["screen_zoom_clamped"] = clamped
+    if red_source != "none":
+        report["redaction"] = {"source": red_source, "candidates": [c["id"] for c in cands]}
     if plan.tail:
         report["tail_s"] = round(float(plan.tail / plan.fps), 3)
     if loud["integrated_lufs"] is None:
@@ -397,6 +406,7 @@ def render(args) -> dict:
         "layouts": report.get("layouts"),
         "screen": screen_rel,
         "screen_zoom_clamped": clamped,
+        "redaction": report.get("redaction"),
         "warnings": warnings,
     }
 

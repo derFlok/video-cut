@@ -1,5 +1,6 @@
-"""`videocut tool job new|show|approve|brand|screen`: create a job folder, inspect it,
-approve its plan, set its brand or its screen recording.
+"""`videocut tool job new|show|approve|redaction|brand|screen`: create a job folder, inspect
+it, approve its plan, decide which personal-data candidates are demo data (human only,
+src/videocut/redaction.py), set its brand or its screen recording.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -23,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import brand
+from .. import redaction as red
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -48,6 +50,7 @@ ARTEFACTS = [
     "work/screen_proxy.mp4",
     "work/sync.json",
     "work/screen.json",
+    "work/redaction.json",
     "work/words.json",
     "work/takes_packed.md",
     "work/candidates.json",
@@ -98,11 +101,28 @@ def approve_job(job: Path) -> dict:
     sha = project_sha(job)
     if sha is None:
         raise ToolError(f"{PROJECT} is missing; run the plan step first")
+    try:
+        cands = red.load(job) or []  # what the human saw; stays redacted (redaction.enforced)
+    except red.RedactionError as e:
+        raise ToolError(f"cannot approve: {e}") from None
     approval = {"at": datetime.now().astimezone().isoformat(timespec="seconds")}
     approval["project_sha256"] = sha
     approvals_root().mkdir(parents=True, exist_ok=True)
-    write_json(approval_path(job), {"job": str(job.resolve()), **approval})
+    write_json(
+        approval_path(job),
+        {"job": str(job.resolve()), **approval, "redaction_candidates": cands},
+    )
     return update_job(job, status="approved", approval=approval)
+
+
+def redaction_enforced(job: Path) -> tuple[list[dict], str]:
+    """The candidates render, overlays and verify must redact (redaction.enforced, with the
+    candidates the approval record saw)."""
+    approved = (read_approval(job) or {}).get("redaction_candidates")
+    try:
+        return red.enforced(job, approved if isinstance(approved, list) else None)
+    except red.RedactionError as e:
+        raise ToolError(str(e)) from None
 
 
 def revoke_approval(job: Path) -> None:
@@ -275,13 +295,42 @@ def show(args) -> dict:
     outputs = sorted(p.name for p in (job / "out").glob("*") if p.is_file())
     print(job)
     print(json.dumps(data, ensure_ascii=False, indent=2))
-    return {
+    out = {
         "job": str(job),
         **data,
         "approved": is_approved(job),
         "artefacts": present,
         "out": outputs,
     }
+    personal = red.summary(job)
+    if personal is not None:
+        out["redaction"] = personal
+    return out
+
+
+def decide_redaction(args) -> dict:
+    """The human decision about the personal-data candidates of work/redaction.json."""
+    if os.environ.get(AGENT_ENV):
+        raise ToolError(
+            "only a human decides what is demo data (not available inside an agent run)"
+        )
+    job = resolve_job(args.job_ref or args.job)
+    if args.all_demo:
+        ids, what = [], "all demo data, nothing redacted"
+    elif args.redact_all:
+        ids, what = None, "everything redacted"
+    else:
+        try:
+            ids = [int(x) for x in args.redact.split(",") if x.strip()]
+        except ValueError:
+            raise ToolError("--redact takes numbers like 1,3") from None
+        what = f"redact {ids}, the rest is demo data"
+    try:
+        rec = red.decide(job, ids, "command")
+    except red.RedactionError as e:
+        raise ToolError(str(e)) from None
+    print(f"{job.name}: {what}")
+    return {"job": str(job), "redact": rec["redact"], "demo": rec["demo"], "method": "command"}
 
 
 def approve(args) -> dict:
@@ -327,6 +376,17 @@ def register(subparsers) -> None:
     )
     a.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     a.set_defaults(handler=run_tool("job approve", approve))
+    r = sub.add_parser(
+        "redaction",
+        help="decide which personal-data candidates are demo data (human only)",
+        parents=[job_parent()],
+    )
+    r.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    g = r.add_mutually_exclusive_group(required=True)
+    g.add_argument("--all-demo", action="store_true", help="all candidates are demo data")
+    g.add_argument("--redact-all", action="store_true", help="redact every candidate")
+    g.add_argument("--redact", metavar="IDS", help="redact these numbers (e.g. 1,3), rest demo")
+    r.set_defaults(handler=run_tool("job redaction", decide_redaction))
     b = sub.add_parser("brand", help="set or replace the brand of a job", parents=[job_parent()])
     b.add_argument("brand", help="brand id (see `tool brand list`)")
     b.set_defaults(handler=run_tool("job brand", set_brand))

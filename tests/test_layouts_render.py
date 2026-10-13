@@ -314,3 +314,27 @@ def test_hdr_camera_in_pip_and_split_is_tonemapped(capsys, material, tmp_path):
     assert 40 < means["sdr"][1] < 200, means  # the inset shows the camera, not the background
     for a, b in zip(means["sdr"], means["hlg"], strict=True):
         assert abs(a - b) < 45, means  # tonemapped, not washed out or crushed
+
+
+def test_undecided_candidate_is_redacted_by_render_and_flagged(capsys, material):
+    job = _job(capsys, material, "layouts-pd")
+    # the red block, visible in segment 4 (screen, 5.5-7.0), listed but not in the EDL
+    cand = {"id": 1, "kind": "customer", "t0": 5.5, "t1": 7.0, "box": SECRET_BOX,
+            "reason": "test"}  # fmt: skip
+    (job / "work" / "redaction.json").write_text(json.dumps({"candidates": [cand]}))
+    code, s, out = run_tool(capsys, "edl", "check", "--job", str(job))
+    assert code == 1 and "redaction_missing" in out and "$.segments[4].redact" in out
+    code, s, out = run_tool(capsys, "render", "--job", str(job), "--preview")
+    assert code == 0, (s, out)
+    assert s["redaction"] == {"source": "default", "candidates": [1]}
+    code, s, out = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and not s["ok"]
+    assert {"check": "decision", "id": 1, "where": "$.segments[4].redact",
+            "flags": ["redaction_missing"]} in s["screen_flagged"]  # fmt: skip
+    doc = json.loads((job / "out" / "verify.json").read_text())
+    seg4 = [r for r in doc["screen"]["redaction"] if r["segment"] == 4]
+    assert seg4 and all(x["bg_share"] >= 0.9 for r in seg4 for x in r["samples"])  # drawn
+    # demo data by the human: nothing to redact, nothing missing
+    run_tool(capsys, "job", "redaction", str(job), "--all-demo")
+    code, s, out = run_tool(capsys, "edl", "check", "--job", str(job))
+    assert code == 0, out

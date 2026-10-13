@@ -74,8 +74,12 @@ Write the approved views into the segments (all times **camera seconds**, like `
   first key the whole screen shows; to zoom back out, add a key with `[0, 0, 1, 1]`. Keys
   only inside the segment. Never ask for more than `max_zoom` (`max_zoom_split` in split):
   render widens such a key so the screen stays sharp and reports `screen_zoom_clamped`.
-- `redact`: every redaction of the plan that overlaps the segment, clipped to it. Never
-  drop one; when the plan is unsure, keep it.
+- `redact`: `videocut tool job show` → `redaction.redact` lists the candidate ids of
+  `work/redaction.json` to redact (the human's decision; without one: all of them).
+  For each of them, every screen segment overlapping its `t0`–`t1` gets a block with its
+  `box` over that overlap (clipped to the segment). Candidates in `redaction.demo` are demo
+  data: no block. Never edit `work/redaction.json`. `edl check` fails with
+  `redaction_missing` when a block is missing.
 - Screen layouts must lie inside the sync `overlap` (`edl check` says so otherwise; use
   `face` there). `zoom_keys` (camera punch-ins) only apply to `face` segments.
 
@@ -90,8 +94,9 @@ Each round:
 2. `videocut tool verify`. Its summary lists `flagged` cuts (`click`, `visual_jump` = a jump
    far larger than the other cuts, `blink_at_cut`) and `failed` global checks (duration, black/frozen
    stretches, size). `info` lists normal talking-head jump cuts — **expected, not errors.**
-   Product demos also have `screen_flagged`: `redaction_missing` (a redact block is not
-   solid in some frame: check the box and its times), `screen_time_mismatch` (the screen
+   Product demos also have `screen_flagged`: `redaction_missing` (check `redaction`: a
+   redact block is not solid in some frame, check the box and its times; check
+   `decision`: a candidate to redact has no block in the EDL), `screen_time_mismatch` (the screen
    picture does not match the synced time: write it in the report; never change
    `work/sync.json`). `screen_zoom_clamped` is info: the zoom was widened for sharpness.
    A cut into or out of a screen view is a view change (info `reframe`), not a jump.

@@ -68,6 +68,7 @@ from .common import (
     binary,
     is_fresh,
     job_parent,
+    read_job,
     resolve_job,
     run_tool,
     write_json,
@@ -607,6 +608,8 @@ def verify(args) -> dict:
         demo = _verify_screen.check(
             job, json.loads(edl_path.read_text()), render, reel, (v["width"], v["height"])
         )
+    elif read_job(job).get("screen"):  # a demo reel whose EDL cannot be read: unchecked
+        demo = {"error": "work/edl.json is missing or invalid; screen layouts not checked"}
     still_screen = demo.get("spans", [])
 
     loud = loudness(reel)
@@ -649,7 +652,7 @@ def verify(args) -> dict:
     checks["cuts_in_range"] = _check(not bad_cuts, outside=bad_cuts)
     if "error" in demo:
         checks["screen_layouts"] = _check(False, error=demo["error"])
-    elif demo:
+    elif "overlap" in demo:
         checks["screen_overlap"] = _check(not demo["overlap"], problems=demo["overlap"])
 
     boxes, face_track, ov_size, ov_warn = _load_boxes(job)
@@ -701,7 +704,7 @@ def verify(args) -> dict:
         for kind in ("redaction", "screen_time")
         for d in demo.get(kind, [])
         if d["flags"]
-    ]  # fmt: skip
+    ] + demo.get("decision", [])  # fmt: skip
     failed = [k for k, c in checks.items() if not c["ok"]]
     ok = not failed and not flagged and not overlay_flagged and not screen_flagged
     doc = {
@@ -730,7 +733,8 @@ def verify(args) -> dict:
     for o in overlay_flagged:
         print(f"overlay {o['scene'] or '(all)'} {o['t0']}-{o['t1']}s: {', '.join(o['flags'])}")
     for d in screen_flagged:
-        print(f"screen {d['check']} segment {d.get('segment')}: {', '.join(d['flags'])}")
+        where = f"candidate {d['id']} {d['where']}" if "id" in d else f"segment {d.get('segment')}"
+        print(f"screen {d['check']} {where}: {', '.join(d['flags'])}")
     for c in demo.get("clamped", []):
         print(f"info: segment {c['segment']} screen zoom {c['zoom']}x at {c['t']}s clamped "
               f"to {c['max_zoom']}x (sharpness)")  # fmt: skip

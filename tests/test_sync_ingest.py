@@ -53,6 +53,13 @@ def test_screen_without_audio_has_no_wav(capsys, clip_dir):
     job = Path(s["job"])
     assert (job / "work" / "screen_proxy.mp4").is_file()
     assert not (job / "work" / "screen_audio.wav").exists()
+    # without audio only a human offset works, and later runs (videocut run prep) keep it
+    code, s, _ = run_tool(capsys, "sync", "--job", "sn")
+    assert code == 1 and "--offset" in s["error"]
+    code, s, _ = run_tool(capsys, "sync", "--job", "sn", "--offset", "2.5")
+    assert code == 0 and s["method"] == "manual"
+    code, s, _ = run_tool(capsys, "sync", "--job", "sn")
+    assert code == 0 and s["kept"] is True and s["offset_s"] == 2.5
 
 
 def test_job_screen_replaces_and_clears_outputs(capsys, demo_pair, clip_dir):

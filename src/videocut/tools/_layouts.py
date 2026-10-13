@@ -11,9 +11,11 @@
     split   screen view in the top SPLIT_TOP of the frame, the speaker below (face-centred)
 
 Time: segment in/out stay CAMERA time; the screen frame shown at camera time t is screen
-time t + work/sync.json offset_s. The screen is put on the output frame grid once
-(fps, start_time=0: sample and hold, so a variable-frame-rate recording with long static
-gaps keeps its timing) and cut by frame number; before the recording starts the view is
+time t + work/sync.json offset_s (+ drift_ppm applied at the segment start). Screen time 0
+is the recording's first video frame (setpts=PTS-STARTPTS, like the proxy and sync). The
+screen is put on the output frame grid once (fps, start_time=0: sample and hold, so a
+variable-frame-rate recording with long static gaps keeps its timing) and cut by frame
+number; before the recording starts the view is
 the background colour, after it ends the last frame is held.
 
 Zoom: "screen_zoom" keyframes [{"t": camera_s, "box": [x0, y0, x1, y1]}] (normalised
@@ -32,7 +34,8 @@ screen (< 1 source px per output px); such a key is widened to that width and re
 
 Redaction: "redact" [{"t0", "t1": camera_s, "box"}] are solid blocks in the brand's
 colors.bg drawn on the screen frames BEFORE scaling, on every output frame that overlaps
-[t0, t1], snapped outward to even source px.
+[t0, t1] plus one frame (and the drift over the segment) on each side, snapped outward to
+even source px.
 """
 
 import json
@@ -153,6 +156,7 @@ def probe_screen(path: Path) -> dict:
     return {
         "size": [w, h],
         "duration": float(info.get("format", {}).get("duration") or v.get("duration") or 0),
+        "video_start": float(v.get("start_time") or 0),  # screen time 0 = this pts
         "color_transfer": v.get("color_transfer"),
         "color_primaries": v.get("color_primaries"),
         "color_space": v.get("color_space"),
@@ -266,6 +270,7 @@ def plan_segment(
     out: tuple[int, int],
     full_out: tuple[int, int],
     face: dict | None,
+    redact_slack: int = 1,
 ) -> tuple[Segment, list[dict]]:
     """The drawn form of one non-face EDL segment `seg` (edl.Segment, already framed: its
     layout, screen_zoom and redact were validated by edl.py) and its clamped zoom keys."""
@@ -299,8 +304,8 @@ def plan_segment(
 
     redact = []
     for r in seg.redact:
-        n0 = math.floor((r["t0"] - seg.start) * fps)
-        n1 = math.ceil((r["t1"] - seg.start) * fps) - 1
+        n0 = math.floor((r["t0"] - seg.start) * fps) - redact_slack
+        n1 = math.ceil((r["t1"] - seg.start) * fps) - 1 + redact_slack
         if n1 < 0 or n0 >= frames:
             continue
         b = r["box"]
@@ -334,6 +339,33 @@ def plan_segment(
     return s, clamped
 
 
+def with_redaction(edl, cands: list[dict]):
+    """`edl` (edl.Edl) whose non-face segments also carry a redact block for every screen
+    candidate of redaction.enforced that overlaps them (the safe default: render, verify)."""
+    from dataclasses import replace
+
+    from .. import redaction
+
+    segs = []
+    for s in edl.segments:
+        extra = redaction.screen_blocks(cands, s.start, s.end) if s.layout != "face" else []
+        segs.append(replace(s, redact=[*s.redact, *extra]) if extra else s)
+    return replace(edl, segments=segs)
+
+
+def segment_offset(sync_doc: dict, start: float, duration: float, fps) -> tuple[float, int]:
+    """(offset_s for a segment starting at camera time `start`, redaction slack in frames).
+    The measured drift is applied at the segment start (offset_s is exact at drift_ref);
+    redact ranges grow by one frame on each side (the screen frame grid is rounded) plus
+    what the drift adds over the segment."""
+    off = sync_doc["offset_s"]
+    drift = sync_doc.get("drift_ppm") or 0.0
+    ref = sync_doc.get("drift_ref")
+    if drift and ref is not None:
+        off += drift * 1e-6 * (start - ref)
+    return off, 1 + math.ceil(abs(drift) * 1e-6 * duration * float(fps))
+
+
 def plan_all(job: Path, edl, plan, camera: tuple[int, int], face: dict | None) -> dict:
     """Every non-face range of `plan` (a _render_plan.Plan of the framed `edl`) drawn:
     {"segs": {range index: Segment}, "clamped": [{"segment", "t", "zoom", "max_zoom"}],
@@ -342,15 +374,17 @@ def plan_all(job: Path, edl, plan, camera: tuple[int, int], face: dict | None) -
     src = screen_source(job)
     sync_doc = sync(job)
     info = probe_screen(src)
-    offset = sync_doc["offset_s"]
     screen_frames = math.floor(info["duration"] * plan.fps)
     segs, clamped = {}, []
     for i, r in enumerate(plan.ranges):
         if r.layout == "face":
             continue
+        seg_in = edl.segments[r.seg]
+        offset, slack = segment_offset(sync_doc, seg_in.start, seg_in.duration, plan.fps)
         seg, cl = plan_segment(
-            edl.segments[r.seg], r.frames, plan.fps, offset=offset, screen=tuple(info["size"]),
+            seg_in, r.frames, plan.fps, offset=offset, screen=tuple(info["size"]),
             camera=camera, out=plan.out_size, full_out=tuple(edl.size), face=face,
+            redact_slack=slack,
         )  # fmt: skip
         if seg.screen_frame + seg.frames <= 0 or seg.screen_frame >= screen_frames:
             raise ToolError(
@@ -514,7 +548,7 @@ def video_chain(
         lines = [f"[{video_in}]nullsink;"]
     if segs:
         lines.append(
-            f"[{screen_in}]fps={fps}:start_time=0,split={len(segs)}"
+            f"[{screen_in}]setpts=PTS-STARTPTS,fps={fps}:start_time=0,split={len(segs)}"
             + "".join(f"[s{i}]" for i in sorted(segs))
             + ";"
         )

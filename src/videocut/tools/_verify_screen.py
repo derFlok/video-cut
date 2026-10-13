@@ -14,6 +14,11 @@
                     sharp) are reported as info, never a flag
     overlap         every non-face segment must lie inside work/sync.json "overlap" (the
                     rule of `edl check`); a check that fails otherwise
+    decision        every personal-data candidate to redact (the human decision of `job
+                    redaction`; without one: all) must be covered by the EDL (redact blocks
+                    of the screen segments, props.redact of its screenshot_frame items):
+                    flag `redaction_missing` (check "decision"). Render adds them anyway,
+                    and the redaction samples above include those blocks
 
 The geometry comes from the same _layouts plan render draws, at the size of the checked
 reel (a preview is checked at its half size).
@@ -27,12 +32,14 @@ from pathlib import Path
 import numpy as np
 
 from .. import edl as edl_mod
+from .. import redaction as red_mod
 from ..paths import tool_env
 from . import _layouts
 from . import _render_plan as plan_mod
 from ._geometry import framed
 from .common import ToolError, binary
 from .ingest import probe
+from .job import redaction_enforced
 
 REDACT_SAMPLES = 5
 REDACT_MIN_SHARE = 0.9
@@ -54,6 +61,7 @@ def context(job: Path, data: dict, size: tuple[int, int]) -> dict | None:
     info = probe(src)
     edl = edl_mod.from_dict(data, info["duration"])
     edl, _, face = framed(job, edl)
+    edl = _layouts.with_redaction(edl, redaction_enforced(job)[0])  # what render drew
     layouts = [s.layout for s in edl.segments]
     plan = plan_mod.build(edl, tuple(info["size"]), size, layouts)
     drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
@@ -163,6 +171,7 @@ def _screen_view(src: Path, t: float, win, view, sinfo: dict) -> np.ndarray | No
     """The screen recording at screen time t, cut to window `win` and scaled to the view."""
     if t < 0 or t > sinfo["duration"]:
         return None
+    t += sinfo.get("video_start") or 0.0  # screen time 0 = the first video frame
     sw, sh = sinfo["size"]
     x, y = max(0, int(win[0])), max(0, int(win[1]))
     w = min(int(win[2]), sw - x)
@@ -260,18 +269,34 @@ def load_views(job: Path) -> list[dict]:
     ]
 
 
+def decision_gaps(job: Path, data: dict) -> list[dict]:
+    """Candidates to redact (the human decision, or all) the EDL does not cover:
+    [{"check": "decision", "id", "where", "flags": ["redaction_missing"]}]."""
+    cands, _ = redaction_enforced(job)
+    return [
+        {"check": "decision", **g, "flags": ["redaction_missing"]}
+        for g in red_mod.missing(cands, data)
+    ]
+
+
 def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]) -> dict:
     """All product-demo checks: {"redaction", "screen_time", "clamped", "overlap",
-    "spans"}; an empty dict for a face-only EDL."""
+    "spans", "decision"}; only "decision" for a face-only EDL."""
     try:
+        gaps = decision_gaps(job, data)
         ctx = context(job, data, size)
     except (ToolError, edl_mod.EdlError, KeyError, TypeError) as e:
         return {"error": str(e)}
     if ctx is None:
-        return {}
+        return {"decision": gaps} if gaps else {}
+    try:
+        red_docs, time_docs = redaction(reel, ctx, size), screen_time(reel, ctx, size)
+    except (ToolError, ValueError) as e:  # fail closed: an unchecked redaction is not ok
+        return {"error": f"screen checks failed: {e}"}
     return {
-        "redaction": redaction(reel, ctx, size),
-        "screen_time": screen_time(reel, ctx, size),
+        "decision": gaps,
+        "redaction": red_docs,
+        "screen_time": time_docs,
         "clamped": clamped_info(render),
         "overlap": overlap_check(job, data),
         "spans": screen_spans(ctx),

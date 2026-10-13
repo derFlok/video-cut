@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import agent
+from . import redaction as red
 from .paths import ROOT
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
@@ -362,6 +363,54 @@ def overlays_done(job: Path, brand_id: str) -> bool:
     )
 
 
+def _where(c: dict) -> str:
+    return c["asset"] if "asset" in c else f"{c['t0']:.1f}-{c['t1']:.1f} s"
+
+
+def decide_personal_data(
+    job: Path, demo_data: bool, interactive: bool, ask: Callable[[str], str], say=print
+) -> None:
+    """The human decision about work/redaction.json at the plan gate. `--demo-data` = all
+    demo (method "flag"); interactive: ask; otherwise no decision, so all are redacted."""
+    try:
+        cands = red.load(job)
+    except red.RedactionError as e:
+        raise RunError(str(e)) from None
+    if not cands:
+        return
+    if demo_data:
+        red.decide(job, [], "flag")
+        say(f"personal data: {len(cands)} place(s) recorded as demo data (--demo-data)")
+        return
+    say(f"\n{len(cands)} place(s) with possible personal data found:")
+    for c in cands:
+        say(f"  {c['id']:>2}. {c['kind']:<8} {_where(c):<22} {c.get('reason', '')}")
+    if not interactive:
+        say(
+            "personal data: no decision, so all of them are redacted "
+            f"(`videocut tool job redaction {job.name} --all-demo | --redact 1,3`)"
+        )
+        return
+    answer = ask("Demo data? [a]ll demo / [r]edact all / [s]elect: ").strip().lower()
+    if answer in ("a", "all", "all demo"):
+        ids = []
+    elif answer in ("s", "select"):
+        raw = ask("Numbers to redact (e.g. 1,3; the others are demo data): ")
+        try:
+            ids = [int(x) for x in raw.replace(" ", ",").split(",") if x.strip()]
+        except ValueError:
+            say("personal data: not a list of numbers; everything is redacted")
+            ids = None
+    else:
+        ids = None  # "r" and anything else: the safe choice
+    try:
+        rec = red.decide(job, ids, "prompt")
+    except red.RedactionError as e:
+        say(f"personal data: {e}; everything is redacted")
+        rec = red.decide(job, None, "prompt")
+    say(f"personal data: redact {rec['redact'] or 'nothing'}, demo data {rec['demo'] or 'none'}")
+
+
 def ask_approval(job: Path, ask: Callable[[str], str] = input) -> bool:
     if not sys.stdin.isatty() and ask is input:
         return False
@@ -380,6 +429,7 @@ def run(
     recut: bool = False,
     assets: list[str] | None = None,
     screen: str | None = None,
+    demo_data: bool = False,
     say=print,
     ask: Callable[[str], str] = input,
 ) -> int:
@@ -397,6 +447,8 @@ def run(
     plan_session, plan_sha = None, None
     if is_approved(job) and not replan:
         say("plan: already approved")
+        if demo_data:
+            decide_personal_data(job, demo_data, False, ask, say)
     else:
         if replan or not project.is_file():
             edl_before, out_before = _mtime(edl), _snapshot(job / "out")
@@ -415,6 +467,8 @@ def run(
             return 3
         approve_job(job)
         say("plan: approved")
+        interactive = not approve and (sys.stdin.isatty() or ask is not input)
+        decide_personal_data(job, demo_data, interactive, ask, say)
 
     approved_sha = read_approval(job)["project_sha256"]
     if cut_done(job) and not recut and not plan_session:
@@ -488,6 +542,7 @@ def main(args) -> int:
             recut=args.recut,
             assets=args.asset,
             screen=args.screen,
+            demo_data=args.demo_data,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

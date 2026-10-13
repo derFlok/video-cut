@@ -127,7 +127,7 @@ def test_sharpness_clamp_on_1920_source_with_3x_key():
 def test_redact_frames_cover_the_range_and_snap_outward():
     seg, _ = _plan({"redact": [{"t0": 10.51, "t1": 11.0, "box": [0.1001, 0.2, 0.3, 0.4003]}]})
     (n0, n1, x, y, w, h) = seg.redact[0]
-    assert (n0, n1) == (15, 29)
+    assert (n0, n1) == (14, 30)  # frames 15..29 overlap [t0, t1], plus one frame of slack
     assert x <= 0.1001 * 2880 and x + w >= 0.3 * 2880 and y + h >= 0.4003 * 1800
     assert x % 2 == y % 2 == w % 2 == h % 2 == 0
 
@@ -175,3 +175,10 @@ def test_screen_only_chain_sinks_the_camera():
         bg="0xF4F4F4", matrix="bt709", cam_sdr="", screen_sdr="",
     )  # fmt: skip
     assert lines[0] == "[0:0]nullsink;" and "split=" not in lines[0]
+
+
+def test_segment_offset_applies_drift_and_widens_redaction():
+    sync = {"offset_s": 3.0, "drift_ppm": 1000.0, "drift_ref": 10.0}
+    off, slack = lay.segment_offset(sync, 70.0, 20.0, FPS)
+    assert off == pytest.approx(3.06) and slack == 1 + 1  # 20 s at 1000 ppm = 0.6 frames
+    assert lay.segment_offset({"offset_s": 1.5, "drift_ppm": None}, 5.0, 4.0, FPS) == (1.5, 1)
