@@ -344,9 +344,20 @@
   non-interactive stop names the full approve and redaction commands. Selftest renders and
   verifies a short 16:9 job.
 - Demo layouts per format: 16:9 `screen` fills the frame, `pip` = round speaker bubble 26 %
-  of the height in a bottom corner above the caption strip (the corner covering less of the
-  zoom targets), `split` side by side 64/36; 1:1 bubble pip and stacked split; 4:5 and
-  9:16 portrait rules as before. Layout geometry follows the job format (`plan_all`
+  of the height in a bottom corner above the caption strip (the corner covering clearly
+  less of the zoom targets, right on a near tie), `split` side by side 64/36; 1:1 bubble
+  pip and stacked split; 4:5 and 9:16 portrait rules as before.
+- 16:9 (and 1:1) screen fills the frame: the `screen`/`pip` view is the whole frame (1:1:
+  the band between the safe zones) and the `split` screen part is filled at its own
+  aspect; the screen is cropped to the view's aspect instead of letterboxed (a Mac
+  recording of 4096×2648 no longer leaves ~125 px bars in `colors.bg` at the sides). Zoom
+  windows have the view's aspect; "no zoom" is the full screen width (or height), placed
+  around the segment's first zoom target. Bars only when the aspects differ by more than
+  `LETTERBOX` (25 %; split `LETTERBOX_SPLIT` 50 %), e.g. a portrait phone screen. Caps
+  follow the 1920 px view (4096 wide: 16:9 `max_zoom` 2.13, was 2.45); zoom factors count
+  from the no-zoom window; screen.json `zoom_targets[].view` has the view's aspect and
+  `geometry` (a new value re-derives the caps without a new analysis). 9:16 and 4:5 are
+  unchanged (identical plans and filter graphs). Layout geometry follows the job format (`plan_all`
   `full_out`), also for previews and verify.
 - Speaker inset/part centred on the segment's face median, head and shoulders (face height
   × 2.6), ≥ 0.75 camera px per output px (the EDL crop cap no longer limits it); render.json

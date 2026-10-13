@@ -402,12 +402,12 @@ def test_landscape_layouts_render_and_readability(capsys, material):
 
     out = (1920, 1080)
     job = _job(capsys, material, "layouts-16x9", size=out)
-    # The whole 2880 px screen in a 1728 px view: UI text ~15.6 px, flagged for the agent.
+    # The full 2880 px width in the 1920 px view: UI text ~17.3 px, flagged for the agent.
     code, s, text = run_tool(capsys, "edl", "check", "--job", str(job))
     assert code == 0, text
     small = [w for w in s["warnings"] if "screen_text_small" in w]
     assert small and all(w.startswith("segments[") for w in small)
-    assert any(w.startswith("segments[1]: ") and "15.6 px" in w for w in small), small
+    assert any(w.startswith("segments[1]: ") and "17.3 px" in w for w in small), small
     data = json.loads((job / "work" / "edl.json").read_text())
     ctx = _verify_screen.context(job, data, out)
     docs = _verify_screen.readability(ctx)
@@ -423,11 +423,11 @@ def test_landscape_layouts_render_and_readability(capsys, material):
         mid = (starts[i] + starts[i + 1]) // 2
         return _frames(reel, mid, mid + 1, (out[0], out[1], 0, 0), "rgb24")[0]
 
-    # screen: the 16:10 view fills the height, letterboxed at the sides in colors.bg.
+    # screen: the 16:10 screen fills the frame (cropped to 16:9), no bars in colors.bg.
     seg = _seg_plan(1, out)
-    assert (seg.view.h, seg.view.w) == (1080, 1728)
+    assert seg.view == lay.Rect(0, 0, 1920, 1080)
     img = frame(1)
-    assert np.abs(img[:, : seg.view.x - 2] - 244).max() < 6
+    assert np.abs(img[:, :8] - 244).max() > 6 or np.abs(img[:, -8:] - 244).max() > 6
     # pip: a round camera bubble over the screen, above the caption zone, in a bottom corner
     # that leaves the zoom target of segment 2 free.
     seg = _seg_plan(2, out)

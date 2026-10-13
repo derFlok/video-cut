@@ -16,15 +16,19 @@ The geometry follows the output size (the job's format, _format.py); its shape d
 
 Landscape (16:9) and square (1:1):
 
-    screen  the view fills the frame (landscape) or the height between the top and bottom
-            safe zones (square), letterboxed in colors.bg where the aspects differ
+    screen  the view fills the frame (landscape) or the band between the top and bottom
+            safe zones (square) at that area's aspect: the screen is cropped to it, not
+            letterboxed. Only a screen whose aspect differs from the area's by more than
+            LETTERBOX (e.g. a portrait phone screen in 16:9) is fitted into it instead,
+            with bars in colors.bg
     pip     like "screen", plus the speaker as a round bubble (PIP_BUBBLE of the frame
             height) in the bottom-right corner, just above the caption zone (bottom safe
             zone) and inside the side zone; in the bottom-left corner when that one covers
-            less of the zoom targets
-    split   landscape: side by side, the screen view fitted into the left SPLIT_SIDE of the
-            width (vertically centred), the speaker filling the right part (face-centred);
-            square: stacked like portrait
+            clearly less of the zoom targets (by more than CORNER_TIE of the bubble)
+    split   landscape: side by side, the screen view filling the left SPLIT_SIDE of the
+            width (fitted, vertically centred, when the aspects differ by more than
+            LETTERBOX_SPLIT), the speaker filling the right part (face-centred); square:
+            stacked like portrait
 
 Speaker crop (pip inset, split speaker part): centred on the face (the segment's own face
 median when it has enough face frames, else the global one) and as tight as head and
@@ -53,8 +57,12 @@ Zoom: "screen_zoom" keyframes [{"t": camera_s, "box": [x0, y0, x1, y1]}] (normal
 screen coords). Each key's box becomes a window of the view's aspect around the box centre
 (kept inside the frame); the view ARRIVES at it at t, easing (smoothstep) from the previous
 window over the EASE_S before t (shorter when keys are closer). Before the first key the
-whole screen shows. Window edges are interpolated linearly in the eased parameter, so every
-window edge moves monotonically between two keys and windows stay inside the frame.
+widest window of the view's aspect shows ("no zoom", `full_width`): the whole screen when
+the view has the screen's aspect; in a filled view of another aspect the full width (or
+height) of the screen, placed around the segment's first zoom target (centred without
+one), so the move towards it only zooms. Zoom factors are relative to that window. Window
+edges are interpolated linearly in the eased parameter, so every window edge moves
+monotonically between two keys and windows stay inside the frame.
 A segment with one window crops it and scales it to the view; a moving window goes through
 `perspective` (sense=source, eval=frame), whose corner expressions are the same piecewise
 function of the frame number `in` that `window_at` computes in Python, then a fixed scale.
@@ -88,6 +96,8 @@ PIP_SIZE = 0.34  # portrait: inset side, fraction of the output width
 PIP_RADIUS = 0.22  # portrait: inset corner radius, fraction of its side
 PIP_BUBBLE = 0.26  # landscape/square: inset side, fraction of the output height
 BUBBLE_RADIUS = 0.5  # landscape/square: a circle
+CORNER_TIE = 0.05  # landscape/square: corners covering zoom targets within this share of
+# the bubble's area of each other are a tie (a centred target: the bubble stays right)
 PIP_FACE = 2.6  # speaker crop height = face box height x this (head and shoulders)
 PIP_NO_FACE = 0.8  # without a face: crop side = this x the camera's short side
 SPEAKER_MIN_PX = 0.75  # speaker crop: at least this many source px per output px
@@ -96,6 +106,9 @@ SPLIT_SIDE = 0.64  # landscape split: the screen part, fraction of the output wi
 TEXT_PT = 13  # typical UI text height, logical px
 TEXT_MIN_PX = 18  # UI text lower than this on the output is hard to read
 VIEW_FILLS = 0.8  # a screen view this share of the frame's width and height fills it
+LETTERBOX = 0.25  # landscape/square: a screen whose aspect differs from the view area's by
+# more than this (larger / smaller - 1) is fitted with bars instead of filling the area
+LETTERBOX_SPLIT = 0.5  # the same for the narrower screen part of a landscape split
 HIDPI_MIN = 2700  # recordings with a long side this large count as 2x (HiDPI) screens
 DEFAULT_BRAND = brand.EXAMPLE_ID
 
@@ -234,16 +247,38 @@ def _fit(area: Rect, screen: tuple[int, int]) -> Rect:
     return Rect(area.x + (area.w - w) // 2, area.y + (area.h - h) // 2, w, h)
 
 
+def _area(layout: str, out: tuple[int, int]) -> Rect:
+    """Landscape/square (not stacked): the area the screen view fills or is fitted into."""
+    ow, oh = out
+    z = safe_zones(out)
+    if layout == "split":  # landscape: the left part
+        return Rect(0, 0, _even(ow * SPLIT_SIDE), oh)
+    if shape(out) == "square":
+        return Rect(0, z["top"], ow, oh - z["top"] - z["bottom"])
+    return Rect(0, 0, ow, oh)
+
+
+def filled(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> bool:
+    """Whether the `layout` view fills its area at the area's aspect (landscape/square,
+    the screen's aspect within LETTERBOX / LETTERBOX_SPLIT of it) rather than showing the
+    screen at its own aspect."""
+    if _stacked(layout, out):
+        return False
+    area = _area(layout, out)
+    a, b = area.w / area.h, screen[0] / screen[1]
+    return max(a, b) / min(a, b) - 1 <= (LETTERBOX_SPLIT if layout == "split" else LETTERBOX)
+
+
 def view_rect(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> Rect:
-    """Where the screen view goes in an `out`-sized frame (aspect of the screen)."""
+    """Where the screen view goes in an `out`-sized frame (aspect of the screen, or of the
+    area it fills: `filled`)."""
     ow, oh = out
     z = safe_zones(out)
     if not _stacked(layout, out):
-        if layout == "split":  # landscape: the left part
-            return _fit(Rect(0, 0, _even(ow * SPLIT_SIDE), oh), screen)
-        if shape(out) == "square":
-            return _fit(Rect(0, z["top"], ow, oh - z["top"] - z["bottom"]), screen)
-        return _fit(Rect(0, 0, ow, oh), screen)
+        area = _area(layout, out)
+        if filled(layout, out, screen):
+            return Rect(area.x, area.y, area.w // 2 * 2, area.h // 2 * 2)
+        return _fit(area, screen)
     top, bottom = z["top"], (round(oh * SPLIT_TOP) if layout == "split" else oh - z["bottom"])
     below = _even(ow * PIP_SIZE) + _gap(out) if layout == "pip" else 0  # room for the inset
     room = bottom - top - below
@@ -289,13 +324,27 @@ def speaker_rect(out: tuple[int, int]) -> Rect:
     return Rect(left, 0, ow - left, oh)
 
 
+def view_aspect(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> float:
+    """w / h of the screen windows of a `layout` view: the view's own aspect when it fills
+    its area, else the screen's (the fitted view has it up to even rounding)."""
+    if filled(layout, out, screen):
+        v = view_rect(layout, out, screen)
+        return v.w / v.h
+    return screen[0] / screen[1]
+
+
+def full_width(screen: tuple[int, int], aspect: float) -> float:
+    """Width in source px of the widest window of `aspect` inside the screen (no zoom)."""
+    return min(screen[0], screen[1] * aspect)
+
+
 def window_for(
     box: list[float], screen: tuple[int, int], aspect: float, min_w: float
 ) -> tuple[Win, float, bool]:
     """Window (left, top, width; source px, `aspect` = w/h) around `box`, at least `min_w`
     wide, inside the frame: (window, the zoom the box asked for, whether it was clamped)."""
     sw, sh = screen
-    full = min(sw, sh * aspect)
+    full = full_width(screen, aspect)
     bw, bh = (box[2] - box[0]) * sw, (box[3] - box[1]) * sh
     want = min(max(bw, bh * aspect), full)
     w = min(max(want, min_w), full)
@@ -369,10 +418,13 @@ def plan_segment(
     layout = seg.layout
     view = view_rect(layout, out, screen)
     sharp_w = view_rect(layout, full_out, screen).w  # >= 1 source px per output px
-    aspect = screen[0] / screen[1]  # the view is this aspect up to even rounding
+    aspect = view_aspect(layout, out, screen)  # the view is this aspect up to even rounding
     sw, sh = screen
-    full = min(sw, sh * aspect)
+    full = full_width(screen, aspect)
     initial: Win = ((sw - full) / 2, (sh - full / aspect) / 2, full)
+    if seg.screen_zoom and filled(layout, out, screen):  # no zoom, around the first target
+        first = min(seg.screen_zoom, key=lambda k: k["t"])
+        initial = window_for(first["box"], screen, aspect, full)[0]
     min_w = min(float(sharp_w), full)
 
     moves, clamped, keys = [], [], []
@@ -427,9 +479,9 @@ def plan_segment(
             # The side away from the zoom targets (their mean centre); right without any.
             mid = sum((b[0] + b[2]) / 2 for _, _, b in keys) / len(keys) if keys else 0
             s.inset = left if mid > 0.5 else right
-        else:  # the corner that covers less of the zoom targets; right on a tie
+        else:  # the corner that covers clearly less of the zoom targets; right on a tie
             hidden = [sum(overlap(r.box(), f) for f in focus) for r in (right, left)]
-            s.inset = left if hidden[1] < hidden[0] else right
+            s.inset = left if hidden[1] < hidden[0] - CORNER_TIE * right.w * right.h else right
             s.radius = BUBBLE_RADIUS
         side = inset_side(full_out)
         if box is None and _stacked(layout, out):
@@ -557,9 +609,19 @@ def text_px(screen: tuple[int, int], view_w: float, win_w: float) -> float:
 
 
 def readable_zoom(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> float:
-    """Zoom (1 / shown share of the screen width) at which UI text reaches TEXT_MIN_PX."""
+    """Zoom (relative to the no-zoom window, `full_width`) at which UI text reaches
+    TEXT_MIN_PX."""
     view = view_rect(layout, out, screen)
-    return TEXT_MIN_PX / text_px(screen, view.w, screen[0])
+    full = full_width(screen, view_aspect(layout, out, screen))
+    return TEXT_MIN_PX / text_px(screen, view.w, full)
+
+
+def max_zoom(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> float:
+    """Largest zoom (relative to the no-zoom window) that keeps >= 1 source px per output px
+    in the `layout` view of an `out`-sized output; rounded down to 0.01."""
+    view = view_rect(layout, out, screen)
+    full = full_width(screen, view_aspect(layout, out, screen))
+    return math.floor(full / view.w * 100 + 1e-6) / 100
 
 
 def readability(seg, screen: tuple[int, int], out: tuple[int, int]) -> list[dict]:
@@ -568,8 +630,8 @@ def readability(seg, screen: tuple[int, int], out: tuple[int, int]) -> list[dict
     [{"t", "zoom", "text_px", "readable_zoom", "flags"}]; flag `screen_text_small` when the
     text is lower than TEXT_MIN_PX."""
     view = view_rect(seg.layout, out, screen)
-    aspect = screen[0] / screen[1]
-    full = min(screen[0], screen[1] * aspect)
+    aspect = view_aspect(seg.layout, out, screen)
+    full = full_width(screen, aspect)
     keys = sorted(seg.screen_zoom, key=lambda k: k["t"])
     wins = [] if keys and keys[0]["t"] <= seg.start else [(seg.start, full)]
     for k in keys:
