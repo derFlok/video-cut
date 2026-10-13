@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 import clips
+import numpy as np
 import pytest
 from helpers import run_tool
 
@@ -275,3 +276,130 @@ def test_malformed_face_json_counts_as_missing(tmp_path, bad):
 def test_a_short_segment_never_follows_a_single_frame():
     doc = _face_doc([(t / 2, 0.45, 0.40) for t in range(20)] + [(10.0, 0.9, 0.4)])
     assert face.segment_centre(doc, 9.99, 10.01) == (0.45, 0.40)
+
+
+# ---------------------------------------------------------------- small faces (video calls)
+
+# A generated video-call frame (1920x1080): a screen share on the left, the speaker as a
+# small tile on the right. The "face" is a flat skin-coloured target the fake detector
+# below finds only when it is at least SEEN of its input's height high (like a real
+# detector, which misses faces this small in the whole frame).
+CALL = (1920, 1080)
+TILE = (1400, 380, 1880, 704)  # x0, y0, x1, y1 of the speaker tile, px
+TARGET = (1610, 470, 1670, 550)  # the face target inside it, px
+SKIN = (224, 172, 140)
+SEEN = 0.15
+
+
+def _call_frame(dx: int = 0) -> np.ndarray:
+    img = np.full((CALL[1], CALL[0], 3), 40, np.uint8)
+    img[60:1020, 60:1340] = 200  # the shared screen
+    for i in range(10):
+        img[120 + i * 80 : 150 + i * 80, 120:1200] = 120  # rows of "UI"
+    img[TILE[1] : TILE[3], TILE[0] : TILE[2]] = (70, 90, 110)  # the camera tile
+    x0, y0, x1, y1 = TARGET
+    img[y0:y1, x0 + dx : x1 + dx] = SKIN
+    return img
+
+
+def _fake_find(calls: list):
+    def find(img):
+        calls.append(img.shape)
+        ys, xs = np.nonzero(np.all(np.abs(img.astype(int) - SKIN) <= 12, axis=2))
+        if len(ys) == 0 or (ys.max() - ys.min() + 1) / img.shape[0] < SEEN:
+            return None
+        h, w = img.shape[:2]
+        box = [xs.min() / w, ys.min() / h, (xs.max() + 1) / w, (ys.max() + 1) / h]
+        return {"box": box, "blink": 0.1, "gaze_off": 0.2}
+
+    return find
+
+
+def test_fake_detector_misses_the_small_face_in_the_whole_frame():
+    calls = []
+    find = _fake_find(calls)
+    assert find(face._resize(_call_frame(), 854, 480)) is None  # the full-frame pass size
+
+
+def test_small_pass_finds_the_tile_face_by_scan_then_region():
+    fps = 10.0
+    n = 30
+    frames = [{"t": i / fps, "found": False, "box": None, "cx": None, "cy": None,
+               "blink": None, "gaze_off": None} for i in range(n)]  # fmt: skip
+    images = [_call_frame(dx=i) for i in range(n)]  # the speaker moves a little
+    calls = []
+    stats = face.small_pass(frames, iter(images), _fake_find(calls), fps)
+    assert stats == {"checked": n, "found": n}
+    for i, f in enumerate(frames):
+        assert f["found"] and f["small"] is True
+        want = [(TARGET[0] + i) / 1920, TARGET[1] / 1080, (TARGET[2] + i) / 1920, TARGET[3] / 1080]
+        assert f["box"] == pytest.approx(want, abs=0.004), i
+        assert f["cx"] == pytest.approx((want[0] + want[2]) / 2, abs=0.004)
+    # One tile scan on the first frame, then one region-of-interest look per frame.
+    assert len(calls) <= len(face.tiles()) + n
+    med = face.median_of(frames)
+    assert (
+        TILE[0] / 1920 < med["cx"] < TILE[2] / 1920 and TILE[1] / 1080 < med["cy"] < TILE[3] / 1080
+    )
+
+
+def test_small_pass_scans_at_most_every_half_second_and_keeps_found_frames():
+    fps = 10.0
+    frames = [{"t": i / fps, "found": False, "box": None} for i in range(20)]
+    frames[0] = {"t": 0.0, "found": True, "box": [0.3, 0.2, 0.7, 0.8], "cx": 0.5, "cy": 0.5,
+                 "blink": 0.0, "gaze_off": 0.0}  # fmt: skip
+    blank = np.full((1080, 1920, 3), 40, np.uint8)
+    calls = []
+    stats = face.small_pass(frames, iter([blank] * 20), _fake_find(calls), fps)
+    assert stats["found"] == 0 and frames[0]["found"] and "small" not in frames[0]
+    scans = 4  # frames 1, 6, 11, 16 (every 0.5 s)
+    assert len(calls) == 1 + scans * len(face.tiles())  # + one region look after frame 0
+
+
+def test_tiles_cover_the_frame_and_roi_stays_inside():
+    ts = face.tiles()
+    assert len(ts) == 16 and min(t[0] for t in ts) == 0 and max(t[2] for t in ts) == 1.0
+    r = face.roi([0.95, 0.9, 0.99, 0.98], 16 / 9)
+    assert 0 <= r[0] < r[2] <= 1 and 0 <= r[1] < r[3] <= 1
+    assert (r[2] - r[0]) * 1920 == pytest.approx((r[3] - r[1]) * 1080)  # square in px
+
+
+def test_old_face_json_is_read_but_analysed_again(tmp_path):
+    job = tmp_path / "job"
+    (job / "work").mkdir(parents=True)
+    (job / "input").mkdir()
+    (job / "input" / "a.mp4").write_bytes(b"x")
+    doc = _face_doc([(0.0, 0.5, 0.5)]) | {"version": 1, "source": "input/a.mp4", "blinks": []}
+    (job / "work" / "face.json").write_text(json.dumps(doc))
+    assert face.load_face(job, "input/a.mp4") is not None  # readers accept version 1
+    assert face.FACE_VERSION == 2 and 1 in face.READ_VERSIONS
+
+
+# A real face for the detector: set VIDEOCUT_TEST_FACE_CLIP to a clip of a person talking
+# (not part of the repository). It is shrunk into the tile of a generated call frame.
+FACE_CLIP = os.environ.get("VIDEOCUT_TEST_FACE_CLIP")
+
+
+@pytest.mark.media
+@pytest.mark.skipif(not REAL_MODEL.is_file(), reason="face model not installed")
+@pytest.mark.skipif(not FACE_CLIP or not Path(FACE_CLIP).is_file(), reason="no face clip")
+def test_real_detector_finds_the_face_in_a_small_call_tile(capsys, tmp_path, videocut_home):
+    (videocut_home / "models").mkdir(parents=True)
+    (videocut_home / "models" / face.MODEL).symlink_to(REAL_MODEL)
+    call = tmp_path / "call.mp4"
+    x0, y0, x1, y1 = TILE
+    clips._ff(
+        "-f", "lavfi", "-i", f"color=c=0x282828:s={CALL[0]}x{CALL[1]}:r=30:d=4",
+        "-i", FACE_CLIP, "-filter_complex",
+        f"[1:v]scale={x1 - x0}:{y1 - y0}:force_original_aspect_ratio=increase,"
+        f"crop={x1 - x0}:{y1 - y0}[t];[0:v]drawbox=x=60:y=60:w=1280:h=960:c=0xC8C8C8:t=fill[b];"
+        f"[b][t]overlay={x0}:{y0}:shortest=1[v]",
+        "-map", "[v]", "-map", "1:a?", "-t", "4", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", str(call),
+    )  # fmt: skip
+    code, s, _ = run_tool(capsys, "job", "new", str(call), "--id", "call")
+    code, s, out = run_tool(capsys, "face", "--job", s["job"])
+    assert code == 0, s
+    assert s["small_pass"] and s["found_pct"] >= 50, out
+    m = s["median"]
+    assert x0 / CALL[0] < m["cx"] < x1 / CALL[0] and y0 / CALL[1] < m["cy"] < y1 / CALL[1]

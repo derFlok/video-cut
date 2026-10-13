@@ -14,6 +14,8 @@ screen segment it overlaps, and by a props.redact box of each screenshot_frame o
 Blink warnings (never a failure): with a current work/face.json, every segment `in`/`out`
 inside a blink (+-1 frame) is reported with the nearest blink-free time within +-150 ms that
 also lies outside every word of work/words.json (when present) as a suggestion.
+Readability warnings (never a failure): a screen window whose UI text would be lower than
+_layouts.TEXT_MIN_PX output px is reported as `screen_text_small` with the zoom it needs.
 """
 
 import json
@@ -21,6 +23,7 @@ from pathlib import Path
 
 from .. import redaction
 from ..edl import EdlError, blink_warnings, load, read_sync
+from . import _layouts
 from .common import ToolError, job_parent, resolve_job, run_tool
 from .face import load_face
 from .job import redaction_enforced
@@ -62,7 +65,7 @@ def check(args) -> dict:
             for err in errs:
                 print(err)
             raise ToolError(f"{len(errs)} problem(s) in {path.name}: " + "; ".join(errs[:5]))
-    warnings = _blinks(job, edl, duration) if job is not None else []
+    warnings = _blinks(job, edl, duration) + _text(job, edl) if job is not None else []
     for w in warnings:
         print(f"warning: {w}")
     points = edl.cut_points()
@@ -96,6 +99,26 @@ def _blinks(job: Path, edl, duration: float | None) -> list[str]:
         hint = f"try {w['suggest']}" if w["suggest"] is not None else "no blink-free time near"
         t0, t1 = w["blink"]
         out.append(f"{w['path']}: {w['t']} falls in a blink {t0}-{t1}; {hint}")
+    return out
+
+
+def _text(job: Path, edl) -> list[str]:
+    if all(s.layout == "face" for s in edl.segments):
+        return []
+    try:
+        screen = tuple(_layouts.probe_screen(_layouts.screen_source(job))["size"])
+    except ToolError:
+        return []  # no screen recording: the layout errors say so
+    out = []
+    for k, s in enumerate(edl.segments):
+        if s.layout == "face":
+            continue
+        for d in _layouts.readability(s, screen, tuple(edl.size)):
+            if d["flags"]:
+                out.append(
+                    f"segments[{k}]: screen_text_small: UI text about {d['text_px']} px high "
+                    f"at {d['t']}s (zoom {d['zoom']}x); readable from zoom {d['readable_zoom']}x"
+                )
     return out
 
 

@@ -1,5 +1,9 @@
 """Product-demo layouts of `videocut tool render`: per EDL segment "layout" (BRIEF §6).
 
+The geometry follows the output size (the job's format, _format.py); its shape decides
+(`shape`: "portrait" h/w > 1.2, "landscape" w/h > 1.2, "square" otherwise). Portrait
+(9:16, 4:5):
+
     face    the camera, framed as before (render's original path, unchanged)
     screen  the ORIGINAL screen recording (job.json "screen", not the proxy) fills the frame
             width, vertically centred within the safe zones, on the brand's colors.bg
@@ -9,6 +13,33 @@
             corner on the side away from the zoom targets; the strip below the inset is
             left free for the captions
     split   screen view in the top SPLIT_TOP of the frame, the speaker below (face-centred)
+
+Landscape (16:9) and square (1:1):
+
+    screen  the view fills the frame (landscape) or the height between the top and bottom
+            safe zones (square), letterboxed in colors.bg where the aspects differ
+    pip     like "screen", plus the speaker as a round bubble (PIP_BUBBLE of the frame
+            height) in the bottom-right corner, just above the caption zone (bottom safe
+            zone) and inside the side zone; in the bottom-left corner when that one covers
+            less of the zoom targets
+    split   landscape: side by side, the screen view fitted into the left SPLIT_SIDE of the
+            width (vertically centred), the speaker filling the right part (face-centred);
+            square: stacked like portrait
+
+Speaker crop (pip inset, split speaker part): centred on the face (the segment's own face
+median when it has enough face frames, else the global one) and as tight as head and
+shoulders need (face height x PIP_FACE), but never so tight that the part shows fewer than
+SPEAKER_MIN_PX source px per output px at the EDL size; the EDL crop zoom (max 2.0) does
+not limit it. Without a face: portrait pip a square of PIP_NO_FACE x the camera's short
+side, otherwise the segment's crop. Every speaker crop's source px per output px is
+reported (plan_all "speaker"), a warning when it upscales (< 1).
+
+Readability (`readability`): UI text of a screen recording is taken as TEXT_PT logical px
+high, ui_scale(screen) source px per logical px (HiDPI recordings, long side >= HIDPI_MIN,
+count 2). Its estimated height in output px for a window w source px wide shown in a view
+v px wide is TEXT_PT * ui_scale * v / w; below TEXT_MIN_PX it is flagged
+`screen_text_small` (information for the cut agent, never a failure: zoom closer, or pick
+a wider format).
 
 Time: segment in/out stay CAMERA time; the screen frame shown at camera time t is screen
 time t + work/sync.json offset_s (+ drift_ppm applied at the segment start). Screen time 0
@@ -46,16 +77,25 @@ from pathlib import Path
 
 from .. import brand
 from .. import edl as edl_mod
-from ._geometry import Window, crop_window, safe_zones
+from ._format import safe_zones
+from ._geometry import Window, crop_window, overlap
 from .common import ToolError, binary, read_job, run
+from .face import segment_box
 
 LAYOUTS = edl_mod.LAYOUTS
 EASE_S = 0.6  # length of a zoom move
-PIP_SIZE = 0.34  # inset side, fraction of the output width
-PIP_RADIUS = 0.22  # inset corner radius, fraction of its side
-PIP_FACE = 2.6  # inset camera crop side = face box height x this
+PIP_SIZE = 0.34  # portrait: inset side, fraction of the output width
+PIP_RADIUS = 0.22  # portrait: inset corner radius, fraction of its side
+PIP_BUBBLE = 0.26  # landscape/square: inset side, fraction of the output height
+BUBBLE_RADIUS = 0.5  # landscape/square: a circle
+PIP_FACE = 2.6  # speaker crop height = face box height x this (head and shoulders)
 PIP_NO_FACE = 0.8  # without a face: crop side = this x the camera's short side
-SPLIT_TOP = 0.58  # split: the screen part, fraction of the output height
+SPEAKER_MIN_PX = 0.75  # speaker crop: at least this many source px per output px
+SPLIT_TOP = 0.58  # portrait/square split: the screen part, fraction of the output height
+SPLIT_SIDE = 0.64  # landscape split: the screen part, fraction of the output width
+TEXT_PT = 13  # typical UI text height, logical px
+TEXT_MIN_PX = 18  # UI text lower than this on the output is hard to read
+HIDPI_MIN = 2700  # recordings with a long side this large count as 2x (HiDPI) screens
 DEFAULT_BRAND = brand.EXAMPLE_ID
 
 
@@ -95,6 +135,8 @@ class Segment:
     inset: Rect | None = None
     face: Rect | None = None  # split: where the speaker goes
     camera: Window | None = None  # camera crop for the inset / the speaker part
+    radius: float = PIP_RADIUS  # inset corner radius, fraction of its side
+    speaker_px: float | None = None  # camera source px per output px of the speaker part
     focus: list[list[float]] = field(default_factory=list)  # zoom targets, output px
     screen: tuple[int, int] = (0, 0)  # size of the screen recording
 
@@ -170,16 +212,42 @@ def _even(v: float) -> int:
     return max(2, int(round(v / 2)) * 2)
 
 
+def shape(out: tuple[int, int]) -> str:
+    """ "portrait" (h/w > 1.2), "landscape" (w/h > 1.2) or "square"."""
+    w, h = out
+    return "portrait" if h / w > 1.2 else "landscape" if w / h > 1.2 else "square"
+
+
+def _stacked(layout: str, out: tuple[int, int]) -> bool:
+    """Whether `layout` stacks the view above the speaker / inset (portrait rules)."""
+    form = shape(out)
+    return form == "portrait" or (form == "square" and layout == "split")
+
+
+def _fit(area: Rect, screen: tuple[int, int]) -> Rect:
+    """The largest even-sized rect of the screen's aspect centred in `area`."""
+    w, h = area.w // 2 * 2, _even(area.w * screen[1] / screen[0])
+    if h > area.h:
+        w, h = min(_even(area.h * screen[0] / screen[1]), area.w // 2 * 2), area.h // 2 * 2
+    return Rect(area.x + (area.w - w) // 2, area.y + (area.h - h) // 2, w, h)
+
+
 def view_rect(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> Rect:
     """Where the screen view goes in an `out`-sized frame (aspect of the screen)."""
     ow, oh = out
     z = safe_zones(out)
+    if not _stacked(layout, out):
+        if layout == "split":  # landscape: the left part
+            return _fit(Rect(0, 0, _even(ow * SPLIT_SIDE), oh), screen)
+        if shape(out) == "square":
+            return _fit(Rect(0, z["top"], ow, oh - z["top"] - z["bottom"]), screen)
+        return _fit(Rect(0, 0, ow, oh), screen)
     top, bottom = z["top"], (round(oh * SPLIT_TOP) if layout == "split" else oh - z["bottom"])
     below = _even(ow * PIP_SIZE) + _gap(out) if layout == "pip" else 0  # room for the inset
     room = bottom - top - below
     w, h = ow, _even(ow * screen[1] / screen[0])
     if h > room:  # a tall screen: fit the height instead
-        w, h = _even(room * screen[0] / screen[1]), _even(room)
+        w, h = _even(room * screen[0] / screen[1]), room // 2 * 2
     y = top if layout == "pip" else top + (room - h) // 2  # pip: caption room below the inset
     return Rect((ow - w) // 2, y, w, h)
 
@@ -188,13 +256,29 @@ def _gap(out: tuple[int, int]) -> int:
     return safe_zones(out)["side"] // 2
 
 
+def inset_side(out: tuple[int, int]) -> int:
+    """Side of the pip inset in px."""
+    return _even(out[0] * PIP_SIZE) if _stacked("pip", out) else _even(out[1] * PIP_BUBBLE)
+
+
 def inset_rects(out: tuple[int, int], view: Rect) -> list[Rect]:
-    """The pip inset's places below the pip `view` (right first), inside the safe zones."""
-    ow, _ = out
-    side = safe_zones(out)["side"]
-    s = _even(ow * PIP_SIZE)
-    y = view.y + view.h + _gap(out)
-    return [Rect(ow - side - s, y, s, s), Rect(side, y, s, s)]
+    """The pip inset's places (right first), inside the safe zones: portrait below the pip
+    `view`, landscape/square in the bottom corners above the caption zone."""
+    ow, oh = out
+    z = safe_zones(out)
+    s = inset_side(out)
+    y = view.y + view.h + _gap(out) if _stacked("pip", out) else oh - z["bottom"] - s
+    return [Rect(ow - z["side"] - s, y, s, s), Rect(z["side"], y, s, s)]
+
+
+def speaker_rect(out: tuple[int, int]) -> Rect:
+    """Split: where the speaker goes (below the screen part, or right of it)."""
+    ow, oh = out
+    if _stacked("split", out):
+        top = round(oh * SPLIT_TOP)
+        return Rect(0, top, ow, oh - top)
+    left = _even(ow * SPLIT_SIDE)
+    return Rect(left, 0, ow - left, oh)
 
 
 def window_for(
@@ -326,17 +410,50 @@ def plan_segment(
     s.screen = screen
     crop = seg.crop
     cx, cy = (crop.cx, crop.cy) if crop else (0.5, 0.5)
+    box = segment_box(face, seg.start, seg.end) if face else None
     if layout == "pip":
         right, left = inset_rects(out, view)
-        # The side away from the zoom targets (their mean centre); right without any.
-        mid = sum((b[0] + b[2]) / 2 for _, _, b in keys) / len(keys) if keys else 0
-        s.inset = left if mid > 0.5 else right
-        s.camera = _inset_crop(camera, cx, cy, face)
+        if _stacked(layout, out):
+            # The side away from the zoom targets (their mean centre); right without any.
+            mid = sum((b[0] + b[2]) / 2 for _, _, b in keys) / len(keys) if keys else 0
+            s.inset = left if mid > 0.5 else right
+        else:  # the corner that covers less of the zoom targets; right on a tie
+            hidden = [sum(overlap(r.box(), f) for f in focus) for r in (right, left)]
+            s.inset = left if hidden[1] < hidden[0] else right
+            s.radius = BUBBLE_RADIUS
+        side = inset_side(full_out)
+        if box is None and _stacked(layout, out):
+            s.camera = _inset_crop(camera, cx, cy, face)
+        else:
+            s.camera = speaker_crop(camera, (side, side), box, cx, cy, crop.zoom if crop else 1.0)
+        s.speaker_px = round(s.camera.h / side, 2)
     elif layout == "split":
-        top = round(out[1] * SPLIT_TOP)
-        s.face = Rect(0, top, out[0], out[1] - top)
-        s.camera = crop_window(camera, (s.face.w, s.face.h), cx, cy, crop.zoom if crop else 1.0)
+        s.face = speaker_rect(out)
+        part = speaker_rect(full_out)
+        zoom = crop.zoom if crop else 1.0
+        s.camera = speaker_crop(camera, (part.w, part.h), box, cx, cy, zoom)
+        s.speaker_px = round(s.camera.h / part.h, 2)
     return s, clamped
+
+
+def speaker_crop(
+    camera: tuple[int, int],
+    part: tuple[int, int],
+    box: list[float] | None,
+    cx: float,
+    cy: float,
+    zoom: float,
+) -> Window:
+    """Camera crop of the aspect of `part` (the speaker part at the EDL size) centred on the
+    face `box` (normalised), face height x PIP_FACE high, at least SPEAKER_MIN_PX source
+    px per output px; without a face the segment crop (cx, cy, zoom) as before."""
+    if not box:
+        return crop_window(camera, part, cx, cy, zoom)
+    largest = crop_window(camera, part, 0.5, 0.5, 1.0)
+    want = (box[3] - box[1]) * camera[1] * PIP_FACE
+    h = min(max(want, part[1] * SPEAKER_MIN_PX), largest.h)
+    fx, fy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    return crop_window(camera, part, fx, fy, largest.h / h)
 
 
 def with_redaction(edl, cands: list[dict]):
@@ -370,13 +487,14 @@ def segment_offset(sync_doc: dict, start: float, duration: float, fps) -> tuple[
 def plan_all(job: Path, edl, plan, camera: tuple[int, int], face: dict | None) -> dict:
     """Every non-face range of `plan` (a _render_plan.Plan of the framed `edl`) drawn:
     {"segs": {range index: Segment}, "clamped": [{"segment", "t", "zoom", "max_zoom"}],
-    "screen": the recording, "info": probe_screen, "sync": work/sync.json}. Shared by
-    render, overlays (where the screen view and the speaker are) and verify."""
+    "speaker": [{"segment", "layout", "px_ratio"}], "warnings": [str] (upscaled speaker
+    crops), "screen": the recording, "info": probe_screen, "sync": work/sync.json}. Shared
+    by render, overlays (where the screen view and the speaker are) and verify."""
     src = screen_source(job)
     sync_doc = sync(job)
     info = probe_screen(src)
     screen_frames = math.floor(info["duration"] * plan.fps)
-    segs, clamped = {}, []
+    segs, clamped, speaker, warnings = {}, [], [], []
     for i, r in enumerate(plan.ranges):
         if r.layout == "face":
             continue
@@ -394,7 +512,56 @@ def plan_all(job: Path, edl, plan, camera: tuple[int, int], face: dict | None) -
             )
         segs[i] = seg
         clamped += [{"segment": r.seg, **c} for c in cl]
-    return {"segs": segs, "clamped": clamped, "screen": src, "info": info, "sync": sync_doc}
+        if seg.speaker_px is not None:
+            speaker.append({"segment": r.seg, "layout": r.layout, "px_ratio": seg.speaker_px})
+            if seg.speaker_px < 1:
+                warnings.append(
+                    f"segment {r.seg} ({r.layout}): the speaker is upscaled "
+                    f"({seg.speaker_px} camera px per output px)"
+                )
+    return {
+        "segs": segs, "clamped": clamped, "speaker": speaker, "warnings": warnings,
+        "screen": src, "info": info, "sync": sync_doc,
+    }  # fmt: skip
+
+
+def ui_scale(screen: tuple[int, int]) -> int:
+    """Source px per logical px of a screen recording (heuristic: HiDPI = 2)."""
+    return 2 if max(screen) >= HIDPI_MIN else 1
+
+
+def text_px(screen: tuple[int, int], view_w: float, win_w: float) -> float:
+    """Estimated UI text height in output px for a window `win_w` source px wide shown
+    `view_w` px wide."""
+    return TEXT_PT * ui_scale(screen) * view_w / win_w
+
+
+def readable_zoom(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> float:
+    """Zoom (1 / shown share of the screen width) at which UI text reaches TEXT_MIN_PX."""
+    view = view_rect(layout, out, screen)
+    return TEXT_MIN_PX / text_px(screen, view.w, screen[0])
+
+
+def readability(seg, screen: tuple[int, int], out: tuple[int, int]) -> list[dict]:
+    """Per window of the non-face EDL segment `seg` (the whole screen until its first key,
+    then each screen_zoom key, sharpness-clamped as render draws it) at the EDL size `out`:
+    [{"t", "zoom", "text_px", "readable_zoom", "flags"}]; flag `screen_text_small` when the
+    text is lower than TEXT_MIN_PX."""
+    view = view_rect(seg.layout, out, screen)
+    aspect = screen[0] / screen[1]
+    full = min(screen[0], screen[1] * aspect)
+    keys = sorted(seg.screen_zoom, key=lambda k: k["t"])
+    wins = [] if keys and keys[0]["t"] <= seg.start else [(seg.start, full)]
+    for k in keys:
+        wins.append((k["t"], window_for(k["box"], screen, aspect, min(view.w, full))[0][2]))
+    need = round(readable_zoom(seg.layout, out, screen), 2)
+    out_docs = []
+    for t, w in wins:
+        px = round(text_px(screen, view.w, w), 1)
+        flags = ["screen_text_small"] if px < TEXT_MIN_PX else []
+        out_docs.append({"t": round(t, 3), "zoom": round(full / w, 2), "text_px": px,
+                         "readable_zoom": need, "flags": flags})  # fmt: skip
+    return out_docs
 
 
 def _inset_crop(camera: tuple[int, int], cx: float, cy: float, face: dict | None) -> Window:
@@ -456,9 +623,10 @@ def screen_view(seg: Segment, fps: Fraction, bg: str, matrix: str, to_sdr: str) 
     return f
 
 
-def mask(side: int, fps: Fraction, frames: int) -> str:
-    """Source filter (no labels) of a rounded-square alpha mask, anti-aliased."""
-    c, r = side / 2, side * PIP_RADIUS
+def mask(side: int, fps: Fraction, frames: int, radius: float = PIP_RADIUS) -> str:
+    """Source filter (no labels) of a rounded-square alpha mask (corner `radius` of the
+    side; 0.5 = a circle), anti-aliased."""
+    c, r = side / 2, side * radius
     edge = f"hypot(max(abs(X+0.5-{c})-{c - r},0),max(abs(Y+0.5-{c})-{c - r},0))"
     return (
         f"color=c=black:s={side}x{side}:r={fps},trim=end_frame={frames},format=gray,"
@@ -511,7 +679,7 @@ def compose(
         lines += [
             f"[{camera_label}]{cam},crop={w.w}:{w.h}:{w.x}:{w.y},"
             f"scale={r.w}:{r.h}:flags=lanczos,format=yuva420p[pc{i}];",
-            mask(r.w, fps, n) + f"[pm{i}];",
+            mask(r.w, fps, n, seg.radius) + f"[pm{i}];",
             f"[pc{i}][pm{i}]alphamerge[pi{i}];",
             base + f"[ps{i}];",
             f"[ps{i}][pi{i}]overlay=x={r.x}:y={r.y},setsar=1[vc{i}];",
