@@ -51,6 +51,7 @@ The exit code is 0 whenever the checks ran.
 """
 
 import json
+import math
 import re
 import subprocess
 from itertools import pairwise
@@ -520,6 +521,25 @@ def bad_stretches(reel: Path, duration: float, box: list[int] | None = None) -> 
     return sorted(found, key=lambda s: s["t0"])
 
 
+def merge_spans(spans: list[tuple[float, float]], slack: float) -> list[tuple[float, float]]:
+    """Time spans with overlapping or touching ones (within `slack`) joined."""
+    out: list[tuple[float, float]] = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1] + slack:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def inscribed(box: list[int]) -> list[int]:
+    """The even-sized square inside the round bubble `box` (its corners show the screen)."""
+    x0, y0, x1, y1 = box
+    side = max(2, int(min(x1 - x0, y1 - y0) / math.sqrt(2)) // 2 * 2)
+    cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+    return [cx - side // 2, cy - side // 2, cx - side // 2 + side, cy - side // 2 + side]
+
+
 def _check(ok: bool, **fields) -> dict:
     return {"ok": bool(ok), **fields}
 
@@ -625,20 +645,20 @@ def verify(args) -> dict:
     # held tail). A static end card is not a frozen picture (one frame of slack each end).
     sched = _plates.for_job(job, edl, edl.output_duration()) if edl is not None else None
     plates = full_frame_spans(sched.overlays) if sched is not None else []
+    still = plates + still_screen
+    if bubbles:  # touching spans count as one (a still screen running into a pip stretch)
+        still = merge_spans(still + [(a, b) for a, b, _ in bubbles], 1 / fps)
     stretches = [
         s
         for s in bad_stretches(reel, video_dur)
         if not (
             s["kind"] == "frozen"
-            and any(
-                a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps
-                for a, b in plates + still_screen + [(a, b) for a, b, _ in bubbles]
-            )
+            and any(a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in still)
         )
     ]
     for box in {tuple(b) for _, _, b in bubbles}:  # a frozen speaker inside the bubble
-        spans = [(a, b) for a, b, bb in bubbles if tuple(bb) == box]
-        for s in bad_stretches(reel, video_dur, list(box)):
+        spans = merge_spans([(a, b) for a, b, bb in bubbles if tuple(bb) == box], 1 / fps)
+        for s in bad_stretches(reel, video_dur, inscribed(list(box))):
             for a, b in spans:
                 t0, t1 = max(s["t0"], a), min(s["t1"], b)
                 if s["kind"] == "frozen" and t1 - t0 > MAX_STRETCH_S:

@@ -200,7 +200,7 @@ def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[di
                     "t1": t1,
                     "layout": seg.layout,
                     "screen": None if fills else seg.view.box(),
-                    "focus": focus,
+                    **({"focus": focus} if fills else {}),
                     "speaker": speaker,
                 }
             )

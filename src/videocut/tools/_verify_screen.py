@@ -307,13 +307,15 @@ def load_views(job: Path) -> list[dict]:
         focus = v.get("focus") if isinstance(v.get("focus"), list) else []
         for b in [v, *(f for f in focus if isinstance(f, dict))]:
             box = b.get("screen", b.get("box"))
-            if isinstance(box, list) and len(box) == 4 and _num(b.get("t0"), b.get("t1")):
+            if isinstance(box, list) and len(box) == 4 and _num(b.get("t0"), b.get("t1"), *box):
                 out.append({"t0": b["t0"], "t1": b["t1"], "screen": box})
     return out
 
 
 def _num(*vals) -> bool:
-    return all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals)
+    return all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals
+    )
 
 
 def decision_gaps(job: Path, data: dict) -> list[dict]:

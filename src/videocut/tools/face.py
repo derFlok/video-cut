@@ -164,7 +164,9 @@ def small_face_zoom(face: dict, size: tuple[int, int]) -> float:
     a video-call tile) is framed closer, up to SMALL_FACE_ZOOM_MAX (a portrait crop of a
     landscape camera is close already)."""
     box = (face.get("median") or {}).get("box")
-    if not box or size[1] / size[0] > 1.2:
+    if size[1] / size[0] > 1.2 or not (isinstance(box, list) and len(box) == 4):
+        return 1.0
+    if not all(_unit(v) for v in box):
         return 1.0
     h = box[3] - box[1]
     if not 0 < h < SMALL_FACE:

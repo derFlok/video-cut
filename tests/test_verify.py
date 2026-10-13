@@ -296,3 +296,11 @@ def test_caption_on_the_end_card_and_end_card_over_speech_are_flagged():
     # A caption drawn over the plate, and a plate before the last word + 0.2 s.
     out = verify.overlay_checks([{**plate, "drawn": [5.03, 7.0]}, cap], [], (1080, 1920), 4.9)
     assert [o["flags"] for o in out] == [["plate_over_speech"], ["caption_on_plate"]]
+
+
+def test_merge_spans_and_the_bubble_square():
+    from videocut.tools.verify import inscribed, merge_spans
+
+    assert merge_spans([(3.0, 4.0), (0.0, 1.0), (1.02, 2.0)], 1 / 30) == [(0.0, 2.0), (3.0, 4.0)]
+    sq = inscribed([1563, 670, 1843, 950])  # a 280 px bubble
+    assert sq[2] - sq[0] == sq[3] - sq[1] == 196 and sq[0] > 1563 and sq[3] < 950

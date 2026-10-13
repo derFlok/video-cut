@@ -298,6 +298,7 @@ def test_layouts_overlays_doc(capsys, material):
     starts = _starts()
     assert [v["t0"] for v in views] == [round(starts[i] / 30, 6) for i in (1, 2, 3, 4)]
     pip, split = views[1], views[2]
+    assert all("focus" not in v for v in views)  # 9:16: the whole view is kept clear
     assert pip["screen"] == _seg_plan(2).view.box() and pip["speaker"] == _seg_plan(2).inset.box()
     assert split["speaker"][1] >= split["screen"][3]  # the speaker is below the screen view
     # Face samples: the camera face only in the face segment, the speaker area in pip/split.

@@ -191,7 +191,7 @@ def _overlay_size(path: Path) -> tuple[int, int] | None:
     try:
         size = json.loads(path.read_text()).get("size")
         return (int(size[0]), int(size[1]))
-    except (OSError, ValueError, TypeError, AttributeError, IndexError):
+    except (OSError, ValueError, TypeError, AttributeError, IndexError, OverflowError):
         return None
 
 
