@@ -102,8 +102,8 @@ def phase_table(job: Path) -> list[dict]:
     revs = job / "work" / "revisions.jsonl"
     for line in revs.read_text().splitlines() if revs.is_file() else []:
         r = json.loads(line)
-        rows.append({"phase": f"revision #{r.get('n')}", "cost_usd": r.get("cost"),
-                     "turns": r.get("turns"), "wall_s": r.get("wall_s"), "ok": r.get("ok")})  # fmt: skip
+        row = {k: r.get(k) for k in ("turns", "wall_s", "ok")}
+        rows.append({"phase": f"revision #{r.get('n')}", "cost_usd": r.get("cost"), **row})
     return rows
 
 
