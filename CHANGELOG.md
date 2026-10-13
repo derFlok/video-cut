@@ -231,3 +231,103 @@
   Verify is ok.
 - Phase 2 accepted by the speaker on 2026-10-12: all three brand reels (brand-a, brand-b,
   brand-c) approved as they are after the calm caption pacing; no further corrections.
+
+### Added — Product demos: screen recording, sync, layouts, screenshot walkthroughs
+- `job new --screen` / `job screen`; screen ingest (`screen_probe.json`, `screen_audio.wav`,
+  CFR 30 fps `screen_proxy.mp4`); `tool sync` (audio xcorr + GCC-PHAT, drift ppm, clap
+  fallback, `--offset` manual) → `work/sync.json`; EDL segment `layout` face|screen|pip|split,
+  `screen_zoom` keyframes, `redact` blocks, overlap check in `edl check`.
+- `tool screen`: activity, ring/stop clicks, scenes, zoom targets with `max_zoom`
+  (`work/screen.json`); `tool sheet screen`: contact strip with analysis overlays.
+- Render draws per-segment layouts screen/pip/split from the original screen recording at
+  camera time + offset; eased `screen_zoom` (smoothstep 0.6 s); redact blocks in brand bg
+  before scaling; sharpness guard (`screen_zoom_clamped`); pip inset below the screen view;
+  split 58/42; face-only render unchanged (golden test).
+- One source of truth: render, overlays and verify read `layout`, `screen_zoom` and `redact`
+  from `edl.Segment` (the raw-dict reader in `_layouts` is gone), and render and overlays
+  check the sync overlap like `edl check`. `_layouts.plan_all` is the one plan of the drawn
+  screen segments for render, overlays and verify.
+- `videocut run <camera> --screen <file>`: demo prep ingest (camera + screen) → sync →
+  screen → face → transcribe → candidates → `sheet contact` + one `sheet screen` overview
+  (no times = the whole recording). A failed or low-confidence sync (< 0.3) stops the run
+  with the `videocut tool sync --offset` command to run.
+- `tool screen` summary: camera times of zoom targets and clicks from the current sync.json,
+  and each target's `view` box.
+- Overlays in screen layouts: overlays.json `views` (screen view + speaker area per
+  stretch); the renderer keeps every caption and scene off the screen view, the face track
+  there is the speaker area, so captions sit below the screen view, outside the speaker.
+  Verify flag `overlay_on_screen`.
+- Verify for demos: redaction sampled in up to 5 frames per block through the drawn zoom
+  window (`redaction_missing`), screen time mapping checked against the recording at ±0.5 s
+  / ±1 s (`screen_time_mismatch`), `screen_overlap` check, `screen_zoom_clamped` as info.
+  View changes count as reframes, a still screen is not a frozen picture, blinks only where
+  the camera shows.
+- Skills: `plan` gets a *Views* section (face for hook/close/emotional moments; screen, pip,
+  split per step; zoom targets with reasons within `max_zoom`; redaction of anything that
+  looks like personal or customer data) and a *Screenshots* table for screenshot-only
+  demos; `cut` writes `layout`/`screen_zoom`/`redact` from the approved plan (≥ 2–4 s
+  between view changes, never above `max_zoom`); `overlays` keeps items off screen views.
+- Screenshot-only demos: `job new --asset` / `run --asset` take many files; `tool sheet
+  assets` numbers them on one contact sheet (≤ 1080×1920) with size and orientation.
+  Portrait screenshots in `screenshot_frame` use the safe height (minus room for a caption
+  block) instead of a landscape-sized box and may cover the speaker (`stage`).
+- README / README.de: "Recording a product demo" / "Produktdemo aufnehmen".
+
+- Personal data is a human decision at the plan gate: the plan writes candidates to
+  `work/redaction.json` (and numbered in project.md); `videocut run` asks "Demo data? [a]ll
+  demo / [r]edact all / [s]elect", `--demo-data` = all demo; `videocut tool job redaction
+  --all-demo | --redact-all | --redact 1,3` (human only). The decision is stored outside the
+  job folder with the SHA-256 of the list; a changed list invalidates it. Safe default: all
+  candidates redacted, and render/overlays add them even when the EDL forgot one;
+  `edl check` and verify flag `redaction_missing`.
+
+### Fixed — Product demos
+
+- Moving screen zooms were one frame ahead of the plan (ffmpeg `perspective` counts `in`
+  from 1); verify then saw a redact block "not solid" during fast zoom moves and the cut run
+  dropped its zoom-outs to get past it. Now frame-exact, with a test.
+- A screenshot's personal data is matched by the file, not the spelling: `./input/x.png`,
+  `file://…`, `work/../input/x.png` or a copy of the file are redacted (and checked) too.
+- A changed personal-data decision makes `videocut run` cut and render again (job.json
+  `cut.redaction_sha256`); before, the old reel stayed "done".
+- A portrait screenshot is laid out before the captions, at the top of the safe area, so
+  the caption fits below it (in the end-to-end run the phone screenshot collided with the
+  caption and was dropped).
+- Render no longer adds a candidate's redact block twice when the EDL already has it.
+- `videocut run` tells the cut run why it cuts again (`--recut`, changed plan or decision),
+  so it replaces the EDL instead of stopping to protect the earlier overlays; a cut record
+  from before `redaction_sha256` keeps its reel.
+
+- CI `lint-and-test` (red on main since #10): the unit tests ran without the project's
+  dependencies (`--no-project --with pytest`, 14 collection errors for numpy). Now
+  `uv sync --frozen` installs the locked Linux wheels; MLX imports are checked after the
+  model and fail with a clear message off Apple silicon; `videocut run` takes its start time
+  from the file clock (Linux stamps files from a coarser clock than `time.time()`, so a
+  fresh render looked older than the run). Linux: 213 passed, 119 skipped (media).
+
+### Observed — Product demos (real agent runs, generated test material, brand-c locally)
+
+- Screen demo (25 s camera + screen recording with a fake e-mail and phone number, sync
+  offset 3.27 s, confidence 0.88): plan 79.7 s / 12 turns / $0.65 (2 personal-data
+  candidates, 6 screen views, zooms 1.45x and 2.66x = max_zoom, nothing clamped);
+  cut 200.0 s / 23 turns / $1.40; overlays 173.9 s / 19 turns / $0.47; wall 7:46, verify
+  not ok (an audio click at 2.73 s) and the cut dropped two zoom-outs because of the
+  one-frame zoom bug (fixed above). After the fixes, with a human decision (`job redaction
+  --redact-all`) and `--recut`: cut 153.5 s / 20 turns / $0.58, overlays 164.7 s / 15 turns
+  / $0.37, wall 5:19, verify ok, render.json redaction source `decision`, 19.9 s reel.
+- Screenshots only (20 s camera + 3 screenshots, one portrait, one with a fake e-mail):
+  plan 75.8 s / 11 turns / $0.37 (1 candidate); cut 67.1 s / 14 turns / $0.65; overlays
+  191.5 s / 27 turns / $0.56; wall 5:48, verify ok, but the portrait screenshot was dropped
+  (caption collision, fixed above). Overlays again: 97.5 s / 17 turns / $0.37, all three
+  screenshots shown, renderer overlaps 0, e-mail covered by the default, verify ok.
+- Moving screen zooms ended in the top-left corner: `crop` after a per-frame `scale` clamps
+  x/y to its configured input size. Moving windows now go through `perspective`
+  (sub-pixel, eval=frame); a test checks that the zoomed view shows the target region.
+- Review fixes: a manual `sync --offset` is reused by later runs (the only way for a screen
+  recording without audio; `videocut run` looped on the sync stop); redact ranges get one
+  frame of slack on each side plus the drift over the segment, and the measured drift is
+  applied per segment; the screen stream starts at its first video frame
+  (`setpts=PTS-STARTPTS`, as sync and the proxy count); verify fails closed when the screen
+  checks cannot run or a demo reel's EDL is unreadable.
+- `work/screen.json` is removed with the other screen outputs when the screen recording is
+  replaced (a hard link keeps the old mtime, so freshness could not tell).

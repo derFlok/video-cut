@@ -21,6 +21,8 @@ MODULES = [
     "brand",
     "captions",
     "overlays",
+    "sync",
+    "screen",
 ]
 
 

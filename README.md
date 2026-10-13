@@ -66,9 +66,39 @@ Your brands, projects and downloaded models live in `~/VideoCut` (change with `V
    Nothing on the face or in the app's UI zones, which is checked automatically. Then it
    renders the final reel. `work/overlay_report.md` lists the overlays.
 
-Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--asset FILE` (a
-screenshot for a new job), `--max-turns N`. Time, turns, cost and tokens of
-every Claude run are logged in `work/runs.jsonl`.
+Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--screen FILE` (a
+screen recording made at the same time, for a new job), `--asset FILE...` (screenshots for a
+new job; put it last), `--demo-data` (personal data the plan found is demo data), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
+logged in `work/runs.jsonl`.
+
+## Recording a product demo
+
+```bash
+.venv/bin/videocut run ~/Movies/me.mov --screen ~/Movies/screen.mov --brand my-brand
+.venv/bin/videocut run ~/Movies/me.mov --brand my-brand --asset ~/Desktop/shot-1.png ~/Desktop/shot-2.png
+```
+
+1. **Screen:** press Cmd+Shift+5, choose "Record Entire Screen" (or a part), and under
+   *Options* pick your **microphone** and turn on **Show Mouse Clicks**. The microphone track
+   lets Video Cut line the screen up with your camera recording.
+2. **Yourself:** start the camera recording of yourself **at the same time** (phone or
+   webcam), then start the screen recording. Optional: clap once in view of the camera at
+   the start; it helps when the room is noisy.
+3. Do the demo and talk as usual; stop both recordings at the end.
+4. Run the first command above. Prep syncs the two recordings (`work/sync.json`) and finds
+   clicks and changes on the screen. The plan says which parts show you, the screen, or
+   both (a small picture of you below the screen, or screen on top and you below), where to
+   zoom in, and which places may show personal data (e-mail addresses, phone numbers,
+   names). **Demo data?** You are asked at approval: all demo, redact all, or pick numbers
+   (or pass `--demo-data`). Without an answer everything listed is covered with solid
+   blocks.
+5. If the sync is unsure, the run stops and tells you how to set it by hand:
+   `videocut tool sync --job <id> --offset <seconds>` (screen time minus camera time of one
+   moment you can see or hear in both), then `videocut run <id>`.
+
+**Screenshots only:** take the screenshots (Cmd+Shift+4), record yourself talking about
+them, and run the second command. Claude matches each screenshot to the sentence about it
+and shows it with a zoom onto the part you mention; personal data in it is covered.
 
 ## Brands
 

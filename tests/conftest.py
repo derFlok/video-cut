@@ -50,3 +50,9 @@ def landscape_clip(clip_dir):
 def rotated_clip(clip_dir):
     """Landscape-coded clip that a player shows upright (phone recording)."""
     return clips.build(clip_dir, "landscape", rotate=90)
+
+
+@pytest.fixture(scope="session")
+def demo_pair(clip_dir):
+    """Camera clip + 2880x1800 VFR screen recording of the same voice, screen +3.27 s."""
+    return clips.screen_pair(clip_dir)

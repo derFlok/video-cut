@@ -2,7 +2,10 @@
 
     prep     job new (when a file is given), then the deterministic tools: ingest --denoise,
              face (face track + blinks), transcribe (also writes candidates +
-             takes_packed.md), sheet contact
+             takes_packed.md), sheet contact. A product demo (`--screen <recording>`, or
+             job.json "screen") runs ingest (camera + screen) -> sync -> screen -> face ->
+             transcribe -> sheet contact + sheet screen, and stops with a hint for
+             `tool sync --offset` when the recordings cannot be synced reliably
     plan     Claude run with the `plan` skill -> work/project.md, nothing is cut
     approve  the human reads work/project.md and approves it (prompt; `--approve` skips it)
     cut      Claude run with the `cut` skill (resumes the plan session when the plan is
@@ -36,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import agent
+from . import redaction as red
 from .paths import ROOT
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
@@ -44,11 +48,25 @@ from .tools.job import (
     is_approved,
     project_sha,
     read_approval,
+    redaction_enforced,
     revoke_approval,
 )
 
 TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
 PREP = [["ingest", "--denoise"], ["face"], ["transcribe"], ["sheet", "contact"]]
+# Product demo (job.json "screen"): ingest also prepares the screen recording, sync aligns it
+# with the camera, screen finds activity, clicks and zoom targets, and one overview sheet of
+# the screen joins the contact sheets.
+DEMO_PREP = [
+    ["ingest", "--denoise"],
+    ["sync"],
+    ["screen"],
+    ["face"],
+    ["transcribe"],
+    ["sheet", "contact"],
+    ["sheet", "screen"],
+]
+SYNC_MIN_CONFIDENCE = 0.3  # tool sync's own threshold; below it the offset is a guess
 TEMPLATES = ROOT / "templates"
 PLAN_PROMPT = (
     "Use the video-cut:plan skill to plan the edit of the Video Cut job in the current folder. "
@@ -57,6 +75,11 @@ PLAN_PROMPT = (
 CUT_PROMPT = (
     "The human approved work/project.md. Use the video-cut:cut skill to cut the Video Cut job "
     "in the current folder."
+)
+CUT_AGAIN = (
+    " The job was cut before; the human asked to cut it again ({why}): write a new "
+    "work/edl.json (segments only; captions and overlays are redone after the cut), render "
+    "and verify."
 )
 OVERLAYS_PROMPT = (
     "The human approved work/project.md and the cut is rendered. Use the video-cut:overlays "
@@ -97,7 +120,11 @@ def _main(main, argv: list[str]) -> int:
 
 
 def new_job(
-    video: Path, type_: str | None, brief: str | None, assets: list[str] | None = None
+    video: Path,
+    type_: str | None,
+    brief: str | None,
+    assets: list[str] | None = None,
+    screen: str | None = None,
 ) -> Path:
     from .cli import main
 
@@ -105,8 +132,9 @@ def new_job(
     argv = ["tool", "job", "new", str(video)]
     argv += ["--type", type_] if type_ else []
     argv += ["--brief", brief] if brief else []
-    for a in assets or []:
-        argv += ["--asset", a]
+    argv += ["--screen", screen] if screen else []
+    if assets:
+        argv += ["--asset", *assets]
     with contextlib.redirect_stdout(buf):
         code = _main(main, argv)
     lines = buf.getvalue().strip().splitlines()
@@ -117,13 +145,20 @@ def new_job(
 
 
 def open_job(
-    ref: str, type_: str | None, brief: str | None, assets: list[str] | None = None
+    ref: str,
+    type_: str | None,
+    brief: str | None,
+    assets: list[str] | None = None,
+    screen: str | None = None,
 ) -> Path:
     p = Path(ref).expanduser()
     if p.is_file():
-        return new_job(p, type_, brief, assets)
-    if assets:
-        raise RunError("--asset only works when a new job is made from a recording")
+        return new_job(p, type_, brief, assets, screen)
+    if assets or screen:
+        raise RunError(
+            "--asset/--screen only work when a new job is made from a recording "
+            "(for an existing job: `videocut tool job screen <file>`)"
+        )
     try:
         job = resolve_job(ref)
     except ToolError as e:
@@ -137,15 +172,42 @@ def open_job(
     return job
 
 
+def sync_stop(job: Path, why: str) -> RunError:
+    return RunError(
+        f"the screen recording could not be synced reliably ({why}). Find a moment you can "
+        "see or hear in both recordings (a click, a clap, a word), then set the offset by "
+        f"hand: `videocut tool sync --job {job.name} --offset <screen_time - camera_time>` "
+        f"and run `videocut run {job.name}` again"
+    )
+
+
 def prep(job: Path, steps: list[list[str]] | None = None, say=print) -> None:
-    for argv in steps if steps is not None else PREP:
+    if steps is None:
+        steps = DEMO_PREP if read_job(job).get("screen") else PREP
+    for argv in steps:
         t0 = time.monotonic()
-        s = tool(job, *argv)
+        try:
+            s = tool(job, *argv)
+        except RunError as e:
+            if argv == ["sync"]:
+                raise sync_stop(job, str(e).split(": ", 1)[-1]) from None
+            raise
+        if (
+            argv == ["sync"]
+            and s.get("method") != "manual"
+            and (s.get("confidence") or 0) < SYNC_MIN_CONFIDENCE
+        ):
+            raise sync_stop(job, f"confidence {s.get('confidence')}")
         extra = {
             k: s[k]
-            for k in ("sheets", "words", "transcribed", "denoised", "found_pct", "blinks")
+            for k in (
+                "sheets", "words", "transcribed", "denoised", "found_pct", "blinks",
+                "offset_s", "method", "confidence",
+            )
             if k in s
-        }
+        }  # fmt: skip
+        if argv == ["screen"]:
+            extra = {"clicks": s.get("clicks"), "zoom_targets": len(s.get("zoom_targets", []))}
         say(f"  {' '.join(argv):<16} {time.monotonic() - t0:5.1f}s  {extra or ''}".rstrip())
     # Claude may only read inside the job folder, so the reel contract is copied in.
     type_, dst = read_job(job).get("type") or "", job / "work" / "contract.md"
@@ -214,6 +276,17 @@ def _tokens(usage: dict | None) -> int | None:
     return sum(int(usage.get(k) or 0) for k in keys)
 
 
+def _fs_now(job: Path) -> float:
+    """Now, on the clock file mtimes use (Linux stamps files from a coarser clock than
+    time.time(), so a file written right after time.time() can look older)."""
+    mark = job / ".started"
+    mark.touch()
+    try:
+        return mark.stat().st_mtime
+    finally:
+        mark.unlink(missing_ok=True)
+
+
 def _mtime(p: Path) -> float | None:
     return p.stat().st_mtime if p.is_file() else None
 
@@ -254,9 +327,12 @@ def cut_done(job: Path) -> bool:
         return False
     rec = read_job(job).get("cut")
     if isinstance(rec, dict):
-        return rec.get("project_sha256") == approval["project_sha256"] and rec.get(
-            "segments_sha256"
-        ) == segments_sha(job)
+        return (
+            rec.get("project_sha256") == approval["project_sha256"]
+            and rec.get("segments_sha256") == segments_sha(job)
+            # (a record from before this field: the redaction of that render is kept)
+            and rec.get("redaction_sha256", red_now := _redaction_sha(job)) == red_now
+        )
     vfile = job / "out" / "verify.json"
     try:
         verify = json.loads(vfile.read_text())
@@ -272,6 +348,14 @@ def cut_done(job: Path) -> bool:
     )
 
 
+def _redaction_sha(job: Path) -> str | None:
+    """What the reel redacts (a changed personal-data decision means a new render)."""
+    try:
+        return red.state_sha(redaction_enforced(job)[0])
+    except ToolError:
+        return "invalid"
+
+
 def record_cut(job: Path, approved_sha: str) -> None:
     verify = json.loads((job / "out" / "verify.json").read_text())
     update_job(
@@ -280,6 +364,7 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "project_sha256": approved_sha,
             "segments_sha256": segments_sha(job),
+            "redaction_sha256": _redaction_sha(job),
             "verify_ok": bool(verify.get("ok")),
         },
         overlays=None,  # a new cut has no overlays yet
@@ -307,6 +392,54 @@ def overlays_done(job: Path, brand_id: str) -> bool:
     )
 
 
+def _where(c: dict) -> str:
+    return c["asset"] if "asset" in c else f"{c['t0']:.1f}-{c['t1']:.1f} s"
+
+
+def decide_personal_data(
+    job: Path, demo_data: bool, interactive: bool, ask: Callable[[str], str], say=print
+) -> None:
+    """The human decision about work/redaction.json at the plan gate. `--demo-data` = all
+    demo (method "flag"); interactive: ask; otherwise no decision, so all are redacted."""
+    try:
+        cands = red.load(job)
+    except red.RedactionError as e:
+        raise RunError(str(e)) from None
+    if not cands:
+        return
+    if demo_data:
+        red.decide(job, [], "flag")
+        say(f"personal data: {len(cands)} place(s) recorded as demo data (--demo-data)")
+        return
+    say(f"\n{len(cands)} place(s) with possible personal data found:")
+    for c in cands:
+        say(f"  {c['id']:>2}. {c['kind']:<8} {_where(c):<22} {c.get('reason', '')}")
+    if not interactive:
+        say(
+            "personal data: no decision, so all of them are redacted "
+            f"(`videocut tool job redaction {job.name} --all-demo | --redact 1,3`)"
+        )
+        return
+    answer = ask("Demo data? [a]ll demo / [r]edact all / [s]elect: ").strip().lower()
+    if answer in ("a", "all", "all demo"):
+        ids = []
+    elif answer in ("s", "select"):
+        raw = ask("Numbers to redact (e.g. 1,3; the others are demo data): ")
+        try:
+            ids = [int(x) for x in raw.replace(" ", ",").split(",") if x.strip()]
+        except ValueError:
+            say("personal data: not a list of numbers; everything is redacted")
+            ids = None
+    else:
+        ids = None  # "r" and anything else: the safe choice
+    try:
+        rec = red.decide(job, ids, "prompt")
+    except red.RedactionError as e:
+        say(f"personal data: {e}; everything is redacted")
+        rec = red.decide(job, None, "prompt")
+    say(f"personal data: redact {rec['redact'] or 'nothing'}, demo data {rec['demo'] or 'none'}")
+
+
 def ask_approval(job: Path, ask: Callable[[str], str] = input) -> bool:
     if not sys.stdin.isatty() and ask is input:
         return False
@@ -324,12 +457,14 @@ def run(
     brand: str | None = None,
     recut: bool = False,
     assets: list[str] | None = None,
+    screen: str | None = None,
+    demo_data: bool = False,
     say=print,
     ask: Callable[[str], str] = input,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
-    job = open_job(ref, type_, brief, assets)
+    job = open_job(ref, type_, brief, assets, screen)
     say(f"job: {job}")
     if brand:
         update_job(job, brand=brand_id(brand))
@@ -341,6 +476,8 @@ def run(
     plan_session, plan_sha = None, None
     if is_approved(job) and not replan:
         say("plan: already approved")
+        if demo_data:
+            decide_personal_data(job, demo_data, False, ask, say)
     else:
         if replan or not project.is_file():
             edl_before, out_before = _mtime(edl), _snapshot(job / "out")
@@ -359,6 +496,8 @@ def run(
             return 3
         approve_job(job)
         say("plan: approved")
+        interactive = not approve and (sys.stdin.isatty() or ask is not input)
+        decide_personal_data(job, demo_data, interactive, ask, say)
 
     approved_sha = read_approval(job)["project_sha256"]
     if cut_done(job) and not recut and not plan_session:
@@ -367,8 +506,12 @@ def run(
             record_cut(job, approved_sha)  # a job cut before the record existed
     else:
         resume = plan_session if plan_session and project_sha(job) == plan_sha else None
-        started = time.time()
-        claude(job, "cut", CUT_PROMPT, max_turns, resume, say)
+        started = _fs_now(job)
+        prompt = CUT_PROMPT
+        if not plan_session and (job / "out" / "reel.mp4").is_file():
+            why = "--recut" if recut else "the plan or the personal-data decision changed"
+            prompt += CUT_AGAIN.format(why=why)
+        claude(job, "cut", prompt, max_turns, resume, say)
         if project_sha(job) != approved_sha:
             raise RunError("work/project.md changed during the cut run; approve it again")
         _final_verify(job, started, "cut")
@@ -377,7 +520,7 @@ def run(
     job_brand = read_job(job).get("brand")
     if job_brand and (brand or not overlays_done(job, job_brand)):
         cut_sha = segments_sha(job)
-        started = time.time()
+        started = _fs_now(job)
         prompt = OVERLAYS_PROMPT
         old = read_job(job).get("overlays")
         edl_caps = (json.loads(edl.read_text()).get("captions") if edl.is_file() else None) or []
@@ -431,6 +574,8 @@ def main(args) -> int:
             brand=args.brand,
             recut=args.recut,
             assets=args.asset,
+            screen=args.screen,
+            demo_data=args.demo_data,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

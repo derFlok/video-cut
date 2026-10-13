@@ -132,8 +132,10 @@ function maxCardWidth(env, px, pad) {
 // clear of the face during the item's life, of blocks already placed, and inside the
 // safe area with room for the transition. Shrinks before it gives up; registers the
 // block so later items avoid it. Returns the measure plus {box, reach, fits,
-// overlapsFace, overlapsBlock}.
-function layoutCard(env, item, measure, { position = "center" } = {}) {
+// overlapsFace, overlapsBlock}. `stage`: the card is the picture of the moment and may
+// cover the speaker (a portrait screenshot): placed clear of other blocks only, at the
+// largest size that fits.
+function layoutCard(env, item, measure, { position = "center", stage = false } = {}) {
   const { size, safe } = env;
   let L = null;
   for (const k of [1, 0.85, 0.72, 0.6]) {
@@ -144,7 +146,7 @@ function layoutCard(env, item, measure, { position = "center" } = {}) {
       safe,
       w: Math.ceil(m.w),
       h: Math.ceil(m.h),
-      face: env.faceDuring(item.t0, item.t1),
+      face: stage ? null : env.faceDuring(item.t0, item.t1),
       avoid: env.blocksDuring(item.t0, item.t1),
       position,
       margin: reach,
@@ -152,8 +154,8 @@ function layoutCard(env, item, measure, { position = "center" } = {}) {
     });
     const [ax0, ay0, ax1, ay1] = allowedArea(size, safe, reach);
     const fits = m.w <= ax1 - ax0 && m.h <= ay1 - ay0;
-    L = { ...m, ...placed, reach, fits };
-    if (!L.overlapsFace && fits) break;
+    L = { ...m, ...placed, reach, fits, stage };
+    if (!L.overlapsFace && !(stage && L.overlapsBlock) && fits) break;
   }
   const m = L.reach;
   env.addBlock(item.t0, item.t1, [L.box[0] - m, L.box[1] - m, L.box[2] + m, L.box[3] + m]);

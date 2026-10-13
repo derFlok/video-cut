@@ -9,7 +9,12 @@
 Everything is in OUTPUT time and px. `tokens` are the resolved tokens of the job's brand
 (job.json "brand", default "_example"); the renderer draws only with them. `face` is the
 face track of a current work/face.json mapped through the segments and the very crop
-windows render uses (_geometry), so scenes can keep clear of the face. `safe` are the
+windows render uses (_geometry), so scenes can keep clear of the face. Screen layouts
+(product demos, the same _layouts plan render draws): overlays.json "views" lists per
+screen/pip/split stretch the screen view and the speaker area; the renderer keeps every
+caption and scene off the screen view (a block placed before all items), and in those
+stretches `face` is the speaker area (pip inset, the speaker's face in split), so captions
+land below the screen view, outside the speaker. `safe` are the
 organic safe zones (docs/BRIEF.md §8). captions/overlays are copied from the EDL.
 
 End card (`cta_end`, a full-frame plate): it starts only after the last spoken word
@@ -33,11 +38,12 @@ import subprocess
 from pathlib import Path
 
 from .. import brand
-from ..edl import EdlError, load
+from ..edl import EdlError, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
-from . import _plates
+from ..redaction import same_asset
+from . import _layouts, _plates
 from . import _render_plan as plan_mod
-from ._geometry import face_track, framed, safe_zones
+from ._geometry import face_track, framed, map_box, safe_zones
 from .common import (
     ToolError,
     binary,
@@ -48,8 +54,10 @@ from .common import (
     write_json,
 )
 from .ingest import probe
+from .job import redaction_enforced
 
 DEFAULT_BRAND = brand.EXAMPLE_ID
+SPEAKER_STEP_S = 0.25
 RECORDED = ("work/overlay.mov", "work/overlay_boxes.json", "work/overlays.json")
 
 
@@ -84,31 +92,110 @@ def build(job: Path) -> dict:
         raise ToolError(f"EDL source {rel!r} is missing or outside the job folder")
     info = probe(src)
     try:
-        edl = load(edl_path, source_duration=info["duration"])
+        edl = load(
+            edl_path, source_duration=info["duration"],
+            sync=read_sync(job / "work" / "sync.json"), check_sync=True,
+        )  # fmt: skip
     except EdlError as e:
         raise ToolError(
             f"{len(e.errors)} problem(s) in edl.json: " + "; ".join(e.errors[:5])
         ) from None
     src_size = (int(info["size"][0]), int(info["size"][1]))
     edl, _, face = framed(job, edl)
-    plan = plan_mod.build(edl, src_size, edl.size)
+    layouts = [s.layout for s in edl.segments]
+    use_layouts = any(lay != "face" for lay in layouts)
+    plan = plan_mod.build(edl, src_size, edl.size, layouts if use_layouts else None)
+    views = _views(plan, _layouts.plan_all(job, edl, plan, src_size, face)["segs"], face,
+                   src_size) if use_layouts else []  # fmt: skip
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
-    return {
+    cands, _ = redaction_enforced(job)
+    track = sorted(face_track(plan, face, src_size) + _speaker_track(views, plan.fps),
+                   key=lambda f: f["t"])  # fmt: skip
+    doc = {
         "size": list(edl.size),
         "fps": edl.fps,
         "duration": round(plan.duration, 6),
         "tokens": brand_tokens(read_job(job).get("brand") or DEFAULT_BRAND),
         "safe": safe_zones(edl.size),
-        "face": face_track(plan, face, src_size),
+        "face": track,
         "captions": edl.captions,
-        "overlays": plates.overlays,
+        "overlays": [_redacted(job, o, cands) for o in plates.overlays],
         "plates": {
             "last_word": plates.last_word,
             "tail_s": round(float(plates.tail_frames / plan.fps), 3),
             "shifted": plates.shifted,
         },
     }
+    if views:
+        doc["views"] = views
+    return doc
+
+
+def _redacted(job: Path, item: dict, cands: list[dict]) -> dict:
+    """A screenshot_frame item with the boxes of every enforced candidate of its image
+    (however the path is spelled) added to props.redact (the safe default, also when the
+    EDL forgot one)."""
+    props = item.get("props") if isinstance(item, dict) else None
+    if item.get("scene") != "screenshot_frame" or not isinstance(props, dict):
+        return item
+    boxes = [
+        c["box"] for c in cands if "asset" in c and same_asset(job, props.get("file"), c["asset"])
+    ]
+    if not boxes:
+        return item
+    have = props.get("redact")
+    have = have if isinstance(have, list) else ([] if have is None else have)
+    if not isinstance(have, list):
+        return item  # malformed: the renderer fails closed on it
+    return {**item, "props": {**props, "redact": [*have, *boxes]}}
+
+
+def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[dict]:
+    """Per non-face range (output time and px): `screen`, the screen view, and `speaker`,
+    where the speaker is (pip: the inset; split: the face box inside the lower part, else
+    that part's top half; screen: none)."""
+    out, f0 = [], 0
+    median = ((face or {}).get("median") or {}).get("box")
+    for i, r in enumerate(plan.ranges):
+        seg = segs.get(i)
+        if seg is not None:
+            speaker = None
+            if seg.layout == "pip":
+                speaker = seg.inset.box()
+            elif seg.layout == "split":
+                part = seg.face
+                speaker = [part.x, part.y, part.x + part.w, part.y + part.h // 2]
+                box = map_box(median, src, seg.camera, (part.w, part.h)) if median else None
+                if box:
+                    speaker = [box[0] + part.x, box[1] + part.y, box[2] + part.x,
+                               box[3] + part.y]  # fmt: skip
+            out.append(
+                {
+                    "t0": round(float(f0 / plan.fps), 6),
+                    "t1": round(float((f0 + r.frames) / plan.fps), 6),
+                    "layout": seg.layout,
+                    "screen": seg.view.box(),
+                    "speaker": speaker,
+                }
+            )
+        f0 += r.frames
+    return out
+
+
+def _speaker_track(views: list[dict], fps) -> list[dict]:
+    """Face-track samples (every SPEAKER_STEP_S and at both ends) with each view's speaker
+    box: in pip/split the speaker area is the face to keep clear."""
+    out = []
+    for v in views:
+        if v["speaker"] is None:
+            continue
+        t, last = v["t0"], v["t1"] - float(1 / fps)
+        while t < last:
+            out.append({"t": round(t, 6), "box": v["speaker"]})
+            t += SPEAKER_STEP_S
+        out.append({"t": round(max(last, v["t0"]), 6), "box": v["speaker"]})
+    return out
 
 
 def record_path(job: Path) -> Path:

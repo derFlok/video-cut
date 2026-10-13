@@ -168,3 +168,28 @@ def test_waveform_display_gain_is_peak_based_and_capped():
     assert im.wave_gain(0.0) == 1.0
     assert "volume=5.0000" in im.wave_filter(100, 50, None, 5.0)
     assert "filter=peak" in im.wave_filter(100, 50)
+
+
+def test_assets_sheet_numbers_screenshots(capsys, tmp_path, source):
+    _, src = source
+    shots = []
+    for name, (w, h) in (("a.png", (1170, 2532)), ("b.png", (2880, 1800)), ("c.jpg", (800, 800))):
+        p = tmp_path / name
+        subprocess.run(
+            [clips.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+             f"color=c=0x4C566A:s={w}x{h}", "-frames:v", "1", str(p)],
+            check=True,
+        )  # fmt: skip
+        shots.append(str(p))
+    code, s, _ = run_tool(capsys, "job", "new", str(src), "--id", "shots", "--asset", *shots)
+    assert code == 0, s
+    job = Path(s["job"])
+    code, s, out = run_tool(capsys, "sheet", "assets", "--job", str(job))
+    assert code == 0, s
+    assert s["sheets"] == ["work/sheets/assets_01.jpg"]
+    assert [(i["n"], i["file"], i["orientation"]) for i in s["images"]] == [
+        (1, "input/a.png", "portrait"), (2, "input/b.png", "landscape"),
+        (3, "input/c.jpg", "landscape"),
+    ]  # fmt: skip
+    w, h = _size(job / s["sheets"][0])
+    assert (w, h) == (1080, 1440)  # 2 x 2 tiles of 540 x 720

@@ -139,3 +139,119 @@ def test_edl_check_tool_explicit_file(capsys, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert run_tool(capsys, "edl", "check", "draft.json")[0] == 0
     assert run_tool(capsys, "edl", "check", "missing.json")[0] == 1
+
+
+# --- screen layouts (product demos) ---
+
+SYNC = {
+    "offset_s": 3.27,
+    "method": "audio_xcorr",
+    "confidence": 0.9,
+    "drift_ppm": 0.2,
+    "overlap": [0.0, 9.0],
+}
+BOX = [0.1, 0.2, 0.5, 0.6]
+
+
+def _screen_edl(**seg):
+    data = _valid()
+    data["segments"][1].update({"layout": "screen", **seg})
+    return data
+
+
+def test_screen_segment_roundtrip(tmp_path):
+    data = _screen_edl(
+        screen_zoom=[{"t": 5.0, "box": [0, 0, 1, 1]}, {"t": 5.8, "box": BOX}],
+        redact=[{"t0": 5.2, "t1": 5.6, "box": [0.7, 0.1, 0.9, 0.2]}],
+    )
+    assert edl.validate(data, sync=SYNC, check_sync=True) == []
+    e = edl.from_dict(data)
+    assert [s.layout for s in e.segments] == ["face", "screen", "face"]
+    out = e.to_dict()
+    assert out["segments"][1]["screen_zoom"] == data["segments"][1]["screen_zoom"]
+    assert "layout" not in out["segments"][0]  # default is not written
+    edl.save(e, tmp_path / "e.json")
+    assert edl.load(tmp_path / "e.json").segments[1].redact == data["segments"][1]["redact"]
+
+
+@pytest.mark.parametrize(
+    "seg, path",
+    [
+        ({"layout": "cinema"}, "$.segments[1].layout"),
+        ({"layout": "face", "screen_zoom": [{"t": 5.5, "box": BOX}]}, "$.segments[1].screen_zoom"),
+        ({"screen_zoom": {"t": 5.5}}, "$.segments[1].screen_zoom"),
+        ({"screen_zoom": [{"t": 4.0, "box": BOX}]}, "screen_zoom[0].t: 4.0 is outside"),
+        ({"screen_zoom": [{"t": 5.5}]}, "screen_zoom[0].box"),
+        ({"screen_zoom": [{"t": 5.5, "box": [0.1, 0.2, 1.2, 0.6]}]}, "screen_zoom[0].box"),
+        ({"screen_zoom": [{"t": 5.5, "box": [0.5, 0.2, 0.5, 0.6]}]}, "degenerate"),
+        ({"screen_zoom": [{"t": 5.5, "box": [0.6, 0.2, 0.1, 0.6]}]}, "degenerate"),
+        ({"screen_zoom": [{"t": 5.5, "box": [0.1, 0.2, 0.101, 0.9]}]}, "degenerate"),
+        (
+            {"screen_zoom": [{"t": 5.5, "box": BOX}, {"t": 5.5, "box": BOX}]},
+            "screen_zoom[1].t: keyframes must be in increasing",
+        ),
+        ({"screen_zoom": [{"t": "5", "box": BOX}]}, "screen_zoom[0].t"),
+        ({"redact": [{"t0": 5.4, "t1": 5.2, "box": BOX}]}, "redact[0]: needs numbers t0 < t1"),
+        ({"redact": [{"t0": 5.2, "t1": 6.5, "box": BOX}]}, "redact[0]: [5.2, 6.5] is outside"),
+        ({"redact": [{"t0": 5.2, "t1": 5.4, "box": [0, 0, 0, 1]}]}, "redact[0].box"),
+        ({"redact": [{"t0": 5.2, "t1": 5.4, "box": True}]}, "redact[0].box"),
+    ],
+)
+def test_screen_invalid_cases(seg, path):
+    errs = edl.validate(_screen_edl(**seg))
+    assert any(path in e for e in errs), errs
+
+
+def test_redact_needs_a_screen_layout():
+    data = _valid()
+    data["segments"][1]["redact"] = [{"t0": 5.2, "t1": 5.4, "box": BOX}]
+    assert any("redact: needs layout" in e for e in edl.validate(data))
+
+
+def test_overlap_check():
+    data = _screen_edl()
+    assert edl.validate(data, sync=SYNC, check_sync=True) == []
+    short = {**SYNC, "overlap": [0.0, 5.5]}
+    errs = edl.validate(data, sync=short, check_sync=True)
+    assert len(errs) == 1 and errs[0].startswith("$.segments[1]: [5.0, 6.0] is outside")
+    assert edl.validate(data, sync=short) == []  # only checked on request
+    late = {**SYNC, "overlap": [5.5, 9.0]}
+    assert edl.validate(data, sync=late, check_sync=True)
+    errs = edl.validate(data, sync=None, check_sync=True)
+    assert len(errs) == 1 and "needs a valid work/sync.json" in errs[0]
+    assert edl.validate(_valid(), sync=None, check_sync=True) == []  # face-only needs no sync
+
+
+def test_sync_helpers(tmp_path):
+    assert edl.validate_sync(SYNC) == []
+    assert edl.screen_time(2.0, SYNC) == pytest.approx(5.27)
+    p = tmp_path / "sync.json"
+    assert edl.read_sync(p) is None
+    p.write_text(json.dumps(SYNC))
+    assert edl.read_sync(p) == SYNC
+    p.write_text("{not json")
+    assert edl.read_sync(p) is None
+    for bad in (
+        {**SYNC, "method": "magic"},
+        {**SYNC, "confidence": 1.5},
+        {**SYNC, "offset_s": "3"},
+        {**SYNC, "overlap": [4, 2]},
+        {**SYNC, "drift_ppm": "x"},
+        {k: v for k, v in SYNC.items() if k != "overlap"},
+        [],
+    ):
+        assert edl.validate_sync(bad), bad
+    assert edl.validate_sync({**SYNC, "drift_ppm": None, "method": "manual"}) == []
+
+
+def test_edl_check_tool_screen_layouts(capsys, tmp_path):
+    job = _job_with_edl(capsys, tmp_path, _screen_edl(), duration=10.0)
+    code, s, out = run_tool(capsys, "edl", "check", "--job", str(job))
+    assert code == 1 and "needs a valid work/sync.json" in out
+    (job / "work" / "sync.json").write_text(json.dumps({**SYNC, "overlap": [0, 5.5]}))
+    code, s, out = run_tool(capsys, "edl", "check", "--job", str(job))
+    assert code == 1 and "outside the time both recordings cover" in out
+    (job / "work" / "sync.json").write_text(json.dumps(SYNC))
+    code, s, _ = run_tool(capsys, "edl", "check", "--job", str(job))
+    assert code == 0, s
+    assert s["layouts"] == ["face", "screen"] and s["sync"] == "audio_xcorr"

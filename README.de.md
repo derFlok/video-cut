@@ -41,9 +41,40 @@ Marken, Projekte und Modelle liegen in `~/VideoCut` (änderbar über `VIDEOCUT_H
    geprüft. Danach rendert Claude das fertige Reel. `work/overlay_report.md` listet die
    Einblendungen.
 
-Optionen: `--approve` (ohne Nachfrage), `--replan`, `--recut`, `--brand <id>`, `--asset DATEI`
-(Screenshot für einen neuen Auftrag), `--max-turns N`. Zeit, Turns, Kosten und
-Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
+Optionen: `--approve` (ohne Nachfrage), `--replan`, `--recut`, `--brand <id>`, `--screen DATEI`
+(gleichzeitig aufgenommene Bildschirmaufnahme, für einen neuen Auftrag), `--asset DATEI...`
+(Screenshots für einen neuen Auftrag; als letzte Option angeben), `--demo-data` (gefundene
+persönliche Daten sind Demodaten), `--max-turns N`. Zeit, Turns,
+Kosten und Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
+
+## Produktdemo aufnehmen
+
+```bash
+.venv/bin/videocut run ~/Movies/ich.mov --screen ~/Movies/bildschirm.mov --brand meine-marke
+.venv/bin/videocut run ~/Movies/ich.mov --brand meine-marke --asset ~/Desktop/shot-1.png ~/Desktop/shot-2.png
+```
+
+1. **Bildschirm:** Cmd+Shift+5 drücken, „Gesamten Bildschirm aufnehmen" (oder einen Teil)
+   wählen und unter *Optionen* dein **Mikrofon** wählen und **Mausklicks anzeigen**
+   einschalten. Über die Mikrofonspur legt Video Cut Bildschirm und Kamera übereinander.
+2. **Du selbst:** die Kameraaufnahme von dir **gleichzeitig** starten (Handy oder Webcam),
+   dann die Bildschirmaufnahme. Optional: zu Beginn einmal sichtbar in die Hände klatschen;
+   das hilft bei lauter Umgebung.
+3. Die Demo wie gewohnt zeigen und erklären; am Ende beide Aufnahmen stoppen.
+4. Den ersten Befehl oben starten. Die Vorbereitung synchronisiert beide Aufnahmen
+   (`work/sync.json`) und findet Klicks und Änderungen auf dem Bildschirm. Der Plan sagt,
+   wo du zu sehen bist, wo der Bildschirm oder beides (du klein unter dem Bildschirm, oder
+   Bildschirm oben und du unten), wohin gezoomt wird und welche Stellen persönliche Daten
+   zeigen könnten (E-Mail-Adressen, Telefonnummern, Namen). **Demodaten?** Du wirst bei der
+   Freigabe gefragt: alles Demo, alles abdecken oder Nummern wählen (oder `--demo-data`).
+   Ohne Antwort wird alles Gelistete mit vollen Flächen abgedeckt.
+5. Ist die Synchronisierung unsicher, hält der Lauf an und erklärt, wie du sie von Hand
+   setzt: `videocut tool sync --job <id> --offset <Sekunden>` (Bildschirmzeit minus
+   Kamerazeit eines Moments, den man in beiden sieht oder hört), dann `videocut run <id>`.
+
+**Nur Screenshots:** Screenshots machen (Cmd+Shift+4), dich beim Erklären aufnehmen und den
+zweiten Befehl starten. Claude ordnet jeden Screenshot dem Satz zu, der ihn erklärt, und
+zeigt ihn mit Zoom auf die genannte Stelle; persönliche Daten darin werden abgedeckt.
 
 ## Marken
 

@@ -103,8 +103,9 @@ function allowedArea(size, safe, inset = 0) {
 
 // Place a w x h block horizontally centred inside the allowed area, in one of two bands:
 // "center" (the middle of the allowed area) or "lower" (the chest area: below the face
-// box, above the bottom safe zone; without a face the lower part of the area). `position`
-// is the preferred band, the other one is the fallback; anywhere else (e.g. the strip
+// box, above the bottom safe zone; without a face the lower part of the area); "top"
+// (the top of the allowed area, for a stage card that leaves the room below to the
+// captions) is a third one. `position` is the preferred band, then "center" / "lower"; anywhere else (e.g. the strip
 // above the head) comes last. When the block would overlap the face box or one of the
 // `avoid` boxes (other blocks on screen at the same time), each grown by `margin`, it
 // moves just above or below one of them: the spot that clears the face first, then the
@@ -132,13 +133,15 @@ function placeBlock({ size, safe, w, h, face, avoid = [], position = "center", m
     lower: faceG
       ? { has: (y) => y >= faceG[3] - 0.5, spot: clampY(Math.max(Math.ceil(faceG[3]), ay0 + ah * LOWER_AT - h / 2)) }
       : { has: (y) => y + h / 2 >= ay0 + ah * 0.5, spot: clampY(ay0 + ah * LOWER_AT - h / 2) },
+    top: { has: (y) => y <= ay0 + SCAN_STEP, spot: clampY(ay0) },
   };
-  const order = position === "lower" ? ["lower", "center"] : ["center", "lower"];
+  const order =
+    position === "top" ? ["top", "center", "lower"] : position === "lower" ? ["lower", "center"] : ["center", "lower"];
   const rank = (y) => {
     const k = order.findIndex((b) => bands[b].has(y));
     return k < 0 ? order.length : k;
   };
-  const ys = [bands[order[0]].spot, bands[order[1]].spot];
+  const ys = order.map((b) => bands[b].spot);
   for (const b of faceG ? [faceG, ...others] : others) ys.push(clampY(Math.ceil(b[3])), clampY(Math.floor(b[1] - h)));
   // Plus a scan of the whole allowed height, so a free gap between several obstacles is
   // found too (the spots next to one obstacle may each collide with another).

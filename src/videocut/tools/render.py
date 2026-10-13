@@ -17,6 +17,14 @@
              after the last spoken word), the reel gets a held tail: the last frame
              repeats under the card, the audio is padded with silence after loudnorm
              (render.json "tail_s"; output_duration includes it)
+    layouts  segments with "layout" screen/pip/split are drawn from the original screen
+             recording (job.json "screen") at camera time + work/sync.json offset_s, with
+             eased screen_zoom, redact blocks and brand background (_layouts.py); render.json
+             gets "layouts" and "screen_zoom_clamped" (keys widened to stay >= 1 source px
+             per output px). An EDL of face segments only renders exactly as before.
+             Personal data: every candidate of work/redaction.json the human did not
+             mark as demo data (no decision: all) is added as a redact block to the
+             screen segments it overlaps (render.json "redaction")
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
 
@@ -38,8 +46,8 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
-from ..edl import EdlError, load
-from . import _plates
+from ..edl import EdlError, load, read_sync
+from . import _layouts, _plates
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed
@@ -56,7 +64,7 @@ from .common import (
     write_json,
 )
 from .ingest import probe
-from .job import PROJECT, is_approved
+from .job import PROJECT, is_approved, redaction_enforced
 
 CRF, PRESET = "18", "medium"
 PREVIEW_PRESET = "veryfast"
@@ -175,6 +183,18 @@ def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709
     )
 
 
+def _layout_video(job, plan, edl, info, face, video_in, inputs):
+    """Video lines of a render with screen layouts (the screen is the next input after
+    `inputs`), the screen recording and the clamped zoom keys."""
+    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
+    video = _layouts.video_chain(
+        plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in,
+        f"{len(inputs) // 2}:v:0", bg=_layouts.background(job), matrix=overlay_matrix(info),
+        cam_sdr=to_sdr(info), screen_sdr=to_sdr(drawn["info"]),
+    )  # fmt: skip
+    return video, drawn["screen"], drawn["clamped"]
+
+
 def render(args) -> dict:
     job = resolve_job(args.job)
     if not is_approved(job):  # the human gate: no cut, not even a preview, before approval
@@ -194,7 +214,12 @@ def render(args) -> dict:
     src = _source(job, data)
     info = probe(src) if src else None
     try:
-        edl = load(edl_path, source_duration=info["duration"] if info else None)
+        edl = load(
+            edl_path,
+            source_duration=info["duration"] if info else None,
+            sync=read_sync(work / "sync.json"),
+            check_sync=True,  # screen layouts only where both recordings have pictures
+        )
     except EdlError as e:
         for err in e.errors:
             print(err)
@@ -204,12 +229,18 @@ def render(args) -> dict:
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
     edl, followed, face = framed(job, edl)
+    # Personal data: every candidate the human did not mark as demo data is redacted, also
+    # when the EDL forgot one (redaction.enforced; no decision = all of them).
+    cands, red_source = redaction_enforced(job)
+    edl = _layouts.with_redaction(edl, cands)
+    layouts = [s.layout for s in edl.segments]
+    use_layouts = any(lay != "face" for lay in layouts)
 
     preview = bool(args.preview)
     ow, oh = edl.size
     if preview:
         ow, oh = max(2, ow // 4 * 2), max(2, oh // 4 * 2)
-    plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh))
+    plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh), layouts if use_layouts else None)
     overlay = work / "overlay.mov"
     ov_json = work / "overlays.json"
     # words.json too: the end card's tail is computed from it (_plates), like overlays did.
@@ -237,10 +268,19 @@ def render(args) -> dict:
         measured = "silent"
     elif preview:
         measured = None  # single pass
-    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info))
-    warnings, v_out = [], "[v]"
+    warnings, v_out, video, clamped, screen_rel = [], "[v]", None, [], None
+    if use_layouts:
+        video, screen, clamped = _layout_video(job, plan, edl, info, face, video_in, inputs)
+        screen_rel = str(screen.relative_to(job))
+        inputs += ["-i", str(screen)]
+        for c in clamped:
+            warnings.append(
+                f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
+                f" blurry; clamped to {c['max_zoom']}x"
+            )
+    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video)
     if use_overlay:
-        graph += composite_graph(1 + len(audio_args) // 2, plan.fps, (ow, oh), overlay_matrix(info))
+        graph += composite_graph(len(inputs) // 2, plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
         v_out = "[vo]"
     elif overlay.is_file():
@@ -328,6 +368,11 @@ def render(args) -> dict:
     }
     if use_overlay:
         report["overlay"] = True
+    if use_layouts:
+        report["layouts"] = {k: layouts.count(k) for k in _layouts.LAYOUTS if k in layouts}
+        report["screen_zoom_clamped"] = clamped
+    if red_source != "none":
+        report["redaction"] = {"source": red_source, "candidates": [c["id"] for c in cands]}
     if plan.tail:
         report["tail_s"] = round(float(plan.tail / plan.fps), 3)
     if loud["integrated_lufs"] is None:
@@ -358,6 +403,10 @@ def render(args) -> dict:
         "default_crop": "face" if face and face.get("median") else "centre",
         "face_follow_segments": followed,
         "overlay": use_overlay,
+        "layouts": report.get("layouts"),
+        "screen": screen_rel,
+        "screen_zoom_clamped": clamped,
+        "redaction": report.get("redaction"),
         "warnings": warnings,
     }
 

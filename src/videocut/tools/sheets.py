@@ -1,4 +1,4 @@
-"""`videocut tool sheet contact|burst|timeline`: the pictures Claude uses to "see".
+"""`videocut tool sheet contact|burst|timeline|screen`: the pictures Claude uses to "see".
 
 contact:   3x3 contact sheets over work/proxy.mp4, one tile every N seconds
            -> work/sheets/contact_NN.jpg
@@ -6,6 +6,13 @@ burst:     frames around source time t (+-span) plus the waveform of the same wi
            marker at t -> work/sheets/burst_<t>.jpg
 timeline:  filmstrip + waveform + word labels (work/words.json) + candidate shading
            (work/candidates.json) for [t0, t1] -> work/sheets/timeline_<t0>_<t1>.jpg
+screen:    contact strip of the screen recording over screen time [t0, t1] with the analysis of
+           work/screen.json drawn in (activity yellow, clicks red, zoom targets green)
+           -> work/sheets/screen_<t0>_<t1>.jpg (without t0/t1: the whole recording, an
+           overview of up to 10 tiles)
+assets:    the job's images (job.json "assets", e.g. screenshots of a demo) as numbered
+           thumbnails, ASSETS_PER_SHEET per sheet -> work/sheets/assets_NN.jpg; the summary
+           maps each number to its file and size
 
 Every tile carries its source time and frame number ("mm:ss.ss · f<frame>"). Sheets stay
 within the image budget of docs/BRIEF.md §6 (<= 1080x1920, never more than 2000 px a side).
@@ -16,13 +23,17 @@ import tempfile
 from pathlib import Path
 
 from . import _image as im
-from .common import ToolError, job_parent, resolve_job, run_tool
+from .common import ToolError, binary, is_fresh, job_parent, read_job, resolve_job, run, run_tool
+from .screen import probe_screen, screen_source
 
 COLS = 3
 WAVE_H = 140
 STRIP_W = 1800
 STRIP_TILES = 10
 MAX_TIMELINE_S = 120.0
+SCREEN_FPS = 30  # macOS recordings are VFR: sample on a fixed grid before selecting
+SCREEN_MAX_TILES = 10
+ACTIVITY_COLOR, CLICK_COLOR, TARGET_COLOR = "0xffd400", "0xff2d2d", "0x2dff6e"
 PAUSE_COLOR = "cyan@0.30"
 FILLER_COLOR = "red@0.35"
 
@@ -328,8 +339,181 @@ def timeline(args) -> dict:
     }
 
 
+# ---------------------------------------------------------------- screen
+
+
+def _screen_input(job: Path) -> Path:
+    src = screen_source(job)
+    proxy = job / "work" / "screen_proxy.mp4"
+    return proxy if proxy.is_file() and is_fresh([proxy], [src]) else src
+
+
+def _box_filters(doc: dict | None, t: float, tw: int, th: int) -> list[str]:
+    """drawbox filters for what screen.json says about the frame at screen time t."""
+    if not doc:
+        return []
+    half = 0.5 / SCREEN_FPS
+    on = f"between(t\\,{t - half:.6f}\\,{t + half - 1e-6:.6f})"
+
+    def rect(box, color, thick):
+        x0, y0 = int(box[0] * tw), int(box[1] * th)
+        w, h = max(2, int(box[2] * tw) - x0), max(2, int(box[3] * th) - y0)
+        return f"drawbox=x={x0}:y={y0}:w={w}:h={h}:color={color}:t={thick}:enable='{on}'"
+
+    out = []
+    for z in doc.get("zoom_targets", []):
+        if z["t0"] - half <= t <= z["t1"] + half:
+            out.append(rect(z["box"], TARGET_COLOR, 4))
+    for a in doc.get("activity", []):
+        if abs(a["t"] - t) <= 0.35:
+            out.append(rect(a["box"], ACTIVITY_COLOR, 2))
+    r = 0.025
+    for c in doc.get("clicks", []):
+        if -0.2 <= t - c["t"] <= 0.6:
+            box = [c["x"] - r, c["y"] - r * tw / th, c["x"] + r, c["y"] + r * tw / th]
+            out.append(rect(box, CLICK_COLOR, 3))
+    return out
+
+
+def screen_sheet(args) -> dict:
+    if args.t1 is not None and not args.t1 > args.t0 >= 0:
+        raise ToolError("need 0 <= t0 < t1")
+    job = resolve_job(args.job)
+    src = _screen_input(job)
+    info = probe_screen(src)
+    w, h = info["size"]
+    if args.t1 is None and not info["duration"]:
+        raise ToolError("the screen recording has no duration; give t0 and t1")
+    dur = info["duration"] or args.t1
+    t0, t1 = args.t0, min(args.t1 if args.t1 is not None else dur, dur)
+    if t1 <= t0:
+        raise ToolError(f"window {args.t0}..{args.t1} is outside the recording ({dur:.2f}s)")
+    doc = _load(job / "work" / "screen.json")
+    span = t1 - t0
+    n = args.tiles or min(SCREEN_MAX_TILES, max(2, round(span * 2)))
+    n = max(1, min(n, SCREEN_MAX_TILES, int(span * SCREEN_FPS) or 1))
+    cell = span / n
+    times = sorted({im.snap(t0 + (i + 0.5) * cell, SCREEN_FPS) for i in range(n)})
+    n = len(times)
+    cols = min(n, 2 if w >= h else 3)
+    rows = -(-n // cols)
+    tw = 1080 // cols // 2 * 2
+    th = max(2, round(tw * h / w / 2) * 2)
+    if rows * th > 1920:
+        th = 1920 // rows // 2 * 2
+        tw = max(2, round(th * w / h / 2) * 2)
+    font = im.find_font()
+    # Per tile: its own boxes (enabled for exactly that frame), applied after the selection.
+    chains = []
+    for t in times:
+        chains.append(_box_filters(doc, t, tw, th))
+    boxes = [f for c in chains for f in c]
+    graph = (
+        f"[0:v]fps={SCREEN_FPS},select='{im.select_times(times, SCREEN_FPS)}',scale={tw}:{th}"
+        + ("," + ",".join(boxes) if boxes else "")
+        + _label(font, SCREEN_FPS, max(14, tw // 22))
+        + f",tile={cols}x{rows}:padding=0:margin=0[out]"
+    )
+    name = f"screen_{_tag(t0)}_{_tag(t1)}.jpg"
+    (f,) = im.render_jpegs(
+        [["-ss", f"{max(0.0, times[0] - 0.5):.4f}", "-copyts", "-i", str(src)]],
+        graph,
+        _sheets_dir(job),
+        [name],
+    )
+    marks = {
+        "activity": sum(1 for c in chains for b in c if ACTIVITY_COLOR in b),
+        "clicks": sum(1 for c in chains for b in c if CLICK_COLOR in b),
+        "zoom_targets": sum(1 for c in chains for b in c if TARGET_COLOR in b),
+    }
+    print(
+        f"{f.relative_to(job)}: screen {im.fmt_time(times[0])}..{im.fmt_time(times[-1])}, "
+        f"{n} tiles {tw}x{th}"
+        + ("" if doc else " (no work/screen.json: run `videocut tool screen` for the overlays)")
+    )
+    return {
+        "file": str(f.relative_to(job)),
+        "t0": round(t0, 3),
+        "t1": round(t1, 3),
+        "times": [round(x, 3) for x in times],
+        "tiles": n,
+        "tile": [tw, th],
+        "overlays": doc is not None,
+        "marks": marks,
+        "colors": {"activity": "yellow", "click": "red", "zoom_target": "green"},
+        "labels": font is not None,
+    }
+
+
+# ---------------------------------------------------------------- assets
+
+ASSETS_PER_SHEET = 12
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    out = run(
+        [binary("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries"]
+        + ["stream=width,height", "-of", "json", str(path)]
+    )
+    try:
+        st = json.loads(out.stdout)["streams"][0]
+        return int(st["width"]), int(st["height"])
+    except (KeyError, IndexError, ValueError) as e:
+        raise ToolError(f"cannot read the size of {path.name}: {e!r}") from None
+
+
+def assets_sheet(args) -> dict:
+    job = resolve_job(args.job)
+    rels = read_job(job).get("assets") or []
+    files = []
+    for rel in rels if isinstance(rels, list) else []:
+        p = (job / str(rel)).resolve()
+        if p.is_relative_to(job) and p.is_file():
+            files.append((str(rel), p))
+    if not files:
+        raise ToolError('the job has no images (job.json "assets"; `job new --asset FILE...`)')
+    font = im.find_font()
+    dest = _sheets_dir(job)
+    for old in dest.glob("assets_*.jpg"):
+        old.unlink()
+    items, sheets = [], []
+    for k0 in range(0, len(files), ASSETS_PER_SHEET):
+        part = files[k0 : k0 + ASSETS_PER_SHEET]
+        n = len(part)
+        cols = 1 if n == 1 else 2 if n <= 4 else 3
+        rows = -(-n // cols)
+        tw = 1080 // cols // 2 * 2
+        th = min(1920 // rows, round(tw * 4 / 3)) // 2 * 2
+        chains, inputs = [], []
+        for j, (rel, p) in enumerate(part):
+            num = k0 + j + 1
+            w, h = _image_size(p)
+            items.append({"n": num, "file": rel, "size": [w, h],
+                          "orientation": "portrait" if h > w else "landscape"})  # fmt: skip
+            label = "," + im.drawtext(font, str(num), "8", "8", max(24, tw // 9)) if font else ""
+            inputs.append(["-i", str(p)])
+            chains.append(
+                f"[{j}:v]scale={tw - 8}:{th - 8}:force_original_aspect_ratio=decrease,"
+                f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color=0x3A3A3A,format=yuv420p{label}[a{j}]"
+            )
+        layout = "|".join(f"{(j % cols) * tw}_{(j // cols) * th}" for j in range(n))
+        stack = (
+            "".join(f"[a{j}]" for j in range(n))
+            + f"xstack=inputs={n}:layout={layout}:fill=0x3A3A3A[out]"
+            if n > 1
+            else "[a0]null[out]"
+        )
+        name = f"assets_{len(sheets) + 1:02d}.jpg"
+        (f,) = im.render_jpegs(inputs, ";".join(chains) + ";" + stack, dest, [name])
+        sheets.append(str(f.relative_to(job)))
+    print(f"{len(files)} images on {len(sheets)} sheet(s): " + ", ".join(sheets))
+    for it in items:
+        print(f"  {it['n']:>2}  {it['file']}  {it['size'][0]}x{it['size'][1]} {it['orientation']}")
+    return {"sheets": sheets, "images": items, "labels": font is not None}
+
+
 def register(subparsers) -> None:
-    p = subparsers.add_parser("sheet", help="contact, burst and timeline sheets")
+    p = subparsers.add_parser("sheet", help="contact, burst, timeline and screen sheets")
     sub = p.add_subparsers(dest="sheet_cmd", required=True)
     c = sub.add_parser("contact", help="3x3 contact sheets", parents=[job_parent()])
     c.add_argument("--every", type=float, default=2.0, metavar="S", help="seconds between tiles")
@@ -342,3 +526,20 @@ def register(subparsers) -> None:
     t.add_argument("t0", type=float)
     t.add_argument("t1", type=float)
     t.set_defaults(handler=run_tool("sheet timeline", timeline))
+    sc = sub.add_parser(
+        "screen", help="screen recording strip with activity, clicks and zoom targets",
+        parents=[job_parent()],
+    )  # fmt: skip
+    sc.add_argument(
+        "t0", type=float, nargs="?", default=0.0, help="screen time in seconds (default 0)"
+    )
+    sc.add_argument("t1", type=float, nargs="?", help="(default: the end of the recording)")
+    sc.add_argument(
+        "--tiles", type=int, default=0, metavar="N", help="tiles (default: auto, <= 10)"
+    )
+    sc.set_defaults(handler=run_tool("sheet screen", screen_sheet))
+    a = sub.add_parser(
+        "assets", help="numbered thumbnails of the job's images (screenshots)",
+        parents=[job_parent()],
+    )  # fmt: skip
+    a.set_defaults(handler=run_tool("sheet assets", assets_sheet))
