@@ -2,6 +2,10 @@
 /.tools/
 /.venv/
 renderer/node_modules/
+app/node_modules/
+app/dist-mock/
+# Built web UI (videocut setup / start.sh build it from app/)
+src/videocut/web/dist/
 
 # Never commit user material (it lives in ~/VideoCut anyway)
 /jobs/
