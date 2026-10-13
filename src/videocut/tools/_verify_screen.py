@@ -267,6 +267,21 @@ def screen_spans(ctx: dict | None) -> list[tuple[float, float]]:
     ]
 
 
+def bubble_spans(ctx: dict | None) -> list[tuple[float, float, list[int]]]:
+    """Output time spans and boxes of the round speaker bubble (landscape/square pip): the
+    rest of such a frame is a still screen, so the camera picture is judged frozen or not
+    inside the bubble only."""
+    if ctx is None:
+        return []
+    plan = ctx["plan"]
+    return [
+        (float(ctx["starts"][i] / plan.fps), float((ctx["starts"][i] + s.frames) / plan.fps),
+         [int(v) for v in s.inset.box()])
+        for i, s in ctx["segs"].items()
+        if s.layout == "pip" and s.inset is not None and s.radius == _layouts.BUBBLE_RADIUS
+    ]  # fmt: skip
+
+
 def overlap_check(job: Path, data: dict) -> list[str]:
     return edl_mod.overlap_errors(data, edl_mod.read_sync(job / "work" / "sync.json"))
 
@@ -345,4 +360,5 @@ def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]
         "readability": readability(ctx),
         "overlap": overlap_check(job, data),
         "spans": screen_spans(ctx),
+        "bubbles": bubble_spans(ctx),
     }

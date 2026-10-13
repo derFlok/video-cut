@@ -403,3 +403,15 @@ def test_real_detector_finds_the_face_in_a_small_call_tile(capsys, tmp_path, vid
     assert s["small_pass"] and s["found_pct"] >= 50, out
     m = s["median"]
     assert x0 / CALL[0] < m["cx"] < x1 / CALL[0] and y0 / CALL[1] < m["cy"] < y1 / CALL[1]
+
+
+def test_small_face_is_framed_closer_only_in_landscape_and_square():
+    doc = {"median": {"cx": 0.8, "cy": 0.5, "box": [0.77, 0.44, 0.83, 0.56]}}  # 12 % high
+    assert face.small_face_zoom(doc, (1080, 1920)) == 1.0  # portrait: as before
+    assert face.small_face_zoom(doc, (1080, 1350)) == 1.0
+    assert face.small_face_zoom(doc, (1920, 1080)) == face.SMALL_FACE_ZOOM_MAX
+    assert face.small_face_zoom(doc, (1080, 1080)) == face.SMALL_FACE_ZOOM_MAX
+    big = {"median": {"cx": 0.5, "cy": 0.4, "box": [0.4, 0.2, 0.6, 0.6]}}
+    assert face.small_face_zoom(big, (1920, 1080)) == 1.0
+    mid = {"median": {"cx": 0.5, "cy": 0.4, "box": [0.4, 0.3, 0.5, 0.45]}}  # 15 % high
+    assert face.small_face_zoom(mid, (1920, 1080)) == round(face.SMALL_FACE / 0.15, 2)

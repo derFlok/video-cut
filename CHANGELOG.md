@@ -367,7 +367,17 @@
 - Overlays in a frame-filling screen view (16:9 screen/pip): overlays.json `views` has
   `screen` null and lists the zoom targets (`focus`, with times); captions and scenes keep
   off the active target and the speaker bubble instead of the whole frame.
-  `overlay_on_screen` covers the targets too.
+  `overlay_on_screen` covers the targets too. A target covering half the view or more (a
+  screen-shaped zoom box) leaves nothing specific to keep clear and is not listed.
+- Verify, landscape/square pip: the frozen check judges the camera inside the speaker
+  bubble (the rest of the frame is a still screen); a frozen bubble is reported with
+  `"where": "speaker"`.
+- Landscape/square `face` segments: a small face (median lower than 25 % of the camera
+  height, e.g. a video-call tile) gets a closer default crop (up to 2×); portrait framing
+  is unchanged.
+- Review fixes: `job format` repairs an invalid job.json value; render leaves out an
+  overlay track made for another output size; `edl check` judges readability at the job
+  size and says when the EDL size differs; zoom-target spans start with the zoom move.
 - Skills follow the format: the cut skill writes the job's size (from `job show`), the plan
   states the format in its header, 16:9 prefers `screen`/`pip` and zooms only where
   `screen_text_small` / `readable_zoom` say so; the overlays skill explains the layout

@@ -38,6 +38,8 @@ closed longer than BLINK_MAX_S (looking down, eyes shut) is no blink and is drop
 Reframing (face_crops, used by render and verify): a segment without an explicit crop is
 centred on the global face median; it follows the face only when the segment's own median is
 more than FOLLOW_MIN off the global one (BRIEF §6: fixed crop, follow only large movement).
+In a landscape or square output a small face (a video-call tile) gets a closer default crop
+(small_face_zoom); portrait framing is unchanged.
 
 Idempotent: a face.json newer than the source and of this version is kept (`tool face`
 analyses a version-1 file again; readers accept both).
@@ -79,6 +81,8 @@ BLINK_ON, BLINK_OFF = 0.5, 0.35
 BLINK_MAX_S = 0.8
 FOLLOW_MIN = 0.08  # fraction of the frame a segment's face median may drift before following
 FOLLOW_MIN_FRAMES = 5  # a segment needs this many face frames before it may follow
+SMALL_FACE = 0.25  # landscape/square: a face lower than this share of the camera is framed closer
+SMALL_FACE_ZOOM_MAX = 2.0
 SMALL_BELOW = 0.5  # share of frames with a face below which the small-face pass runs
 SMALL_SHORT = 1080  # its decode size (short side, never above the source's)
 ROI_SIZE = 320  # a region is scaled to this short side for the detector
@@ -154,17 +158,33 @@ def segment_box(face: dict, t0: float, t1: float) -> list[float] | None:
     return (face.get("median") or {}).get("box")
 
 
+def small_face_zoom(face: dict, size: tuple[int, int]) -> float:
+    """Default crop zoom of a face segment: 1.0, but in a landscape or square output (`size`,
+    the EDL size) a small face (median box lower than SMALL_FACE of the camera height, e.g.
+    a video-call tile) is framed closer, up to SMALL_FACE_ZOOM_MAX (a portrait crop of a
+    landscape camera is close already)."""
+    box = (face.get("median") or {}).get("box")
+    if not box or size[1] / size[0] > 1.2:
+        return 1.0
+    h = box[3] - box[1]
+    if not 0 < h < SMALL_FACE:
+        return 1.0
+    return round(min(SMALL_FACE / h, SMALL_FACE_ZOOM_MAX), 2)
+
+
 def face_crops(edl: Edl, face: dict | None) -> tuple[Edl, int]:
-    """EDL whose segments without a crop get the face-based centre (zoom 1.0), and the number
-    of segments that follow the face away from the global median. Unchanged without a face."""
+    """EDL whose segments without a crop get the face-based centre (zoom 1.0, or
+    small_face_zoom), and the number of segments that follow the face away from the global
+    median. Unchanged without a face."""
     if not face or not face.get("median"):
         return edl, 0
     glob = (face["median"]["cx"], face["median"]["cy"])
+    zoom = small_face_zoom(face, tuple(edl.size))
     segs, followed = [], 0
     for s in edl.segments:
         if s.crop is None and (c := segment_centre(face, s.start, s.end)):
             followed += c != glob
-            s = replace(s, crop=Crop(cx=c[0], cy=c[1], zoom=1.0))
+            s = replace(s, crop=Crop(cx=c[0], cy=c[1], zoom=zoom))
         segs.append(s)
     return replace(edl, segments=segs), followed
 

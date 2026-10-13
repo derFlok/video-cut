@@ -295,7 +295,9 @@ head and shoulders (face height × 2.6), and at least 0.75 camera px per output 
 reports the ratio per segment in render.json `speaker` (`px_ratio`) and warns when it is
 below 1 (upscaled). For a small face (e.g. a video-call tile) `face` runs a second pass
 when the first finds it in < 50 % of the samples: a tile scan with the region of interest
-upscaled (face.json `small_pass`, FACE_VERSION 2). The screen
+upscaled (face.json `small_pass`, FACE_VERSION 2). In landscape and square `face`
+segments such a small face (< 25 % of the camera height) gets a closer default crop (zoom
+up to 2×, `face.small_face_zoom`); portrait framing is unchanged. The screen
 frame shown at camera time t is screen time t + offset_s, drawn from the original
 recording. `screen_zoom` keys move the window with a 0.6 s smoothstep: a segment with one
 window is a plain crop + scale; a moving one goes through `perspective` (sense=source,
@@ -326,8 +328,9 @@ speaker area (from the same plan render draws). The renderer registers the scree
 every target as blocks before laying out any item, so captions and scenes keep off them;
 the face track there is the speaker area (pip inset; the speaker's face in split). A screen
 view that fills the frame (≥ 80 % of both sides: 16:9 screen/pip) is the picture itself,
-so its `screen` is null and only the targets and the speaker are kept clear; in 9:16 the
-captions sit below the screen view, outside the speaker. A portrait `screenshot_frame` (screenshot-only
+so its `screen` is null and only the targets and the speaker are kept clear (a target
+covering half the view or more, a screen-shaped zoom box, is not listed: nothing specific
+to avoid); in 9:16 the captions sit below the screen view, outside the speaker. A portrait `screenshot_frame` (screenshot-only
 demos) is drawn as tall as the safe area allows minus room for one caption block and may
 cover the speaker (`stage`: verify does not flag `overlay_on_face` for it).
 
@@ -338,7 +341,8 @@ recording at the mapped time and at ±0.5 s / ±1 s (`screen_time_mismatch` when
 matches clearly better). `screen_overlap` repeats the overlap rule of `edl check`. A cut
 into, out of or between screen views counts as a reframe (no `visual_jump`), a still screen
 in a `screen` segment is not a frozen picture, and blinks are only checked where the camera
-is visible. `overlay_on_screen` flags an item that covers a screen view (one that does not
+is visible. In a landscape/square pip the frozen check looks inside the speaker bubble
+only (the rest is a still screen). `overlay_on_screen` flags an item that covers a screen view (one that does not
 fill the frame) or an active zoom target.
 
 **Personal data is a human decision** (`src/videocut/redaction.py`). The plan run lists

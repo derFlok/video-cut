@@ -92,7 +92,9 @@ Write the approved views into the segments (all times **camera seconds**, like `
   readable already in 16:9: zoom only where readability needs it — `edl check` warns
   `screen_text_small` with the zoom a window needs (`videocut tool screen` → `by_format`
   → `<format>` → `<layout>` → `readable_zoom`, capped by `max_zoom`); a target whose text
-  is readable without zoom needs no key. Prefer `screen`/`pip` over `split` in 16:9.
+  is readable without zoom needs no key. Prefer `screen`/`pip` over `split` in 16:9. In
+  16:9 give the target's `box` (the zoom window is widened to the screen's shape anyway):
+  captions and overlays keep clear of exactly that box.
 
 Then `videocut tool edl check`. Fix every reported path until it passes. Its `warnings`
 name cut points inside a blink: move each to the suggested time (a cut is never in a blink).

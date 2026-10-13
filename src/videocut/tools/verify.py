@@ -63,7 +63,7 @@ from ..paths import tool_env
 from . import _image as im
 from . import _plates, _verify_screen
 from . import overlays as overlays_mod
-from ._geometry import job_size, overlap, safe_zones
+from ._geometry import job_size, overlap, safe_zones, sized
 from .common import (
     ToolError,
     binary,
@@ -491,14 +491,17 @@ def loudness(reel: Path) -> dict:
     }
 
 
-def bad_stretches(reel: Path, duration: float) -> list[dict]:
-    """Black or frozen stretches longer than MAX_STRETCH_S (ffmpeg blackdetect/freezedetect)."""
+def bad_stretches(reel: Path, duration: float, box: list[int] | None = None) -> list[dict]:
+    """Black or frozen stretches longer than MAX_STRETCH_S (ffmpeg blackdetect/freezedetect),
+    of the whole frame or only inside `box` ([x0, y0, x1, y1] px)."""
+    crop = f"crop={box[2] - box[0]}:{box[3] - box[1]}:{box[0]}:{box[1]}," if box else ""
     log = _info(
         reel,
         [
             "-an",
             "-vf",
-            f"blackdetect=d={MAX_STRETCH_S}:pix_th=0.10,freezedetect=n=0.001:d={MAX_STRETCH_S}",
+            f"{crop}blackdetect=d={MAX_STRETCH_S}:pix_th=0.10,"
+            f"freezedetect=n=0.001:d={MAX_STRETCH_S}",
         ],
     )
     found = [
@@ -569,7 +572,8 @@ def verify(args) -> dict:
             warnings.append("render.json cuts differ from work/edl.json; the render may be stale")
         else:
             face = load_face(job, edl.source)
-            reframe = reframes(face_crops(edl, face)[0])  # the framing render used
+            framed_edl = face_crops(sized(job, edl)[0], face)[0]  # the framing render used
+            reframe = reframes(framed_edl)
             if face:
                 blink = blinks_at_cuts(edl, face.get("blinks", []))
 
@@ -614,6 +618,7 @@ def verify(args) -> dict:
     elif read_job(job).get("screen"):  # a demo reel whose EDL cannot be read: unchecked
         demo = {"error": "work/edl.json is missing or invalid; screen layouts not checked"}
     still_screen = demo.get("spans", [])
+    bubbles = demo.get("bubbles", [])  # landscape/square pip: the camera is the bubble only
 
     loud = loudness(reel)
     # The end card as `videocut tool overlays` scheduled it (after the last word, over the
@@ -626,10 +631,19 @@ def verify(args) -> dict:
         if not (
             s["kind"] == "frozen"
             and any(
-                a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in plates + still_screen
+                a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps
+                for a, b in plates + still_screen + [(a, b) for a, b, _ in bubbles]
             )
         )
     ]
+    for box in {tuple(b) for _, _, b in bubbles}:  # a frozen speaker inside the bubble
+        spans = [(a, b) for a, b, bb in bubbles if tuple(bb) == box]
+        for s in bad_stretches(reel, video_dur, list(box)):
+            for a, b in spans:
+                t0, t1 = max(s["t0"], a), min(s["t1"], b)
+                if s["kind"] == "frozen" and t1 - t0 > MAX_STRETCH_S:
+                    stretches.append({"kind": "frozen", "t0": t0, "t1": t1, "where": "speaker"})
+    stretches.sort(key=lambda s: s["t0"])
     want = float(render["output_duration"])
     want_size = tuple(x // 4 * 2 for x in target) if preview else target
     lufs, peak = loud["integrated_lufs"], loud["true_peak_dbtp"]
