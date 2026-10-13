@@ -22,6 +22,7 @@ MODULES = [
     "captions",
     "overlays",
     "sync",
+    "screen",
 ]
 
 
