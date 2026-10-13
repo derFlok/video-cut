@@ -15,6 +15,7 @@ from helpers import run_tool
 
 from videocut.edl import from_dict
 from videocut.tools import _layouts as lay
+from videocut.tools._format import safe_zones
 from videocut.tools.job import approve_job
 
 pytestmark = pytest.mark.media
@@ -76,6 +77,9 @@ def material(tmp_path_factory):
     return camera, _screen(folder, clips.duration(camera) + OFFSET + 1)
 
 
+FORMAT_OF = {(1080, 1920): "9:16", (1920, 1080): "16:9", (1080, 1080): "1:1", (1080, 1350): "4:5"}
+
+
 def _job(capsys, material, job_id, size=(1080, 1920)) -> Path:
     camera, screen = material
     code, s, _ = run_tool(capsys, "job", "new", str(camera), "--id", job_id)
@@ -83,7 +87,8 @@ def _job(capsys, material, job_id, size=(1080, 1920)) -> Path:
     job = Path(s["job"])
     shutil.copy(screen, job / "input" / "screen.mp4")
     meta = json.loads((job / "job.json").read_text())
-    (job / "job.json").write_text(json.dumps({**meta, "screen": "input/screen.mp4"}))
+    meta |= {"screen": "input/screen.mp4", "format": FORMAT_OF[tuple(size)]}
+    (job / "job.json").write_text(json.dumps(meta))
     sync = {"offset_s": OFFSET, "method": "manual", "confidence": 1.0, "drift_ppm": None,
             "overlap": [0, 8]}  # fmt: skip
     (job / "work" / "sync.json").write_text(json.dumps(sync))
@@ -115,14 +120,17 @@ def _starts() -> list[int]:
     return out
 
 
-def _seg_plan(i: int, out=(1080, 1920)):
+def _seg_plan(i: int, out=(1080, 1920), full=None):
+    """Drawn segment i at `out` for an EDL of size `full` (default: `out`; 9:16 for a
+    preview size)."""
+    full = full or (out if out in FORMAT_OF else (1080, 1920))
     edl = from_dict(
-        {"fps": 30, "size": [1080, 1920], "source": "input/a.mp4", "segments": [SEGMENTS[i]]}
+        {"fps": 30, "size": list(full), "source": "input/a.mp4", "segments": [SEGMENTS[i]]}
     )
     n = _starts()[i + 1] - _starts()[i]
     return lay.plan_segment(
         edl.segments[0], n, Fraction(30), offset=OFFSET, screen=(SW, SH),
-        camera=(1920, 1080), out=out, full_out=(1080, 1920), face=None,
+        camera=(1920, 1080), out=out, full_out=full, face=None,
     )[0]  # fmt: skip
 
 
@@ -312,7 +320,8 @@ def test_hdr_camera_in_pip_and_split_is_tonemapped(capsys, material, tmp_path):
         job = Path(s["job"])
         shutil.copy(screen, job / "input" / "screen.mp4")
         meta = json.loads((job / "job.json").read_text())
-        (job / "job.json").write_text(json.dumps({**meta, "screen": "input/screen.mp4"}))
+        meta |= {"screen": "input/screen.mp4", "format": "9:16"}
+        (job / "job.json").write_text(json.dumps(meta))
         sync = {"offset_s": OFFSET, "method": "manual", "confidence": 1.0, "drift_ppm": None,
                 "overlap": [0, 3]}  # fmt: skip
         (job / "work" / "sync.json").write_text(json.dumps(sync))
@@ -397,11 +406,12 @@ def test_landscape_layouts_render_and_readability(capsys, material):
     assert (seg.view.h, seg.view.w) == (1080, 1728)
     img = frame(1)
     assert np.abs(img[:, : seg.view.x - 2] - 244).max() < 6
-    # pip: a round camera bubble over the screen, above the caption zone, in the bottom-left
-    # corner because the zoom target of segment 2 is on the right.
+    # pip: a round camera bubble over the screen, above the caption zone, in a bottom corner
+    # that leaves the zoom target of segment 2 free.
     seg = _seg_plan(2, out)
     r = seg.inset
-    assert r.x < out[0] * 0.2 and r.y + r.h <= out[1] - round(out[1] * 0.12)
+    assert r.y + r.h == out[1] - safe_zones(out)["bottom"] and seg.focus
+    assert not any(lay.overlap(r.box(), f) for f in seg.focus)
     img = frame(2)
     bubble = img[r.y : r.y + r.h, r.x : r.x + r.w]
     assert bubble[r.h // 4 : -r.h // 4, r.w // 4 : -r.w // 4].std() > 20  # the camera
@@ -419,3 +429,28 @@ def test_landscape_layouts_render_and_readability(capsys, material):
     assert "error" not in demo, demo
     assert not [d for d in demo["redaction"] + demo["screen_time"] if d["flags"]], demo
     assert demo["readability"] == docs
+
+
+@pytest.mark.parametrize("fmt", ["1:1", "4:5"])
+def test_square_and_4_5_layouts_render(capsys, material, fmt):
+    out = next(size for size, f in FORMAT_OF.items() if f == fmt)
+    job = _job(capsys, material, f"layouts-{fmt.replace(':', 'x')}", size=out)
+    code, s, text = run_tool(capsys, "render", "--job", str(job), "--preview")
+    assert code == 0, (s, text)
+    prev = (out[0] // 4 * 2, out[1] // 4 * 2)
+    assert s["size"] == list(prev)
+    reel = job / "out" / "preview.mp4"
+    starts = _starts()
+    mid = (starts[2] + starts[3]) // 2
+    seg = _seg_plan(2, prev, out)  # the preview: the plan of the EDL size at half size
+    r, v = seg.inset, seg.view
+    pip = _frames(reel, mid, mid + 1, (r.w, r.h, r.x, r.y))[0]
+    assert pip[r.h // 4 : -r.h // 4, r.w // 4 : -r.w // 4].std() > 20  # the camera
+    assert r.y + r.h <= prev[1] - safe_zones(prev)["bottom"]
+    if fmt == "4:5":  # portrait: the inset sits below the view
+        assert r.y >= v.y + v.h
+    mid = (starts[3] + starts[4]) // 2  # split: stacked, the camera below the screen
+    seg3 = _seg_plan(3, prev, out)
+    y0 = seg3.face.y // 2 * 2 + 2
+    part = _frames(reel, mid, mid + 1, (prev[0], (prev[1] - y0) // 2 * 2, 0, y0))
+    assert part[0].std() > 20
