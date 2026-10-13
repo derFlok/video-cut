@@ -22,7 +22,8 @@ approves the plan before anything is cut. Workflow after browser-use/video-use (
 ## Steps
 
 1. **Prerequisites** (each tool keeps fresh outputs, so re-running is cheap):
-   `videocut tool job show` → read `type`, `brief`, `brand` and which artefacts exist. When a
+   `videocut tool job show` → read `type`, `brief`, `brand`, the output `format` (`9:16`,
+   `16:9`, `1:1` or `4:5`; a human sets it) and which artefacts exist. When a
    `brand` is set, `videocut tool brand show <brand>` → note `voice` (`address` du/sie,
    `tone`, `forbidden_words`, `cta`); the overlay ideas follow it. If one is
    missing, run in this order: `videocut tool ingest --denoise`, `videocut tool transcribe`
@@ -93,11 +94,20 @@ are **camera seconds** (the times of `takes_packed.md`), never screen seconds.
   screen shows (personal data?), one closer strip `videocut tool sheet screen <t0> <t1>
   --tiles 2` (screen seconds). The image budget stays 4 in total.
 
-Then decide the **views** per kept range:
+Then decide the **views** per kept range (the output **format** changes what each view
+looks like):
+- **9:16 / 4:5** (tall): the screen is a band; `screen` and `pip` (inset below the band),
+  `split` stacks screen and speaker. Zoom into the steps, the band is narrow.
+- **16:9** (landscape): the screen fills the frame, so `screen` and `pip` (the speaker as a
+  round bubble in a bottom corner) are the main views; `split` (screen left, speaker right)
+  only for a longer explanation. `face` uses the camera directly. Zoom only where the text
+  would be too small: `screen` → `by_format` → `16:9` → `<view>` → `text_px` and
+  `readable_zoom` (≤ `max_zoom`); a readable whole screen needs no zoom target.
+- **1:1**: like 16:9 with a smaller screen; `split` stacks.
 - `face` for the hook, the close/CTA and emotional or personal moments (the viewer must
   see the person); `screen` while the speaker walks through the product; `pip` (screen +
-  the speaker as a small inset below it) when what they say about the screen needs their
-  face; `split` (screen on top, speaker below) for longer explanations. When
+  the speaker as a small inset) when what they say about the screen needs their
+  face; `split` (screen and speaker side by side or stacked, by format) for longer explanations. When
   `max_zoom_split` is below 1.0 the split view would blur: prefer `screen` or `pip`.
 - Screen views only inside the sync `overlap`. Change the view at most every 2–4 s of
   output; a view lasts at least 2 s.
@@ -140,7 +150,7 @@ items numbered under **Personal data** in project.md. No candidates: do not writ
 ```markdown
 # Plan: <one-line working title>
 
-Type: <type> · Target length: <n> s · Estimated length of the keep list: <n> s
+Type: <type> · Format: <format> (<w>x<h>) · Target length: <n> s · Estimated length of the keep list: <n> s
 
 ## Hook (first 2 s)
 "<exact words>" — source <t0>–<t1>; why it stops the scroll.

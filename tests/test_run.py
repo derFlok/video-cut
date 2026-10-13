@@ -69,6 +69,9 @@ def test_skills_name_their_tools_and_the_gate():
     for cmd in ("captions", "overlays", "render --preview", "verify", "edl check", "brand show"):
         assert f"videocut tool {cmd}" in ov
     assert "work/overlay_report.md" in ov and "forbidden_words" in ov
+    # format-aware: the EDL size comes from the job, every skill knows the landscape views
+    assert "[1080, 1920]" not in cut and "Format: <format>" in plan
+    assert all("16:9" in text for text in (plan, cut, ov))
     # every command a skill names is reachable through the one allowed Bash pattern
     for text in (plan, cut, ov):
         for cmd in re.findall(r"`(videocut [^`]*)`", text):

@@ -23,13 +23,16 @@ the result and fix it. Workflow after browser-use/video-use (MIT).
 ## 1. Write `work/edl.json`
 
 Read `work/project.md` (the keep list is the cut) and `work/words.json`
-(`{"words": [{"w", "t0", "t1", "conf"}]}`, source seconds). The cut uses **segments only**;
+(`{"words": [{"w", "t0", "t1", "conf"}]}`, source seconds). `videocut tool job show` prints
+the job's output format and `size` (`9:16` 1080x1920, `16:9` 1920x1080, `1:1` 1080x1080,
+`4:5` 1080x1350); write exactly that `size` into the EDL (a human changes the format, never
+you). The cut uses **segments only**;
 captions and overlays are added after it by the `overlays` skill, not in this run:
 
 ```json
 {
   "fps": 30,
-  "size": [1080, 1920],
+  "size": [<job show size: width>, <height>],
   "source": "<job.json source, e.g. input/take.mov>",
   "segments": [
     {"in": 12.48, "out": 17.92, "fade_ms": 30,
@@ -82,6 +85,14 @@ Write the approved views into the segments (all times **camera seconds**, like `
   `redaction_missing` when a block is missing.
 - Screen layouts must lie inside the sync `overlap` (`edl check` says so otherwise; use
   `face` there). `zoom_keys` (camera punch-ins) only apply to `face` segments.
+- **By format.** `9:16` (and `4:5`): the screen is a band in a tall frame; the rules above
+  as they are. `16:9`: the screen fills the frame (`screen`), `pip` adds the speaker as a
+  round bubble in a bottom corner (the corner away from the zoom target), `split` puts the
+  speaker beside the screen; `face` shows the camera directly. The whole screen is often
+  readable already in 16:9: zoom only where readability needs it — `edl check` warns
+  `screen_text_small` with the zoom a window needs (`videocut tool screen` → `by_format`
+  → `<format>` → `<layout>` → `readable_zoom`, capped by `max_zoom`); a target whose text
+  is readable without zoom needs no key. Prefer `screen`/`pip` over `split` in 16:9.
 
 Then `videocut tool edl check`. Fix every reported path until it passes. Its `warnings`
 name cut points inside a blink: move each to the suggested time (a cut is never in a blink).
