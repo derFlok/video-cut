@@ -294,6 +294,25 @@
   the caption fits below it (in the end-to-end run the phone screenshot collided with the
   caption and was dropped).
 - Render no longer adds a candidate's redact block twice when the EDL already has it.
+- `videocut run` tells the cut run why it cuts again (`--recut`, changed plan or decision),
+  so it replaces the EDL instead of stopping to protect the earlier overlays; a cut record
+  from before `redaction_sha256` keeps its reel.
+
+### Observed — Product demos (real agent runs, generated test material, brand-c locally)
+
+- Screen demo (25 s camera + screen recording with a fake e-mail and phone number, sync
+  offset 3.27 s, confidence 0.88): plan 79.7 s / 12 turns / $0.65 (2 personal-data
+  candidates, 6 screen views, zooms 1.45x and 2.66x = max_zoom, nothing clamped);
+  cut 200.0 s / 23 turns / $1.40; overlays 173.9 s / 19 turns / $0.47; wall 7:46, verify
+  not ok (an audio click at 2.73 s) and the cut dropped two zoom-outs because of the
+  one-frame zoom bug (fixed above). After the fixes, with a human decision (`job redaction
+  --redact-all`) and `--recut`: cut 153.5 s / 20 turns / $0.58, overlays 164.7 s / 15 turns
+  / $0.37, wall 5:19, verify ok, render.json redaction source `decision`, 19.9 s reel.
+- Screenshots only (20 s camera + 3 screenshots, one portrait, one with a fake e-mail):
+  plan 75.8 s / 11 turns / $0.37 (1 candidate); cut 67.1 s / 14 turns / $0.65; overlays
+  191.5 s / 27 turns / $0.56; wall 5:48, verify ok, but the portrait screenshot was dropped
+  (caption collision, fixed above). Overlays again: 97.5 s / 17 turns / $0.37, all three
+  screenshots shown, renderer overlaps 0, e-mail covered by the default, verify ok.
 - Moving screen zooms ended in the top-left corner: `crop` after a per-frame `scale` clamps
   x/y to its configured input size. Moving windows now go through `perspective`
   (sub-pixel, eval=frame); a test checks that the zoomed view shows the target region.

@@ -76,6 +76,11 @@ CUT_PROMPT = (
     "The human approved work/project.md. Use the video-cut:cut skill to cut the Video Cut job "
     "in the current folder."
 )
+CUT_AGAIN = (
+    " The job was cut before; the human asked to cut it again ({why}): write a new "
+    "work/edl.json (segments only; captions and overlays are redone after the cut), render "
+    "and verify."
+)
 OVERLAYS_PROMPT = (
     "The human approved work/project.md and the cut is rendered. Use the video-cut:overlays "
     "skill to add captions and overlays to the Video Cut job in the current folder."
@@ -314,7 +319,8 @@ def cut_done(job: Path) -> bool:
         return (
             rec.get("project_sha256") == approval["project_sha256"]
             and rec.get("segments_sha256") == segments_sha(job)
-            and rec.get("redaction_sha256") == _redaction_sha(job)
+            # (a record from before this field: the redaction of that render is kept)
+            and rec.get("redaction_sha256", red_now := _redaction_sha(job)) == red_now
         )
     vfile = job / "out" / "verify.json"
     try:
@@ -490,7 +496,11 @@ def run(
     else:
         resume = plan_session if plan_session and project_sha(job) == plan_sha else None
         started = time.time()
-        claude(job, "cut", CUT_PROMPT, max_turns, resume, say)
+        prompt = CUT_PROMPT
+        if not plan_session and (job / "out" / "reel.mp4").is_file():
+            why = "--recut" if recut else "the plan or the personal-data decision changed"
+            prompt += CUT_AGAIN.format(why=why)
+        claude(job, "cut", prompt, max_turns, resume, say)
         if project_sha(job) != approved_sha:
             raise RunError("work/project.md changed during the cut run; approve it again")
         _final_verify(job, started, "cut")

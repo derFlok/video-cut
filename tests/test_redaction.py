@@ -181,3 +181,8 @@ def test_a_changed_decision_means_the_cut_is_not_done(job):
     assert run.cut_done(job)
     red.decide(job, None, "cli")  # redact all again
     assert not run.cut_done(job)
+    # a record from before the field keeps its reel
+    data = json.loads((job / "job.json").read_text())
+    data["cut"].pop("redaction_sha256")
+    (job / "job.json").write_text(json.dumps(data))
+    assert run.cut_done(job)

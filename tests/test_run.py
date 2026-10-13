@@ -83,12 +83,14 @@ class FakeClaude:
 
     def __init__(self):
         self.calls = []
+        self.prompts = []
         self.overlay_segments = None  # set to make the overlay run change the cut
 
     def __call__(self, prompt, job_dir, on_event, resume=None, log=None, max_turns=60):
         phase = "plan" if prompt == run.PLAN_PROMPT else "cut"
         phase = "overlays" if prompt.startswith(run.OVERLAYS_PROMPT) else phase
         self.calls.append((phase, resume, max_turns))
+        self.prompts.append(prompt)
         work, out = job_dir / "work", job_dir / "out"
         if phase == "plan":
             (work / "project.md").write_text("# Plan: test\n")
@@ -306,6 +308,8 @@ def test_recut_clears_the_overlay_record_so_overlays_run_again(fake, videocut_ho
     job = Path(lines[0].split("job: ")[1])
     assert run.run(job.name, recut=True, say=lines.append) == 0
     assert [c[0] for c in claude.calls] == ["plan", "cut", "overlays", "cut", "overlays"]
+    assert "cut it again (--recut)" in claude.prompts[3]
+    assert "cut it again" not in claude.prompts[1]
 
 
 def test_failed_overlay_verify_is_not_recorded_as_done(fake, videocut_home, monkeypatch):
