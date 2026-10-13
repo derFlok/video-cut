@@ -13,18 +13,18 @@ OUT = (1080, 1920)
 FPS = Fraction(30)
 
 
-def _seg(start=10.0, end=14.0):
+def _seg(start=10.0, end=14.0, **fields):
     return from_dict(
         {"fps": 30, "size": list(OUT), "source": "input/a.mp4",
-         "segments": [{"in": start, "out": end}]}
+         "segments": [{"in": start, "out": end, **fields}]}
     ).segments[0]  # fmt: skip
 
 
 def _plan(spec, screen=(2880, 1800), layout="screen", start=10.0, end=14.0, out=OUT):
-    seg = _seg(start, end)
+    seg = _seg(start, end, layout=layout, **spec)
     frames = round((end - start) * 30)
     return lay.plan_segment(
-        {"layout": layout, "screen_zoom": [], "redact": [], **spec}, seg, frames, FPS,
+        seg, frames, FPS,
         offset=3.27, screen=screen, camera=(1920, 1080), out=out, full_out=OUT, face=None,
     )  # fmt: skip
 
@@ -55,16 +55,6 @@ def test_non_face_segment_is_one_range_without_camera_zoom():
         ("face", 0, 30, 1.0),
         ("screen", 1, 30, 1.0),
     ]
-
-
-def test_specs_tolerant_defaults_and_errors():
-    specs, errs = lay.specs({"segments": [{"in": 0, "out": 1}, {"layout": "screen"}]})
-    assert [s["layout"] for s in specs] == ["face", "screen"] and not errs
-    _, errs = lay.specs(
-        {"segments": [{"layout": "wide", "screen_zoom": [{"t": 1, "box": [0.5, 0, 0.4, 1]}],
-                       "redact": [{"t0": 2, "t1": 1, "box": [0, 0, 1, 1]}]}]}
-    )  # fmt: skip
-    assert len(errs) == 3 and all(e.startswith("$.segments[0].") for e in errs)
 
 
 @pytest.mark.parametrize("layout", ["screen", "pip", "split"])

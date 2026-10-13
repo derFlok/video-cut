@@ -43,7 +43,7 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
-from ..edl import EdlError, load
+from ..edl import EdlError, load, read_sync
 from . import _layouts, _plates
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
@@ -180,34 +180,16 @@ def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709
     )
 
 
-def _layout_video(job, plan, edl, specs, info, screen, face, video_in, inputs):
+def _layout_video(job, plan, edl, info, face, video_in, inputs):
     """Video lines of a render with screen layouts (the screen is the next input after
-    `inputs`) and the clamped zoom keys [{"segment", "t", "zoom", "max_zoom"}]."""
-    offset = _layouts.sync_offset(job)
-    sinfo = _layouts.probe_screen(screen)
-    screen_frames = math.floor(sinfo["duration"] * plan.fps)
-    segs, clamped = {}, []
-    for i, r in enumerate(plan.ranges):
-        if r.layout == "face":
-            continue
-        seg, cl = _layouts.plan_segment(
-            specs[r.seg], edl.segments[r.seg], r.frames, plan.fps,
-            offset=offset, screen=tuple(sinfo["size"]), camera=tuple(info["size"]),
-            out=plan.out_size, full_out=tuple(edl.size), face=face,
-        )  # fmt: skip
-        if seg.screen_frame + seg.frames <= 0 or seg.screen_frame >= screen_frames:
-            raise ToolError(
-                f"segment {r.seg} ({r.layout}) lies outside the screen recording "
-                f"(offset_s {offset})"
-            )
-        segs[i] = seg
-        clamped += [{"segment": r.seg, **c} for c in cl]
+    `inputs`), the screen recording and the clamped zoom keys."""
+    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
     video = _layouts.video_chain(
-        plan, segs, lambda r: plan_mod.range_filters(plan, r), video_in,
+        plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in,
         f"{len(inputs) // 2}:v:0", bg=_layouts.background(job), matrix=overlay_matrix(info),
-        cam_sdr=to_sdr(info), screen_sdr=to_sdr(sinfo),
+        cam_sdr=to_sdr(info), screen_sdr=to_sdr(drawn["info"]),
     )  # fmt: skip
-    return video, clamped
+    return video, drawn["screen"], drawn["clamped"]
 
 
 def render(args) -> dict:
@@ -229,7 +211,12 @@ def render(args) -> dict:
     src = _source(job, data)
     info = probe(src) if src else None
     try:
-        edl = load(edl_path, source_duration=info["duration"] if info else None)
+        edl = load(
+            edl_path,
+            source_duration=info["duration"] if info else None,
+            sync=read_sync(work / "sync.json"),
+            check_sync=True,  # screen layouts only where both recordings have pictures
+        )
     except EdlError as e:
         for err in e.errors:
             print(err)
@@ -239,10 +226,7 @@ def render(args) -> dict:
     if src is None or info is None:
         raise ToolError(f"EDL source {edl.source!r} is missing or outside the job folder")
     edl, followed, face = framed(job, edl)
-    specs, errs = _layouts.specs(data)
-    if errs:
-        raise ToolError(f"{len(errs)} problem(s) in edl.json: " + "; ".join(errs[:5]))
-    layouts = [s["layout"] for s in specs]
+    layouts = [s.layout for s in edl.segments]
     use_layouts = any(lay != "face" for lay in layouts)
 
     preview = bool(args.preview)
@@ -279,9 +263,8 @@ def render(args) -> dict:
         measured = None  # single pass
     warnings, v_out, video, clamped, screen_rel = [], "[v]", None, [], None
     if use_layouts:
-        screen = _layouts.screen_source(job)
+        video, screen, clamped = _layout_video(job, plan, edl, info, face, video_in, inputs)
         screen_rel = str(screen.relative_to(job))
-        video, clamped = _layout_video(job, plan, edl, specs, info, screen, face, video_in, inputs)
         inputs += ["-i", str(screen)]
         for c in clamped:
             warnings.append(

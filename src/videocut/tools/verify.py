@@ -60,7 +60,7 @@ import numpy as np
 from ..edl import Edl, EdlError, load
 from ..paths import tool_env
 from . import _image as im
-from . import _plates
+from . import _plates, _verify_screen
 from . import overlays as overlays_mod
 from ._geometry import overlap, safe_zones
 from .common import (
@@ -92,6 +92,7 @@ CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry 
 BLOCK_OVERLAP_MAX = 0.1  # share of the smaller box an overlay and a caption may share
 FULL_FRAME_SCENES = _plates.PLATE_SCENES  # the end card: an opaque full-frame plate, by design
 CAPTION_COLS = 3
+STAGE_SCENES = ("screenshot_frame",)  # portrait: may cover the speaker on purpose
 
 
 # ---------------------------------------------------------------- decoding
@@ -219,7 +220,8 @@ def cut_notes(
 
 
 def reframes(edl: Edl) -> list[bool]:
-    """Per inner cut: does the framing (crop centre or zoom) change across it?"""
+    """Per inner cut: does the framing (crop centre or zoom) change across it? A cut into,
+    out of or between screen layouts (product demos) always changes the view."""
 
     def framing(seg, t: float) -> tuple:
         c = seg.crop
@@ -229,18 +231,23 @@ def reframes(edl: Edl) -> list[bool]:
                 z = kz
         return (round(cx, 3), round(cy, 3), round(z, 3))
 
-    return [framing(a, a.end) != framing(b, b.start) for a, b in pairwise(edl.segments)]
+    return [
+        a.layout != "face" or b.layout != "face" or framing(a, a.end) != framing(b, b.start)
+        for a, b in pairwise(edl.segments)
+    ]
 
 
 def blinks_at_cuts(edl: Edl, blinks: list[dict]) -> list[bool]:
     """Per inner cut: does one of the two output frames before or after it show a blink?
     Output frames map to source time: the last ones of segment a end at a.end, the first
-    ones of segment b start at b.start."""
+    ones of segment b start at b.start. A "screen" segment shows no camera."""
     dt = 1 / edl.fps
-    return [
-        any(in_blink(t, blinks) for t in (a.end - 2 * dt, a.end - dt, b.start, b.start + dt))
-        for a, b in pairwise(edl.segments)
-    ]
+    out = []
+    for a, b in pairwise(edl.segments):
+        ts = (a.end - 2 * dt, a.end - dt) if a.layout != "screen" else ()
+        ts += (b.start, b.start + dt) if b.layout != "screen" else ()
+        out.append(any(in_blink(t, blinks) for t in ts))
+    return out
 
 
 # ---------------------------------------------------------------- pictures
@@ -291,12 +298,19 @@ def _drawn(b: dict) -> tuple[float, float]:
 
 
 def overlay_checks(
-    boxes: list[dict], face: list[dict], size: tuple[int, int], last_word: float | None = None
+    boxes: list[dict],
+    face: list[dict],
+    size: tuple[int, int],
+    last_word: float | None = None,
+    views: list[dict] | None = None,
 ) -> list[dict]:
     """Per drawn box (renderer --boxes): flags `overlay_in_safe_zone` / `overlay_on_face`,
     `overlay_overlap`, `caption_on_plate`, `plate_over_speech` (end card before
-    `last_word` + _plates.AFTER_SPEECH_S), the worst face overlap (share of the face box)
-    and when it happens (output s)."""
+    `last_word` + _plates.AFTER_SPEECH_S), `overlay_on_screen` (more than
+    BLOCK_OVERLAP_MAX of the box lies on the screen view of a product-demo stretch,
+    overlays.json `views`), the worst face overlap (share of the face box) and when it
+    happens (output s). A portrait `screenshot_frame` (box taller than wide) is the
+    picture of the moment and may cover the speaker (`stage`, never `overlay_on_face`)."""
     w, h = size
     safe = safe_zones(size)
     lo_x, hi_x, lo_y, hi_y = safe["side"], w - safe["side"], safe["top"], h - safe["bottom"]
@@ -322,8 +336,15 @@ def overlay_checks(
                 share = overlap(b["box"], fb) / area if area > 0 else 0.0
                 if share > worst:
                     worst, at = share, f["t"]
-        if worst > FACE_OVERLAP_MAX and b.get("scene") not in FULL_FRAME_SCENES:
+        stage = b.get("scene") in STAGE_SCENES and (y1 - y0) > (x1 - x0)
+        if worst > FACE_OVERLAP_MAX and b.get("scene") not in FULL_FRAME_SCENES and not stage:
             flags.append("overlay_on_face")
+        if b.get("scene") not in FULL_FRAME_SCENES and any(
+            v["t0"] < b["t1"] and v["t1"] > b["t0"]
+            and overlap(b["box"], v["screen"]) > BLOCK_OVERLAP_MAX * _area(b["box"])
+            for v in views or []
+        ):  # fmt: skip
+            flags.append("overlay_on_screen")
         if b.get("scene") not in ("caption", *FULL_FRAME_SCENES) and any(
             c.get("scene") == "caption"
             and c["t0"] < b["t1"]
@@ -342,6 +363,7 @@ def overlay_checks(
                 "face_overlap": round(worst, 3),
                 "face_t": at,
                 "flags": flags,
+                **({"stage": True} if stage else {}),
             }
         )
     return out
@@ -580,6 +602,13 @@ def verify(args) -> dict:
             c["visual"], c["audio"], median, reframe[i_cut], blink[i_cut]
         )
 
+    demo = {}
+    if edl is not None:
+        demo = _verify_screen.check(
+            job, json.loads(edl_path.read_text()), render, reel, (v["width"], v["height"])
+        )
+    still_screen = demo.get("spans", [])
+
     loud = loudness(reel)
     # The end card as `videocut tool overlays` scheduled it (after the last word, over the
     # held tail). A static end card is not a frozen picture (one frame of slack each end).
@@ -590,7 +619,9 @@ def verify(args) -> dict:
         for s in bad_stretches(reel, video_dur)
         if not (
             s["kind"] == "frozen"
-            and any(a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in plates)
+            and any(
+                a - 1 / fps <= s["t0"] and s["t1"] <= b + 1 / fps for a, b in plates + still_screen
+            )
         )
     ]
     want = float(render["output_duration"])
@@ -616,12 +647,18 @@ def verify(args) -> dict:
         if f"out/verify/{old.name}" not in {c["image"] for c in cut_docs}:
             old.unlink()
     checks["cuts_in_range"] = _check(not bad_cuts, outside=bad_cuts)
+    if "error" in demo:
+        checks["screen_layouts"] = _check(False, error=demo["error"])
+    elif demo:
+        checks["screen_overlap"] = _check(not demo["overlap"], problems=demo["overlap"])
 
     boxes, face_track, ov_size, ov_warn = _load_boxes(job)
     warnings += ov_warn
     last_word = sched.last_word if sched is not None else None
     overlay_docs = (
-        overlay_checks(boxes, face_track, ov_size, last_word) if boxes is not None else []
+        overlay_checks(boxes, face_track, ov_size, last_word, _verify_screen.load_views(job))
+        if boxes is not None
+        else []
     )
     if boxes is not None and not render.get("overlay"):
         warnings.append("this render has no overlay composited; boxes checked anyway")
@@ -658,8 +695,15 @@ def verify(args) -> dict:
         )
     flagged = [{"cut": c["cut"], "t": c["t"], "flags": c["flags"]} for c in cut_docs if c["flags"]]
     info = [{"cut": c["cut"], "t": c["t"], "info": c["info"]} for c in cut_docs if c["info"]]
+    screen_flagged = [
+        {"check": kind, **{k: d[k] for k in ("segment", "t0", "t1", "t") if k in d},
+         "flags": d["flags"]}
+        for kind in ("redaction", "screen_time")
+        for d in demo.get(kind, [])
+        if d["flags"]
+    ]  # fmt: skip
     failed = [k for k, c in checks.items() if not c["ok"]]
-    ok = not failed and not flagged and not overlay_flagged
+    ok = not failed and not flagged and not overlay_flagged and not screen_flagged
     doc = {
         "ok": ok,
         "reel": f"out/{reel_name}",
@@ -671,6 +715,9 @@ def verify(args) -> dict:
         "info": info,
         "overlays": overlay_docs,
         "overlay_flagged": overlay_flagged,
+        "screen": {k: demo[k] for k in ("redaction", "screen_time", "clamped") if k in demo},
+        "screen_flagged": screen_flagged,
+        "screen_zoom_clamped": demo.get("clamped", []),
         "caption_sheets": [str(p.relative_to(job)) for p in sheets],
         "caption_times": times,
         "overlay_sheets": [str(p.relative_to(job)) for p in ov_sheets],
@@ -682,6 +729,11 @@ def verify(args) -> dict:
         print(f"cut {c['cut']} at {c['t']}s: {', '.join(c['flags'])}")
     for o in overlay_flagged:
         print(f"overlay {o['scene'] or '(all)'} {o['t0']}-{o['t1']}s: {', '.join(o['flags'])}")
+    for d in screen_flagged:
+        print(f"screen {d['check']} segment {d.get('segment')}: {', '.join(d['flags'])}")
+    for c in demo.get("clamped", []):
+        print(f"info: segment {c['segment']} screen zoom {c['zoom']}x at {c['t']}s clamped "
+              f"to {c['max_zoom']}x (sharpness)")  # fmt: skip
     for k in failed:
         print(f"check failed: {k} {checks[k]}")
     return {
@@ -692,6 +744,8 @@ def verify(args) -> dict:
         "flagged": flagged,
         "info": info,
         "overlay_flagged": overlay_flagged,
+        "screen_flagged": screen_flagged,
+        "screen_zoom_clamped": demo.get("clamped", []),
         "failed": failed,
         "warnings": warnings,
         "images": [c["image"] for c in cut_docs] + [str(p.relative_to(job)) for p in sheets],

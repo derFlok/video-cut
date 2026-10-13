@@ -99,7 +99,7 @@ window.__load = (id) => __require("", id);
 
 // Runs inside the page. Everything it needs arrives as data; no clock, no randomness.
 function pageMain(spec) {
-  const { size, fps, safe, face, tokens, items, sceneNames, fontFamily } = spec;
+  const { size, fps, safe, face, views, tokens, items, sceneNames, fontFamily } = spec;
   const images = window.__images || {};
   const { faceAt, faceDuring } = window.__load("lib/layout");
   const { step } = window.__load("lib/spring");
@@ -117,7 +117,8 @@ function pageMain(spec) {
   const ctx = main.getContext("2d");
   const accCtx = acc.getContext("2d");
   const memo = new Map();
-  const blocks = [];
+  // Screen views of a product demo (overlays.json "views"): every item keeps off them.
+  const blocks = (views || []).map((v) => ({ t0: v.t0, t1: v.t1, box: v.screen }));
   const env = {
     tokens,
     size,
@@ -316,6 +317,15 @@ function items(spec, known) {
   return { list, skipped };
 }
 
+// Screen views of a product demo ({t0, t1, screen: [x0, y0, x1, y1]}, output time/px);
+// malformed entries are dropped.
+function validViews(views) {
+  const box = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[2] > b[0] && b[3] > b[1];
+  return (Array.isArray(views) ? views : [])
+    .filter((v) => v && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1 && box(v.screen))
+    .map((v) => ({ t0: v.t0, t1: v.t1, screen: v.screen.slice() }));
+}
+
 function validate(spec) {
   const errs = [];
   const okSize = Array.isArray(spec.size) && spec.size.length === 2 && spec.size.every((v) => Number.isInteger(v) && v > 0);
@@ -423,7 +433,7 @@ async function main() {
     if (assets.length) summary.images = await loadImages(page, assets);
     const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
     await page.evaluate(pageMain, {
-      size, fps, safe: spec.safe || {}, face, tokens: spec.tokens, items: list, sceneNames, fontFamily,
+      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
     });
     // Items that could not be placed clear of the face / of each other / inside the safe
     // area even at their smallest size (no room left).

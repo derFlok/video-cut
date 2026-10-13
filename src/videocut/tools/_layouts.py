@@ -5,8 +5,9 @@
             width, vertically centred within the safe zones, on the brand's colors.bg
     pip     like "screen", plus the speaker as a rounded inset (face-centred square crop of
             the camera, PIP_SIZE of the width) below the view, so it never covers screen
-            content: view and inset are centred together within the safe zones, the inset
-            in the corner on the side away from the zoom targets
+            content: the view sits at the top of the safe area, the inset below it in the
+            corner on the side away from the zoom targets; the strip below the inset is
+            left free for the captions
     split   screen view in the top SPLIT_TOP of the frame, the speaker below (face-centred)
 
 Time: segment in/out stay CAMERA time; the screen frame shown at camera time t is screen
@@ -21,9 +22,9 @@ screen coords). Each key's box becomes a window of the view's aspect around the 
 window over the EASE_S before t (shorter when keys are closer). Before the first key the
 whole screen shows. Window edges are interpolated linearly in the eased parameter, so every
 window edge moves monotonically between two keys and windows stay inside the frame.
-Per frame the screen is scaled so the window is the view width (scale eval=frame) and the
-view is cropped out of it (crop with per-frame x/y); both evaluate the same piecewise
-expression of the frame number that `window_at` computes in Python.
+A segment with one window crops it and scales it to the view; a moving window goes through
+`perspective` (sense=source, eval=frame), whose corner expressions are the same piecewise
+function of the frame number `in` that `window_at` computes in Python, then a fixed scale.
 
 Sharpness: a window narrower than the view's width at the EDL size would upscale the
 screen (< 1 source px per output px); such a key is widened to that width and reported
@@ -41,10 +42,11 @@ from fractions import Fraction
 from pathlib import Path
 
 from .. import brand
+from .. import edl as edl_mod
 from ._geometry import Window, crop_window, safe_zones
 from .common import ToolError, binary, read_job, run
 
-LAYOUTS = ("face", "screen", "pip", "split")
+LAYOUTS = edl_mod.LAYOUTS
 EASE_S = 0.6  # length of a zoom move
 PIP_SIZE = 0.34  # inset side, fraction of the output width
 PIP_RADIUS = 0.22  # inset corner radius, fraction of its side
@@ -91,62 +93,7 @@ class Segment:
     face: Rect | None = None  # split: where the speaker goes
     camera: Window | None = None  # camera crop for the inset / the speaker part
     focus: list[list[float]] = field(default_factory=list)  # zoom targets, output px
-
-
-# --- EDL fields (read tolerantly until edl.py carries them) -------------------------------
-
-
-def _unit_box(v) -> bool:
-    return (
-        isinstance(v, list)
-        and len(v) == 4
-        and all(isinstance(x, int | float) and not isinstance(x, bool) for x in v)
-        and all(math.isfinite(x) and 0 <= x <= 1 for x in v)
-        and v[0] < v[2]
-        and v[1] < v[3]
-    )
-
-
-def _time(v) -> bool:
-    return isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
-
-
-def specs(data: dict) -> tuple[list[dict], list[str]]:
-    """Per raw EDL segment {"layout", "screen_zoom", "redact"} (defaults filled in) and
-    every problem with its JSON path."""
-    out, errs = [], []
-    segs = data.get("segments") if isinstance(data, dict) else None
-    for i, s in enumerate(segs if isinstance(segs, list) else []):
-        p = f"$.segments[{i}]"
-        s = s if isinstance(s, dict) else {}
-        layout = s.get("layout", "face")
-        if layout not in LAYOUTS:
-            errs.append(f"{p}.layout: must be one of {', '.join(LAYOUTS)}")
-            layout = "face"
-        zoom, redact = s.get("screen_zoom", []), s.get("redact", [])
-        if not isinstance(zoom, list):
-            errs.append(f"{p}.screen_zoom: must be a list of {{t, box}}")
-            zoom = []
-        if not isinstance(redact, list):
-            errs.append(f"{p}.redact: must be a list of {{t0, t1, box}}")
-            redact = []
-        for j, k in enumerate(zoom):
-            if not (isinstance(k, dict) and _time(k.get("t")) and _unit_box(k.get("box"))):
-                errs.append(
-                    f"{p}.screen_zoom[{j}]: needs t (camera seconds) and box [x0, y0, x1, y1]"
-                    " normalised with x0 < x1, y0 < y1"
-                )
-        for j, r in enumerate(redact):
-            if not (
-                isinstance(r, dict)
-                and _time(r.get("t0"))
-                and _time(r.get("t1"))
-                and r["t0"] < r["t1"]
-                and _unit_box(r.get("box"))
-            ):
-                errs.append(f"{p}.redact[{j}]: needs t0 < t1 (camera seconds) and a normalised box")
-        out.append({"layout": layout, "screen_zoom": zoom, "redact": redact})
-    return out, errs
+    screen: tuple[int, int] = (0, 0)  # size of the screen recording
 
 
 # --- job inputs ---------------------------------------------------------------------------
@@ -162,20 +109,15 @@ def screen_source(job: Path) -> Path:
     return p
 
 
-def sync_offset(job: Path) -> float:
-    """offset_s of work/sync.json (screen_time = camera_time + offset_s)."""
-    path = job / "work" / "sync.json"
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        data = None
-    off = data.get("offset_s") if isinstance(data, dict) else None
-    if not _time(off):
+def sync(job: Path) -> dict:
+    """The valid work/sync.json of the job (edl.read_sync); screen layouts need it."""
+    data = edl_mod.read_sync(job / "work" / "sync.json")
+    if data is None:
         raise ToolError(
-            "work/sync.json with a numeric offset_s is needed for screen layouts; "
-            "sync the screen recording first"
+            "a valid work/sync.json is needed for screen layouts; "
+            "run `videocut tool sync` (or `tool sync --offset <s>`) first"
         )
-    return float(off)
+    return data
 
 
 def background(job: Path) -> str:
@@ -234,7 +176,8 @@ def view_rect(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> Rec
     w, h = ow, _even(ow * screen[1] / screen[0])
     if h > room:  # a tall screen: fit the height instead
         w, h = _even(room * screen[0] / screen[1]), _even(room)
-    return Rect((ow - w) // 2, top + (room - h) // 2, w, h)
+    y = top if layout == "pip" else top + (room - h) // 2  # pip: caption room below the inset
+    return Rect((ow - w) // 2, y, w, h)
 
 
 def _gap(out: tuple[int, int]) -> int:
@@ -313,7 +256,6 @@ def window_expr(seg: Segment, i: int, frame: str) -> str:
 
 
 def plan_segment(
-    spec: dict,
     seg,
     frames: int,
     fps: Fraction,
@@ -325,9 +267,9 @@ def plan_segment(
     full_out: tuple[int, int],
     face: dict | None,
 ) -> tuple[Segment, list[dict]]:
-    """The drawn form of one non-face EDL segment `seg` (edl.Segment, already framed) and
-    its clamped zoom keys."""
-    layout = spec["layout"]
+    """The drawn form of one non-face EDL segment `seg` (edl.Segment, already framed: its
+    layout, screen_zoom and redact were validated by edl.py) and its clamped zoom keys."""
+    layout = seg.layout
     view = view_rect(layout, out, screen)
     sharp_w = view_rect(layout, full_out, screen).w  # >= 1 source px per output px
     aspect = screen[0] / screen[1]  # the view is this aspect up to even rounding
@@ -338,7 +280,7 @@ def plan_segment(
 
     moves, clamped, keys = [], [], []
     ease = max(1, round(EASE_S * fps))
-    for k in sorted(spec["screen_zoom"], key=lambda k: k["t"]):
+    for k in sorted(seg.screen_zoom, key=lambda k: k["t"]):
         win, zoom, was = window_for(k["box"], screen, aspect, min_w)
         if was:
             clamped.append(
@@ -356,7 +298,7 @@ def plan_segment(
         prev_end = f
 
     redact = []
-    for r in spec["redact"]:
+    for r in seg.redact:
         n0 = math.floor((r["t0"] - seg.start) * fps)
         n1 = math.ceil((r["t1"] - seg.start) * fps) - 1
         if n1 < 0 or n0 >= frames:
@@ -376,6 +318,7 @@ def plan_segment(
 
     s = Segment(layout, frames, round((seg.start + offset) * fps), initial, moves, redact, view)
     s.focus = focus
+    s.screen = screen
     crop = seg.crop
     cx, cy = (crop.cx, crop.cy) if crop else (0.5, 0.5)
     if layout == "pip":
@@ -389,6 +332,34 @@ def plan_segment(
         s.face = Rect(0, top, out[0], out[1] - top)
         s.camera = crop_window(camera, (s.face.w, s.face.h), cx, cy, crop.zoom if crop else 1.0)
     return s, clamped
+
+
+def plan_all(job: Path, edl, plan, camera: tuple[int, int], face: dict | None) -> dict:
+    """Every non-face range of `plan` (a _render_plan.Plan of the framed `edl`) drawn:
+    {"segs": {range index: Segment}, "clamped": [{"segment", "t", "zoom", "max_zoom"}],
+    "screen": the recording, "info": probe_screen, "sync": work/sync.json}. Shared by
+    render, overlays (where the screen view and the speaker are) and verify."""
+    src = screen_source(job)
+    sync_doc = sync(job)
+    info = probe_screen(src)
+    offset = sync_doc["offset_s"]
+    screen_frames = math.floor(info["duration"] * plan.fps)
+    segs, clamped = {}, []
+    for i, r in enumerate(plan.ranges):
+        if r.layout == "face":
+            continue
+        seg, cl = plan_segment(
+            edl.segments[r.seg], r.frames, plan.fps, offset=offset, screen=tuple(info["size"]),
+            camera=camera, out=plan.out_size, full_out=tuple(edl.size), face=face,
+        )  # fmt: skip
+        if seg.screen_frame + seg.frames <= 0 or seg.screen_frame >= screen_frames:
+            raise ToolError(
+                f"segment {r.seg} ({r.layout}) lies outside the screen recording "
+                f"(offset_s {offset})"
+            )
+        segs[i] = seg
+        clamped += [{"segment": r.seg, **c} for c in cl]
+    return {"segs": segs, "clamped": clamped, "screen": src, "info": info, "sync": sync_doc}
 
 
 def _inset_crop(camera: tuple[int, int], cx: float, cy: float, face: dict | None) -> Window:
@@ -430,17 +401,22 @@ def screen_view(seg: Segment, fps: Fraction, bg: str, matrix: str, to_sdr: str) 
             f"drawbox=x={x}:y={y}:w={w}:h={h}:color={bg}@1:t=fill"
             f":enable='between(t,{_t(a)},{_t(b)})'"
         )
-    frame = f"round(t*{fps.numerator}/{fps.denominator})"
-    x, y, w = (window_expr(seg, i, frame) for i in range(3))
     vw, vh = seg.view.w, seg.view.h
-    # Scaled frame size: the window becomes vw wide; ceil so the crop always fits.
-    f += [
-        f"scale=w='2*ceil({vw}*iw/({w})/2)':h='2*ceil({vw}*ih/({w})/2)':eval=frame"
-        f":flags=lanczos:out_color_matrix={matrix}:out_range=tv",
-        f"crop={vw}:{vh}:x='min(max(round(({x})*{vw}/({w})),0),iw-{vw})'"
-        f":y='min(max(round(({y})*{vw}/({w})),0),ih-{vh})'",
-        "setsar=1",
-    ]
+    scale = f"scale={vw}:{vh}:flags=lanczos:out_color_matrix={matrix}:out_range=tv"
+    if not seg.moves:  # one window for the whole segment: a plain crop
+        sw, sh = seg.screen
+        x, y = (max(0, round(v)) for v in seg.initial[:2])
+        w, h = min(int(seg.initial[2]), sw - x), min(int(seg.initial[2] * vh / vw), sh - y)
+        return [*f, f"crop={w}:{h}:{x}:{y}", scale, "setsar=1"]
+    # Moving window: perspective maps the window's corners (source px, per input frame
+    # `in`) onto the whole frame with sub-pixel precision, then one fixed-size scale.
+    # (A scale with eval=frame followed by crop cannot work: crop clamps x/y to the
+    # size of its input link, fixed when the graph is configured.)
+    x, y, w = (f"({window_expr(seg, i, 'in')})" for i in range(3))
+    h = f"({w}*{vh}/{vw})"
+    corners = [(x, y), (f"{x}+{w}", y), (x, f"{y}+{h}"), (f"{x}+{w}", f"{y}+{h}")]
+    args = ":".join(f"x{k}='{cx}':y{k}='{cy}'" for k, (cx, cy) in enumerate(corners))
+    f += [f"perspective={args}:interpolation=cubic:sense=source:eval=frame", scale, "setsar=1"]
     return f
 
 

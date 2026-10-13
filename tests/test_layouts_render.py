@@ -115,12 +115,12 @@ def _starts() -> list[int]:
 
 
 def _seg_plan(i: int, out=(1080, 1920)):
-    seg = {"in": SEGMENTS[i]["in"], "out": SEGMENTS[i]["out"]}
-    edl = from_dict({"fps": 30, "size": [1080, 1920], "source": "input/a.mp4", "segments": [seg]})
-    specs, _ = lay.specs({"segments": [SEGMENTS[i]]})
+    edl = from_dict(
+        {"fps": 30, "size": [1080, 1920], "source": "input/a.mp4", "segments": [SEGMENTS[i]]}
+    )
     n = _starts()[i + 1] - _starts()[i]
     return lay.plan_segment(
-        specs[0], edl.segments[0], n, Fraction(30), offset=OFFSET, screen=(SW, SH),
+        edl.segments[0], n, Fraction(30), offset=OFFSET, screen=(SW, SH),
         camera=(1920, 1080), out=out, full_out=(1080, 1920), face=None,
     )[0]  # fmt: skip
 
@@ -179,6 +179,23 @@ def test_layouts_render(capsys, material):
                 assert red.mean() > 0.9, (i, n)
     assert any(not any(r[0] <= n <= r[1] for r in _seg_plan(1).redact) for n in range(10))
 
+    # Zoom lands where the window says: after the move of segment 4 the (unredacted) red
+    # block shows at its mapped place; in segment 2 (zoomed pip) the block there is bg.
+    for i, n, want in ((4, 30, "red"), (2, 40, "bg")):
+        seg = _seg_plan(i)
+        v = seg.view
+        x, y, w = lay.window_at(seg, n)
+        kk = v.w / w
+        x0, x1 = max(int((SECRET[0] - x) * kk) + 6, 0), min(int((SECRET[2] - x) * kk) - 6, v.w)
+        y0, y1 = max(int((SECRET[1] - y) * kk) + 6, 0), min(int((SECRET[3] - y) * kk) - 6, v.h)
+        assert x1 - x0 > 50 and y1 - y0 > 50, (i, x0, x1, y0, y1)
+        img = _frames(reel, starts[i] + n, starts[i] + n + 1, (v.w, v.h, v.x, v.y), "rgb24")[0]
+        box = img[y0:y1, x0:x1]
+        if want == "red":
+            assert ((box[..., 0] > 150) & (box[..., 1] < 100)).mean() > 0.9, i
+        else:
+            assert np.abs(box - 244).max() < 12, i
+
     # Layout look: screen keeps the bottom on the brand background, split shows the
     # camera there, pip has the inset below the view.
     def bottom(i):
@@ -203,3 +220,33 @@ def test_layouts_preview_and_errors(capsys, material):
     (job / "work" / "sync.json").unlink()
     code, s, _ = run_tool(capsys, "render", "--job", str(job), "--preview")
     assert code != 0 and "sync" in json.dumps(s)
+
+
+def test_layouts_verify(capsys, material):
+    job = _job(capsys, material, "layouts-verify")
+    code, s, _ = run_tool(capsys, "render", "--job", str(job), "--preview")
+    assert code == 0, s
+    code, s, out = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0, s
+    assert s["screen_flagged"] == [], out
+    assert [c["segment"] for c in s["screen_zoom_clamped"]] == [4]
+    doc = json.loads((job / "out" / "verify.json").read_text())
+    red = doc["screen"]["redaction"]
+    assert [r["segment"] for r in red] == [1, 2]
+    assert all(x["bg_share"] >= 0.9 for r in red for x in r["samples"]) and red[1]["samples"]
+    assert len(doc["screen"]["screen_time"]) == 4 and doc["checks"]["screen_overlap"]["ok"]
+    # No frozen flag for the still screen, no visual_jump at the view changes.
+    assert doc["checks"]["black_or_frozen"]["ok"], doc["checks"]["black_or_frozen"]
+    assert not any("visual_jump" in c["flags"] for c in doc["cuts"])
+
+    # A redact block the render did not draw, and a wrong offset, are both caught.
+    edl = json.loads((job / "work" / "edl.json").read_text())
+    edl["segments"][4]["redact"] = [{"t0": 5.6, "t1": 5.9, "box": SECRET_BOX}]
+    (job / "work" / "edl.json").write_text(json.dumps(edl))
+    sync = json.loads((job / "work" / "sync.json").read_text())
+    (job / "work" / "sync.json").write_text(json.dumps({**sync, "offset_s": OFFSET + 0.5}))
+    code, s, out = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0 and not s["ok"]
+    got = {(d["check"], d["segment"], f) for d in s["screen_flagged"] for f in d["flags"]}
+    assert ("redaction", 4, "redaction_missing") in got, out
+    assert any(c == "screen_time" and f == "screen_time_mismatch" for c, _, f in got), out

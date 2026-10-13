@@ -14,6 +14,8 @@ const name = "screenshot_frame";
 // Longest side of the redacted copy (enough for a 4x zoom on a full-width frame).
 const MAX_SIDE = 4096;
 const MAX_ZOOM = 4;
+const LANDSCAPE_H = 0.42; // landscape image height, share of the usable height
+const CAPTION_ROOM = 0.22; // portrait: share of the usable height left for a caption block
 
 const fileOf = (item) => String((item.props && item.props.file) || "").trim();
 
@@ -85,12 +87,23 @@ function layout(ctx, item, env) {
     const ar = src.w / src.h;
     const { size, safe } = env;
     const usableH = size[1] - ((safe && safe.top) || 0) - ((safe && safe.bottom) || 0);
-    const L = card.layoutCard(env, item, (k) => {
-      const px = size[0] * 0.05 * k;
-      const pad = Math.round(px * 0.3);
-      const iw = Math.min(card.maxCardWidth(env, px, pad), usableH * 0.42 * ar) * k;
-      return { px, pad, iw, ih: iw / ar, w: iw + 2 * pad, h: iw / ar + 2 * pad };
-    });
+    // Landscape: a card of at most LANDSCAPE_H of the usable height, clear of the face.
+    // Portrait (a phone screenshot): as tall as the safe area allows, minus room for one
+    // caption block; it is the picture of the moment and may cover the speaker (stage).
+    const portrait = ar < 1;
+    const L = card.layoutCard(
+      env,
+      item,
+      (k) => {
+        const px = size[0] * 0.05 * k;
+        const pad = Math.round(px * 0.3);
+        const reach = style.bleed(px);
+        const maxH = portrait ? usableH * (1 - CAPTION_ROOM) - 2 * pad - 2 * reach : usableH * LANDSCAPE_H;
+        const iw = Math.min(card.maxCardWidth(env, px, pad), maxH * ar) * k;
+        return { px, pad, iw, ih: iw / ar, w: iw + 2 * pad, h: iw / ar + 2 * pad };
+      },
+      { stage: portrait },
+    );
     return { ...L, src, focus: focus && focusRect(src, focus) };
   });
 }

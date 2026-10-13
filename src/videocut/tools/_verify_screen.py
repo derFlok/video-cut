@@ -1,0 +1,278 @@
+"""Product-demo checks of `videocut tool verify` (EDL segments with layout screen/pip/split).
+
+    redaction       every redact block, mapped through the drawn zoom window into output
+                    px, is checked on sampled output frames of its range (first, middle,
+                    last, up to REDACT_SAMPLES): at least REDACT_MIN_SHARE of its pixels
+                    must be the brand background. Flag `redaction_missing` otherwise
+                    (a block zoomed fully out of the view has nothing to hide there)
+    screen time     per screen segment one output frame (its middle) is compared with the
+                    screen recording at the mapped screen time (camera time + offset_s)
+                    and at +-0.5 s / +-1 s, through the same zoom window: flag
+                    `screen_time_mismatch` when another time matches clearly better
+                    (static screens match everywhere and pass)
+    clamps          render.json `screen_zoom_clamped` (keys widened so the screen stays
+                    sharp) are reported as info, never a flag
+    overlap         every non-face segment must lie inside work/sync.json "overlap" (the
+                    rule of `edl check`); a check that fails otherwise
+
+The geometry comes from the same _layouts plan render draws, at the size of the checked
+reel (a preview is checked at its half size).
+"""
+
+import json
+import math
+import subprocess
+from pathlib import Path
+
+import numpy as np
+
+from .. import edl as edl_mod
+from ..paths import tool_env
+from . import _layouts
+from . import _render_plan as plan_mod
+from ._geometry import framed
+from .common import ToolError, binary
+from .ingest import probe
+
+REDACT_SAMPLES = 5
+REDACT_MIN_SHARE = 0.9
+REDACT_TOL = 28  # max per-channel difference to the background colour (yuv420 + H.264)
+REDACT_INSET = 3  # px left out at each edge (chroma bleeding)
+MAP_OFFSETS = (-1.0, -0.5, 0.5, 1.0)  # alternative screen times, seconds
+MAP_W = 96  # compared at this width (grey)
+MAP_MARGIN = 3.0  # grey levels another time must beat the mapped one by
+MAP_MIN = 4.0  # ... and the mapped one must be at least this far off
+
+
+def context(job: Path, data: dict, size: tuple[int, int]) -> dict | None:
+    """Drawn segments of the EDL dict `data` at reel `size`, or None for a face-only EDL.
+    Raises ToolError when the screen inputs are missing (render would have failed too)."""
+    segs = data.get("segments") if isinstance(data, dict) else None
+    if not any(isinstance(s, dict) and s.get("layout", "face") != "face" for s in segs or []):
+        return None
+    src = (job / data["source"]).resolve()
+    info = probe(src)
+    edl = edl_mod.from_dict(data, info["duration"])
+    edl, _, face = framed(job, edl)
+    layouts = [s.layout for s in edl.segments]
+    plan = plan_mod.build(edl, tuple(info["size"]), size, layouts)
+    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face)
+    starts, f0 = [], 0
+    for r in plan.ranges:
+        starts.append(f0)
+        f0 += r.frames
+    return {**drawn, "plan": plan, "starts": starts, "edl": edl, "bg": _layouts.background(job)}
+
+
+def _raw(args: list[str]) -> bytes:
+    cmd = [binary("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", *args]
+    r = subprocess.run(cmd, capture_output=True, env=tool_env())
+    if r.returncode != 0:
+        raise ToolError(f"ffmpeg failed: {r.stderr.decode(errors='replace').strip()[-400:]}")
+    return r.stdout
+
+
+def _rgb(color: str) -> np.ndarray:
+    v = int(color[2:], 16)
+    return np.array([(v >> 16) & 255, (v >> 8) & 255, v & 255])
+
+
+def _out_rect(seg: _layouts.Segment, n: int, x: int, y: int, w: int, h: int):
+    """Source-px rect (x, y, w, h) of the screen -> output px [x0, y0, x1, y1] at local
+    frame n, clipped to the view; None when nothing of it is visible."""
+    wx, wy, ww = _layouts.window_at(seg, n)
+    k = seg.view.w / ww
+    v = seg.view
+    x0, y0 = max(v.x + (x - wx) * k, v.x), max(v.y + (y - wy) * k, v.y)
+    x1, y1 = min(v.x + (x + w - wx) * k, v.x + v.w), min(v.y + (y + h - wy) * k, v.y + v.h)
+    if x1 - x0 < 1 or y1 - y0 < 1:
+        return None
+    return [math.ceil(x0), math.ceil(y0), math.floor(x1), math.floor(y1)]
+
+
+def _frames(reel: Path, numbers: list[int], size: tuple[int, int]) -> dict[int, np.ndarray]:
+    """Output frames `numbers` of the reel as rgb arrays {n: [h, w, 3]}."""
+    if not numbers:
+        return {}
+    want = sorted(set(numbers))
+    sel = "+".join(f"eq(n\\,{n})" for n in want)
+    out = _raw(
+        ["-i", str(reel), "-an", "-vf", f"select='{sel}'", "-fps_mode", "passthrough"]
+        + ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    )
+    w, h = size
+    arr = np.frombuffer(out, np.uint8).reshape(-1, h, w, 3)
+    return dict(zip(want, arr, strict=False))
+
+
+def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
+    """Per redact block: the sampled output frames, the background share and flags."""
+    plan = ctx["plan"]
+    todo = []  # (doc, local n, output frame, rect)
+    docs = []
+    for i, seg in ctx["segs"].items():
+        r = plan.ranges[i]
+        for n0, n1, x, y, w, h in seg.redact:
+            k = min(REDACT_SAMPLES, n1 - n0 + 1)
+            ns = sorted({round(n0 + (n1 - n0) * j / max(k - 1, 1)) for j in range(k)})
+            doc = {
+                "segment": r.seg,
+                "t0": round(float((ctx["starts"][i] + n0) / plan.fps), 3),
+                "t1": round(float((ctx["starts"][i] + n1 + 1) / plan.fps), 3),
+                "samples": [],
+                "flags": [],
+            }
+            docs.append(doc)
+            for n in ns:
+                rect = _out_rect(seg, n, x, y, w, h)
+                if rect is None:
+                    continue
+                x0, y0, x1, y1 = rect
+                rect = [x0 + REDACT_INSET, y0 + REDACT_INSET, x1 - REDACT_INSET, y1 - REDACT_INSET]
+                if rect[2] <= rect[0] or rect[3] <= rect[1]:
+                    continue
+                todo.append((doc, n, ctx["starts"][i] + n, rect))
+    frames = _frames(reel, [f for _, _, f, _ in todo], size)
+    bg = _rgb(ctx["bg"])
+    for doc, _, f, rect in todo:
+        img = frames.get(f)
+        if img is None:
+            continue
+        x0, y0, x1, y1 = rect
+        patch = img[y0:y1, x0:x1].astype(int)
+        share = float((np.abs(patch - bg).max(axis=2) <= REDACT_TOL).mean())
+        doc["samples"].append({"t": round(float(f / ctx["plan"].fps), 3), "box": rect,
+                               "bg_share": round(share, 3)})  # fmt: skip
+        if share < REDACT_MIN_SHARE and "redaction_missing" not in doc["flags"]:
+            doc["flags"].append("redaction_missing")
+    return docs
+
+
+def _grey(img: np.ndarray) -> np.ndarray:
+    return img[..., 0] * 0.299 + img[..., 1] * 0.587 + img[..., 2] * 0.114
+
+
+def _shrink(g: np.ndarray, w: int) -> np.ndarray:
+    """Area-average grey image `g` down to about `w` columns."""
+    k = max(1, g.shape[1] // w)
+    h2, w2 = g.shape[0] // k, g.shape[1] // k
+    return g[: h2 * k, : w2 * k].reshape(h2, k, w2, k).mean(axis=(1, 3))
+
+
+def _screen_view(src: Path, t: float, win, view, sinfo: dict) -> np.ndarray | None:
+    """The screen recording at screen time t, cut to window `win` and scaled to the view."""
+    if t < 0 or t > sinfo["duration"]:
+        return None
+    sw, sh = sinfo["size"]
+    x, y = max(0, int(win[0])), max(0, int(win[1]))
+    w = min(int(win[2]), sw - x)
+    h = min(int(win[2] * view.h / view.w), sh - y)  # the view aspect is rounded to even px
+    out = _raw(
+        ["-ss", f"{t:.3f}", "-i", str(src), "-frames:v", "1", "-an", "-vf"]
+        + [f"crop={w}:{h}:{x}:{y},scale={view.w}:{view.h},format=rgb24"]
+        + ["-f", "rawvideo", "-"]
+    )
+    if len(out) != view.w * view.h * 3:
+        return None
+    return np.frombuffer(out, np.uint8).reshape(view.h, view.w, 3).astype(float)
+
+
+def screen_time(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
+    """Per screen segment: grey difference of its middle frame to the screen recording at
+    the mapped time and at MAP_OFFSETS, and `screen_time_mismatch` when one is clearly
+    better. Redaction blocks are left out of the comparison."""
+    plan, sinfo = ctx["plan"], ctx["info"]
+    picks = {i: seg.frames // 2 for i, seg in ctx["segs"].items()}
+    frames = _frames(reel, [ctx["starts"][i] + n for i, n in picks.items()], size)
+    docs = []
+    for i, seg in ctx["segs"].items():
+        n = picks[i]
+        img = frames.get(ctx["starts"][i] + n)
+        if img is None:
+            continue
+        v = seg.view
+        mask = np.ones((v.h, v.w), bool)
+        for n0, n1, x, y, w, h in seg.redact:
+            rect = _out_rect(seg, n, x, y, w, h) if n0 <= n <= n1 else None
+            if rect:
+                mask[rect[1] - v.y : rect[3] - v.y, rect[0] - v.x : rect[2] - v.x] = False
+        reel_view = _grey(img[v.y : v.y + v.h, v.x : v.x + v.w].astype(float))
+        win = _layouts.window_at(seg, n)
+        t = float((seg.screen_frame + n) / plan.fps)
+        diffs = {}
+        for dt in (0.0, *MAP_OFFSETS):
+            ref = _screen_view(ctx["screen"], t + dt, win, v, sinfo)
+            if ref is None:
+                continue
+            d = np.abs(_grey(ref) - reel_view)
+            diffs[dt] = float(_shrink(np.where(mask, d, 0.0), MAP_W).mean())
+        if 0.0 not in diffs:
+            continue
+        best = min(diffs, key=diffs.get)
+        flags = []
+        if best != 0.0 and diffs[0.0] >= MAP_MIN and diffs[best] + MAP_MARGIN < diffs[0.0]:
+            flags.append("screen_time_mismatch")
+        docs.append(
+            {
+                "segment": plan.ranges[i].seg,
+                "layout": seg.layout,
+                "t": round(float((ctx["starts"][i] + n) / plan.fps), 3),
+                "screen_t": round(t, 3),
+                "diff": {f"{k:+.1f}": round(d, 2) for k, d in sorted(diffs.items())},
+                "flags": flags,
+            }
+        )
+    return docs
+
+
+def screen_spans(ctx: dict | None) -> list[tuple[float, float]]:
+    """Output time spans of "screen" layout segments (no camera picture: a still screen
+    is not a frozen video)."""
+    if ctx is None:
+        return []
+    plan = ctx["plan"]
+    return [
+        (float(ctx["starts"][i] / plan.fps), float((ctx["starts"][i] + s.frames) / plan.fps))
+        for i, s in ctx["segs"].items()
+        if s.layout == "screen"
+    ]
+
+
+def overlap_check(job: Path, data: dict) -> list[str]:
+    return edl_mod.overlap_errors(data, edl_mod.read_sync(job / "work" / "sync.json"))
+
+
+def clamped_info(render: dict) -> list[dict]:
+    c = render.get("screen_zoom_clamped")
+    return c if isinstance(c, list) else []
+
+
+def load_views(job: Path) -> list[dict]:
+    try:
+        doc = json.loads((job / "work" / "overlays.json").read_text())
+    except (OSError, ValueError):
+        return []
+    views = doc.get("views") if isinstance(doc, dict) else None
+    return [
+        v
+        for v in (views if isinstance(views, list) else [])
+        if isinstance(v, dict) and isinstance(v.get("screen"), list) and len(v["screen"]) == 4
+    ]
+
+
+def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]) -> dict:
+    """All product-demo checks: {"redaction", "screen_time", "clamped", "overlap",
+    "spans"}; an empty dict for a face-only EDL."""
+    try:
+        ctx = context(job, data, size)
+    except (ToolError, edl_mod.EdlError, KeyError, TypeError) as e:
+        return {"error": str(e)}
+    if ctx is None:
+        return {}
+    return {
+        "redaction": redaction(reel, ctx, size),
+        "screen_time": screen_time(reel, ctx, size),
+        "clamped": clamped_info(render),
+        "overlap": overlap_check(job, data),
+        "spans": screen_spans(ctx),
+    }
