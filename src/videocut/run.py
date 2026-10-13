@@ -599,6 +599,7 @@ REVISION_FILES = [
     "out/render.json",
     "out/verify.json",
     "out/cover.jpg",
+    "out/preview.mp4",
 ]
 
 
@@ -624,15 +625,30 @@ def history(job: Path) -> list[tuple[int, Path]]:
 
 
 def save_history(job: Path) -> Path:
-    """Copy out/reel.mp4 to out/history/reel-<n>.mp4 (n counts on); keep the last
-    HISTORY_KEEP."""
+    """Copy out/reel.mp4 to out/history/reel-<n>.mp4 (n counts on). Pruning to the last
+    HISTORY_KEEP happens after a successful revision (prune_history), so a failed one
+    never costs a kept version."""
     old = history(job)
     dst = job / "out" / "history" / f"reel-{old[-1][0] + 1 if old else 1}.mp4"
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(job / "out" / "reel.mp4", dst)
+    return dst
+
+
+def prune_history(job: Path) -> None:
     for _, p in history(job)[:-HISTORY_KEEP]:
         p.unlink()
-    return dst
+
+
+def archive_revisions(job: Path) -> None:
+    """A new cut (another approved plan, --recut) starts the version list again: the old
+    revisions.jsonl and out/history are kept aside with a time stamp."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log, hist = job / "work" / "revisions.jsonl", job / "out" / "history"
+    if log.is_file():
+        log.rename(log.with_name(f"revisions-before-{stamp}.jsonl"))
+    if hist.is_dir():
+        hist.rename(hist.with_name(f"history-before-{stamp}"))
 
 
 def _backup_dir(job: Path) -> Path:
@@ -687,10 +703,15 @@ def _ranges(data: dict) -> list[tuple[float, float]]:
 def plan_ranges(job: Path, edl_data: dict) -> list[tuple[float, float]]:
     """The source ranges the human approved: the keep list of work/plan.json plus the
     segments of the current cut (made from the approved plan, plus what earlier revisions
-    added on the human's request), merged."""
+    added on the human's request), merged. plan.json counts only when it is the one the
+    approval saw (an agent run may write work/, so a later plan.json is not trusted)."""
+    from .tools.job import approved_plan_json
+
     try:
         keep = json.loads((job / "work" / "plan.json").read_text()).get("keep_list") or []
     except (OSError, ValueError, AttributeError):
+        keep = []
+    if not approved_plan_json(job):
         keep = []
     ranges = _ranges(edl_data)
     for it in keep if isinstance(keep, list) else []:
@@ -880,6 +901,11 @@ def revise(
         raise RunError(f"the plan of {job.name} is not approved; feedback needs a finished reel")
     if not ((out / "reel.mp4").is_file() and (work / "edl.json").is_file()):
         raise RunError(f"{job.name} has no finished reel yet; run `videocut run {job.name}`")
+    if not cut_done(job):
+        raise RunError(
+            f"out/reel.mp4 of {job.name} is not the cut of the approved plan; "
+            f"run `videocut run {job.name}` first"
+        )
     located = None
     if at_s is not None:
         located = tool(job, "edl", "locate", str(at_s))
@@ -961,6 +987,7 @@ def revise(
     if brand and render.get("overlay"):
         _record_overlays(job, brand, verify)
     shutil.rmtree(_backup_dir(job), ignore_errors=True)
+    prune_history(job)
     run_ = _last_run(job, "revise", since)
     entry.update(
         ok=True,
@@ -1102,6 +1129,7 @@ def run(
                 else "the plan, the personal-data decision or the output format changed"
             )
             prompt += CUT_AGAIN.format(why=why)
+        archive_revisions(job)
         claude(job, "cut", prompt, max_turns, resume, say)
         if project_sha(job) != approved_sha:
             raise RunError("work/project.md changed during the cut run; approve it again")

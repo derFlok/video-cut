@@ -114,6 +114,20 @@ def planned_job(job_id="j1", candidates=None) -> Path:
     return job
 
 
+def cut_job(job: Path, overlay: bool = False) -> str:
+    """What a finished cut run leaves (EDL, reel, verify, render, job.json cut record)."""
+    edl = {"fps": 30, "size": [1080, 1920], "source": "input/take.mov",
+           "segments": [{"in": 0.0, "out": 2.0}]}  # fmt: skip
+    (job / "work" / "edl.json").write_text(json.dumps(edl))
+    edl_sha = pipeline._file_sha(job / "work" / "edl.json")
+    (job / "out" / "reel.mp4").write_bytes(b"reel")
+    (job / "out" / "verify.json").write_text(json.dumps({"ok": True, "reel": "out/reel.mp4"}))
+    render = {"edl_sha256": edl_sha, **({"overlay": True} if overlay else {})}
+    (job / "out" / "render.json").write_text(json.dumps(render))
+    pipeline.record_cut(job, project_sha(job))
+    return edl_sha
+
+
 def events(client, job_id) -> list[dict]:
     r = client.get(f"/api/jobs/{job_id}/events?follow=0")
     assert r.status_code == 200
@@ -383,11 +397,38 @@ def test_plan_get_and_put_with_sha(client):
     assert stale.status_code == 409 and stale.json()["detail"]["code"] == "stale"
     ok = client.put("/api/jobs/j1/plan", json={"markdown": "# Mine\n", "sha": p["sha"]})
     assert ok.status_code == 200 and ok.json()["sha"] == project_sha(job)
-    assert ok.json()["markdown"] == "# Mine\n" and ok.json()["plan"] == {"title": "A title"}
+    # the human's text is the plan now: the structured twin no longer matches, it is dropped
+    assert ok.json()["markdown"] == "# Mine\n" and ok.json()["plan"] is None
     assert (job / "work" / "project.md").read_text() == "# Mine\n"
+    assert not (job / "work" / "plan.json").exists()
     again = client.put("/api/jobs/j1/plan", json={"markdown": "# Again\n", "sha": p["sha"]})
     assert again.status_code == 409
-    assert client.get("/api/jobs/j1").json()["title"] == "A title"
+    assert client.get("/api/jobs/j1").json()["title"] == "One thesis"
+
+
+def test_approval_binds_the_plan_json_the_human_saw(client):
+    job = planned_job()
+    (job / "work" / "plan.json").write_text(json.dumps({"title": "Seen"}))
+    client.post("/api/jobs/j1/approve", json={"plan_sha": project_sha(job)})
+    client.app.state.runs.wait_idle()
+    assert read_approval(job)["plan_json_sha256"] == pipeline._file_sha(job / "work/plan.json")
+    assert client.get("/api/jobs/j1/plan").json()["plan"] == {"title": "Seen"}
+    # a later run writes another plan.json (work/ is agent-writable): not shown, not trusted
+    (job / "work" / "plan.json").write_text(json.dumps({"title": "Swapped"}))
+    assert client.get("/api/jobs/j1/plan").json()["plan"] is None
+    edl = {"segments": [{"in": 1.0, "out": 2.0}]}
+    (job / "work" / "plan.json").write_text(
+        json.dumps({"keep_list": [{"n": 1, "src": [0.0, 50.0]}]})
+    )
+    assert pipeline.plan_ranges(job, edl) == [(1.0, 2.0)]
+
+
+def test_approve_refuses_an_empty_or_duplicate_pick(client):
+    job = planned_job(candidates=[SCREEN, SHOT])
+    for ids in ([], [1, 1]):
+        body = {"plan_sha": project_sha(job), "redaction": {"mode": "redact", "ids": ids}}
+        assert client.post("/api/jobs/j1/approve", json=body).status_code == 400, ids
+    assert not is_approved(job)
 
 
 def test_plan_edit_invalidates_an_approval(client):
@@ -465,6 +506,10 @@ def test_feedback_needs_a_finished_reel(client, fake):
     assert client.post("/api/jobs/j1/feedback", json={"text": "less zoom"}).status_code == 409
     client.post("/api/jobs/j1/approve", json={"plan_sha": project_sha(job)})
     client.app.state.runs.wait_idle()
+    # a reel that is not the recorded cut of the approved plan (e.g. of an older plan)
+    r = client.post("/api/jobs/j1/feedback", json={"text": "less zoom"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "state"
+    cut_job(job)
     r = client.post("/api/jobs/j1/feedback", json={"text": "at 0:12 zoom out less", "at_s": 12})
     assert r.status_code == 200
     client.app.state.runs.wait_idle()

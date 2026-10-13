@@ -219,6 +219,36 @@ def test_reel_history_keeps_the_last_five(fake_agent, videocut_home):
     assert [r["n"] for r in _revisions(job)] == list(range(1, 8))
 
 
+def test_a_failed_revision_costs_no_kept_version(fake_agent, videocut_home):
+    fake_agent(FakeRevise(_zoom_less))
+    job = make_job(videocut_home, [{"in": 0, "out": 2, "zoom_keys": [[1.0, 1.4]]}])
+    for _ in range(5):
+        run.revise(job, "zoom out less", say=lambda _: None)
+    fake_agent(FakeRevise(lambda edl, j: edl["segments"].append({"in": 30.0, "out": 31.0})))
+    with pytest.raises(run.RunError):
+        run.revise(job, "make it better", say=lambda _: None)
+    assert [n for n, _ in run.history(job)] == [1, 2, 3, 4, 5]
+
+
+def test_feedback_needs_the_cut_of_the_approved_plan(fake_agent, videocut_home):
+    fake_agent(FakeRevise(_zoom_less))
+    job = make_job(videocut_home, [{"in": 0, "out": 2, "zoom_keys": [[1.0, 1.4]]}])
+    (job / "work" / "project.md").write_text("# Plan: changed and approved again\n")
+    job_tool.approve_job(job)  # the reel and EDL are still those of the old plan
+    with pytest.raises(run.RunError, match="not the cut of the approved plan"):
+        run.revise(job, "zoom out less", say=lambda _: None)
+
+
+def test_a_new_cut_archives_the_versions(fake_agent, videocut_home):
+    fake_agent(FakeRevise(_zoom_less))
+    job = make_job(videocut_home, [{"in": 0, "out": 2, "zoom_keys": [[1.0, 1.4]]}])
+    run.revise(job, "zoom out less", say=lambda _: None)
+    run.archive_revisions(job)
+    assert not (job / "work" / "revisions.jsonl").exists() and run.history(job) == []
+    assert len(list((job / "work").glob("revisions-before-*.jsonl"))) == 1
+    assert len(list((job / "out").glob("history-before-*/reel-1.mp4"))) == 1
+
+
 def test_out_of_plan_segment_fails_and_restores_the_previous_reel(fake_agent, videocut_home):
     def add_new(edl, job):
         edl["segments"].append({"in": 8.0, "out": 9.0})

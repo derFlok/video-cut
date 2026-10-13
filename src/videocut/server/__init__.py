@@ -17,6 +17,7 @@ lines become events on the job's server-sent-event channel.
 """
 
 import secrets
+import shutil
 import webbrowser
 
 from .app import create_app
@@ -30,6 +31,10 @@ def serve(port: int = 4300, open_browser: bool = True) -> None:
     from .. import run
 
     run.install_stdout_router()  # run threads and request threads capture tool output
+    from ..tools.common import home
+
+    # staging folders of uploads a killed server left behind (multi-GB possible)
+    shutil.rmtree(home() / "uploads", ignore_errors=True)
     token = secrets.token_urlsafe(24)
     app = create_app(token=token, port=port)
     url = f"http://127.0.0.1:{port}/?t={token}"

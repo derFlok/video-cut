@@ -178,8 +178,11 @@ class Runs:
             except BaseException as e:  # noqa: BLE001 — every failure must reach the UI,
                 ch.fail(f"{type(e).__name__}: {e}")  # and the worker must survive it
             finally:
-                ch.push({"t": "done", "ok": ok, "wall_s": round(time.monotonic() - t0, 1)})
-                ch.state = "idle"
+                # idle before "done", so a client that reloads the job on "done" sees the
+                # end state; under self.lock, so no new run's reset() lands in between
+                with self.lock:
+                    ch.state = "idle"
+                    ch.push({"t": "done", "ok": ok, "wall_s": round(time.monotonic() - t0, 1)})
                 self.queue.task_done()
 
     def wait_idle(self, timeout: float = 10.0) -> None:

@@ -450,6 +450,19 @@
   real Claude runs on generated clips in a throwaway `VIDEOCUT_HOME`, screenshots per step;
   `VIDEOCUT_E2E=1`, not in CI). CI builds and tests the UI with the pinned node.
 
+- Review fixes before merge: the approval also binds `work/plan.json` (shown and trusted
+  only while unchanged; a human markdown edit drops it); feedback needs the recorded cut of
+  the approved plan; a new cut archives `revisions.jsonl` and `out/history/`; a failed
+  revision no longer prunes a kept reel and also restores `out/preview.mp4`; `redact` with
+  no or duplicate ids is refused; uploads are checked by container format with
+  `-protocol_whitelist file`; stale upload staging is removed at start; the run channel is
+  idle before its `done` event. A finished reel whose overlay verify flagged something
+  shows as done (result page) instead of offering Start again.
+
 ### Known — Phase 3
+- The session cookie is not port-bound: other local servers on 127.0.0.1/localhost that
+  the browser visits receive it (it changes with every `videocut ui` start).
+- The plan's free-text fields (why, risks) are in the language Claude writes them in,
+  often English, while the UI is German.
 - FastAPI 0.143 pulls in `opentelemetry-api`. SSE keep-alive every 15 s; `?follow=0` replays
   the events once and closes.

@@ -25,6 +25,7 @@ from ..tools import _format
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     approve_job,
+    approved_plan_json,
     brand_id,
     is_approved,
     project_sha,
@@ -372,9 +373,14 @@ def create_app(
         project = job / "work" / "project.md"
         if not project.is_file():
             raise HTTPException(404, "no plan yet")
+        # After approval only the plan.json the human saw is shown (an agent run may write
+        # work/); a changed one falls back to the approved markdown.
+        plan = state.plan_json(job)
+        if plan is not None and is_approved(job) and not approved_plan_json(job):
+            plan = None
         return {
             "markdown": project.read_text(errors="replace"),
-            "plan": state.plan_json(job),
+            "plan": plan,
             "sha": project_sha(job),
             "approved": is_approved(job),
         }
@@ -392,6 +398,9 @@ def create_app(
         tmp = project.with_name(project.name + ".tmp")
         tmp.write_text(body.markdown)
         tmp.replace(project)  # an earlier approval no longer matches (sha-bound)
+        # The structured twin no longer says what the edited markdown says: drop it, the app
+        # shows the markdown (the human's text is the plan now).
+        (job / "work" / "plan.json").unlink(missing_ok=True)
         return get_plan(job_id)
 
     @app.post("/api/jobs/{job_id}/plan/feedback")
@@ -432,6 +441,10 @@ def create_app(
                     400, "the plan found personal data: decide what is demo data first"
                 )
             ids = [] if r.mode == "demo" else None if r.mode == "redact_all" else r.ids
+            if ids is not None and r.mode == "redact" and not ids:
+                raise HTTPException(400, 'mode "redact" needs the ids to redact (or "demo")')
+            if ids is not None and len(set(ids)) != len(ids):
+                raise HTTPException(400, "duplicate candidate numbers")
             known = {c["id"] for c in cands}
             if ids is not None and not set(ids) <= known:
                 raise HTTPException(
@@ -450,7 +463,7 @@ def create_app(
     @decision
     def feedback(job_id: str, body: FeedbackBody) -> dict:
         job = job_or_404(job_id)
-        if not is_approved(job) or not (job / "out" / "reel.mp4").is_file():
+        if not (is_approved(job) and pipeline.cut_done(job)):
             raise conflict("state", "feedback needs an approved plan and a finished reel")
         text, at_s = body.text.strip(), body.at_s
         return submit(

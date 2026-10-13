@@ -76,6 +76,19 @@ def project_sha(job: Path) -> str | None:
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
 
 
+def plan_json_sha(job: Path) -> str | None:
+    """SHA-256 of work/plan.json (the structured twin the app shows), None without one."""
+    p = job / "work" / "plan.json"
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+
+
+def approved_plan_json(job: Path) -> bool:
+    """work/plan.json is the one the human saw when approving (bound like project.md)."""
+    rec = read_approval(job)
+    sha = plan_json_sha(job)
+    return rec is not None and sha is not None and rec.get("plan_json_sha256") == sha
+
+
 def approvals_root() -> Path:
     """Approval records; outside every job folder, so an agent run cannot reach them."""
     return home() / "approvals"
@@ -115,6 +128,7 @@ def approve_job(job: Path) -> dict:
         raise ToolError(f"cannot approve: {e}") from None
     approval = {"at": datetime.now().astimezone().isoformat(timespec="seconds")}
     approval["project_sha256"] = sha
+    approval["plan_json_sha256"] = plan_json_sha(job)
     approvals_root().mkdir(parents=True, exist_ok=True)
     write_json(
         approval_path(job),

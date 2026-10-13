@@ -184,24 +184,36 @@ def probe(path: Path) -> dict:
     try:
         r = subprocess.run(
             [
-                binary("ffprobe"), "-v", "error", "-show_entries",
-                "stream=codec_type,codec_name,width,height", "-of", "json", str(path),
+                binary("ffprobe"), "-v", "error", "-protocol_whitelist", "file",
+                "-show_entries", "stream=codec_type,codec_name,width,height:format=format_name",
+                "-of", "json", str(path),
             ],
             capture_output=True, text=True, timeout=60, check=False,
         )  # fmt: skip
     except (OSError, subprocess.TimeoutExpired) as e:
         raise UploadError(f"{path.name}: cannot be checked ({e})", 415) from None
     try:
-        streams = json.loads(r.stdout or "{}").get("streams") or []
-    except ValueError:
-        streams = []
+        data = json.loads(r.stdout or "{}")
+        streams = data.get("streams") or []
+        fmt = set(str((data.get("format") or {}).get("format_name") or "").split(","))
+    except (ValueError, AttributeError):
+        streams, fmt = [], set()
     if r.returncode != 0 or not streams:
         raise UploadError(f"{path.name}: not a readable video or image file", 415)
-    return {"streams": streams}
+    return {"streams": streams, "formats": fmt}
+
+
+# Containers a recording may come in (ffprobe format names). Anything else (playlists,
+# concat lists, raw streams) is refused: the format is judged by content, not extension.
+VIDEO_FORMATS = {"mov", "mp4", "m4a", "3gp", "3g2", "mj2", "matroska", "webm", "avi"}
+IMAGE_FORMATS = {"png_pipe", "jpeg_pipe", "webp_pipe", "image2"}
 
 
 def check_video(path: Path, need_audio: bool) -> None:
-    kinds = {s.get("codec_type") for s in probe(path)["streams"]}
+    info = probe(path)
+    if not info["formats"] & VIDEO_FORMATS:
+        raise UploadError(f"{path.name}: not a video container (MOV, MP4, MKV, WebM, AVI)", 415)
+    kinds = {s.get("codec_type") for s in info["streams"]}
     if "video" not in kinds:
         raise UploadError(f"{path.name}: has no video stream", 415)
     if need_audio and "audio" not in kinds:
@@ -212,8 +224,11 @@ IMAGE_CODECS = {"png", "mjpeg", "webp", "jpeg2000"}
 
 
 def check_image(path: Path) -> None:
-    streams = probe(path)["streams"]
-    if not any(s.get("codec_name") in IMAGE_CODECS for s in streams):
+    info = probe(path)
+    streams = info["streams"]
+    if not info["formats"] & IMAGE_FORMATS or not any(
+        s.get("codec_name") in IMAGE_CODECS for s in streams
+    ):
         raise UploadError(f"{path.name}: not a PNG, JPEG or WebP image", 415)
 
 

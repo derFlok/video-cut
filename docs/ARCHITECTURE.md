@@ -465,6 +465,9 @@ Security model:
   `SameSite=Strict` session cookie and redirects (303) to `/`; every other request needs the
   cookie (scripts and tests may send `X-Token`); the token is never in JS;
 - writes (POST/PUT/PATCH/DELETE) by cookie also need `Origin` = the app's own origin;
+- known limit: cookies are not port-bound, so another server on `127.0.0.1`/`localhost`
+  that the browser visits receives the session cookie (a local program could replay it);
+  the cookie dies with the `videocut ui` process (a new value per start);
 - CSP `default-src 'self'` (no inline script, no CDN), `nosniff`, `frame-ancestors 'none'`,
   `no-referrer`, `Cache-Control: no-store` on the API;
 - uploads stream to a staging folder with a size cap, are checked by extension and ffprobe
@@ -481,6 +484,15 @@ Security model:
   server, exactly like the CLI; an
   agent run cannot reach them (no network, writes only `./work/**`, `VIDEOCUT_AGENT=1` makes
   `job approve`/`job redaction` refuse).
+- the approval binds `work/project.md` and the `work/plan.json` the human saw
+  (`plan_json_sha256`); afterwards the app shows plan.json only while it is that one, and
+  the revise guard reads the approved keep list only from it. A human edit of the markdown
+  drops plan.json (the markdown is the plan then). `/feedback` and `revise` need the
+  recorded cut of the approved plan; a new cut moves `revisions.jsonl` and `out/history/`
+  aside (`*-before-<time>`), so versions always belong to one plan;
+- uploads are judged by content: ffprobe with `-protocol_whitelist file`, and the
+  container must be a video container (MOV/MP4, MKV/WebM, AVI) or an image; staging
+  folders a killed server left behind are removed at start.
 
 `app/`: screens Home (job list), NewJob (type cards, drag & drop with upload progress, brand,
 format, one-line instruction), JobPage (stepper, live log, time, cost), PlanReview
