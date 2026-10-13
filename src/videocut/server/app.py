@@ -500,7 +500,8 @@ def create_app(
             raise HTTPException(404, "the reel is not rendered yet") from None
         data = json.loads((job / "job.json").read_text())
         _, fmt = state._format(data)
-        name = re.sub(r"[^A-Za-z0-9]+", "-", state.title(job, data)).strip("-")[:60] or job.name
+        # letters of any script stay (the header carries them as RFC 5987 filename*)
+        name = re.sub(r"[\W_]+", "-", state.title(job, data)).strip("-")[:60] or job.name
         filename = f"{name}-{(fmt or 'video').replace(':', 'x')}.mp4"
         return FileResponse(p, media_type="video/mp4", filename=filename)
 

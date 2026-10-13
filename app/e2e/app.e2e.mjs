@@ -38,6 +38,8 @@ async function browser() {
 let shotNo = 0;
 async function shot(page, name) {
   const file = join(args.out, `${String(++shotNo).padStart(2, "0")}-${name}.png`);
+  // the sticky top bar would land in the middle of a full-page picture
+  await page.addStyleTag({ content: "header{position:static!important}" }).catch(() => null);
   await page.screenshot({ path: file, fullPage: true });
   steps.push({ step: name, at_s: Math.round((Date.now() - t0) / 1000) });
   log(`screenshot ${basename(file)}`);
@@ -194,10 +196,10 @@ async function run() {
 
     // 7. feedback at the current position
     const duration = await video.evaluate((v) => v.duration);
-    const at = Math.round(duration * 0.5);
+    const at = Math.round(duration * 0.8);
     await video.evaluate((v, t) => (v.currentTime = t), at);
     await page.waitForTimeout(800);
-    await page.getByLabel("Was soll anders werden?").fill("Hier bitte etwas weniger stark reinzoomen, sonst bleibt alles so.");
+    await page.getByLabel("Was soll anders werden?").fill("Diesen Satz hier bitte ganz rausnehmen, sonst bleibt alles so.");
     await page.getByLabel(/bei aktueller Stelle/).check();
     await shot(page, "feedback-typed");
     await page.getByRole("button", { name: "Korrektur schicken" }).click();

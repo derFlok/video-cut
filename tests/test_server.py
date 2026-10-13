@@ -636,6 +636,10 @@ def test_media_supports_range_requests(client):
     dl = client.get("/api/jobs/j1/download")
     assert dl.status_code == 200
     assert 'attachment; filename="One-thesis-9x16.mp4"' in dl.headers["content-disposition"]
+    data = json.loads((jobs_root() / "j1" / "job.json").read_text())
+    (jobs_root() / "j1" / "job.json").write_text(json.dumps({**data, "brief": "Die Übersicht"}))
+    cd = client.get("/api/jobs/j1/download").headers["content-disposition"]
+    assert "filename*=utf-8''Die-%C3%9Cbersicht-9x16.mp4" in cd
 
 
 def test_stills_are_confined_to_the_allowed_folders(client, tmp_path):
