@@ -8,7 +8,11 @@ timeline:  filmstrip + waveform + word labels (work/words.json) + candidate shad
            (work/candidates.json) for [t0, t1] -> work/sheets/timeline_<t0>_<t1>.jpg
 screen:    contact strip of the screen recording over screen time [t0, t1] with the analysis of
            work/screen.json drawn in (activity yellow, clicks red, zoom targets green)
-           -> work/sheets/screen_<t0>_<t1>.jpg
+           -> work/sheets/screen_<t0>_<t1>.jpg (without t0/t1: the whole recording, an
+           overview of up to 10 tiles)
+assets:    the job's images (job.json "assets", e.g. screenshots of a demo) as numbered
+           thumbnails, ASSETS_PER_SHEET per sheet -> work/sheets/assets_NN.jpg; the summary
+           maps each number to its file and size
 
 Every tile carries its source time and frame number ("mm:ss.ss · f<frame>"). Sheets stay
 within the image budget of docs/BRIEF.md §6 (<= 1080x1920, never more than 2000 px a side).
@@ -19,7 +23,7 @@ import tempfile
 from pathlib import Path
 
 from . import _image as im
-from .common import ToolError, is_fresh, job_parent, resolve_job, run_tool
+from .common import ToolError, binary, is_fresh, job_parent, read_job, resolve_job, run, run_tool
 from .screen import probe_screen, screen_source
 
 COLS = 3
@@ -372,14 +376,16 @@ def _box_filters(doc: dict | None, t: float, tw: int, th: int) -> list[str]:
 
 
 def screen_sheet(args) -> dict:
-    if not args.t1 > args.t0 >= 0:
+    if args.t1 is not None and not args.t1 > args.t0 >= 0:
         raise ToolError("need 0 <= t0 < t1")
     job = resolve_job(args.job)
     src = _screen_input(job)
     info = probe_screen(src)
     w, h = info["size"]
+    if args.t1 is None and not info["duration"]:
+        raise ToolError("the screen recording has no duration; give t0 and t1")
     dur = info["duration"] or args.t1
-    t0, t1 = args.t0, min(args.t1, dur)
+    t0, t1 = args.t0, min(args.t1 if args.t1 is not None else dur, dur)
     if t1 <= t0:
         raise ToolError(f"window {args.t0}..{args.t1} is outside the recording ({dur:.2f}s)")
     doc = _load(job / "work" / "screen.json")
@@ -439,6 +445,73 @@ def screen_sheet(args) -> dict:
     }
 
 
+# ---------------------------------------------------------------- assets
+
+ASSETS_PER_SHEET = 12
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    out = run(
+        [binary("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries"]
+        + ["stream=width,height", "-of", "json", str(path)]
+    )
+    try:
+        st = json.loads(out.stdout)["streams"][0]
+        return int(st["width"]), int(st["height"])
+    except (KeyError, IndexError, ValueError) as e:
+        raise ToolError(f"cannot read the size of {path.name}: {e!r}") from None
+
+
+def assets_sheet(args) -> dict:
+    job = resolve_job(args.job)
+    rels = read_job(job).get("assets") or []
+    files = []
+    for rel in rels if isinstance(rels, list) else []:
+        p = (job / str(rel)).resolve()
+        if p.is_relative_to(job) and p.is_file():
+            files.append((str(rel), p))
+    if not files:
+        raise ToolError('the job has no images (job.json "assets"; `job new --asset FILE...`)')
+    font = im.find_font()
+    dest = _sheets_dir(job)
+    for old in dest.glob("assets_*.jpg"):
+        old.unlink()
+    items, sheets = [], []
+    for k0 in range(0, len(files), ASSETS_PER_SHEET):
+        part = files[k0 : k0 + ASSETS_PER_SHEET]
+        n = len(part)
+        cols = 1 if n == 1 else 2 if n <= 4 else 3
+        rows = -(-n // cols)
+        tw = 1080 // cols // 2 * 2
+        th = min(1920 // rows, round(tw * 4 / 3)) // 2 * 2
+        chains, inputs = [], []
+        for j, (rel, p) in enumerate(part):
+            num = k0 + j + 1
+            w, h = _image_size(p)
+            items.append({"n": num, "file": rel, "size": [w, h],
+                          "orientation": "portrait" if h > w else "landscape"})  # fmt: skip
+            label = "," + im.drawtext(font, str(num), "8", "8", max(24, tw // 9)) if font else ""
+            inputs.append(["-i", str(p)])
+            chains.append(
+                f"[{j}:v]scale={tw - 8}:{th - 8}:force_original_aspect_ratio=decrease,"
+                f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color=0x3A3A3A,format=yuv420p{label}[a{j}]"
+            )
+        layout = "|".join(f"{(j % cols) * tw}_{(j // cols) * th}" for j in range(n))
+        stack = (
+            "".join(f"[a{j}]" for j in range(n))
+            + f"xstack=inputs={n}:layout={layout}:fill=0x3A3A3A[out]"
+            if n > 1
+            else "[a0]null[out]"
+        )
+        name = f"assets_{len(sheets) + 1:02d}.jpg"
+        (f,) = im.render_jpegs(inputs, ";".join(chains) + ";" + stack, dest, [name])
+        sheets.append(str(f.relative_to(job)))
+    print(f"{len(files)} images on {len(sheets)} sheet(s): " + ", ".join(sheets))
+    for it in items:
+        print(f"  {it['n']:>2}  {it['file']}  {it['size'][0]}x{it['size'][1]} {it['orientation']}")
+    return {"sheets": sheets, "images": items, "labels": font is not None}
+
+
 def register(subparsers) -> None:
     p = subparsers.add_parser("sheet", help="contact, burst, timeline and screen sheets")
     sub = p.add_subparsers(dest="sheet_cmd", required=True)
@@ -457,9 +530,16 @@ def register(subparsers) -> None:
         "screen", help="screen recording strip with activity, clicks and zoom targets",
         parents=[job_parent()],
     )  # fmt: skip
-    sc.add_argument("t0", type=float, help="screen time in seconds")
-    sc.add_argument("t1", type=float)
+    sc.add_argument(
+        "t0", type=float, nargs="?", default=0.0, help="screen time in seconds (default 0)"
+    )
+    sc.add_argument("t1", type=float, nargs="?", help="(default: the end of the recording)")
     sc.add_argument(
         "--tiles", type=int, default=0, metavar="N", help="tiles (default: auto, <= 10)"
     )
     sc.set_defaults(handler=run_tool("sheet screen", screen_sheet))
+    a = sub.add_parser(
+        "assets", help="numbered thumbnails of the job's images (screenshots)",
+        parents=[job_parent()],
+    )  # fmt: skip
+    a.set_defaults(handler=run_tool("sheet assets", assets_sheet))

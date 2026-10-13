@@ -47,6 +47,7 @@ ARTEFACTS = [
     "work/screen_audio.wav",
     "work/screen_proxy.mp4",
     "work/sync.json",
+    "work/screen.json",
     "work/words.json",
     "work/takes_packed.md",
     "work/candidates.json",
@@ -123,6 +124,7 @@ SCREEN_OUTPUTS = [
     "work/screen_audio.wav",
     "work/screen_proxy.mp4",
     "work/sync.json",
+    "work/screen.json",
 ]
 
 
@@ -302,9 +304,10 @@ def register(subparsers) -> None:
     n.add_argument("--id", help="job id (default: timestamp + file name)")
     n.add_argument(
         "--asset",
-        action="append",
+        action="extend",
+        nargs="+",
         metavar="FILE",
-        help="extra input such as a screenshot (png/jpg/webp), repeatable",
+        help="extra inputs such as screenshots (png/jpg/webp): several files, repeatable",
     )
     n.add_argument(
         "--screen",

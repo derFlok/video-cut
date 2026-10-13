@@ -250,3 +250,22 @@ def test_layouts_verify(capsys, material):
     got = {(d["check"], d["segment"], f) for d in s["screen_flagged"] for f in d["flags"]}
     assert ("redaction", 4, "redaction_missing") in got, out
     assert any(c == "screen_time" and f == "screen_time_mismatch" for c, _, f in got), out
+
+
+def test_layouts_overlays_doc(capsys, material):
+    job = _job(capsys, material, "layouts-ov")
+    code, s, out = run_tool(capsys, "overlays", "--no-render", "--job", str(job))
+    assert code == 0, (s, out)
+    doc = json.loads((job / "work" / "overlays.json").read_text())
+    views = doc["views"]
+    assert [v["layout"] for v in views] == ["screen", "pip", "split", "screen"]
+    starts = _starts()
+    assert [v["t0"] for v in views] == [round(starts[i] / 30, 6) for i in (1, 2, 3, 4)]
+    pip, split = views[1], views[2]
+    assert pip["screen"] == _seg_plan(2).view.box() and pip["speaker"] == _seg_plan(2).inset.box()
+    assert split["speaker"][1] >= split["screen"][3]  # the speaker is below the screen view
+    # Face samples: the camera face only in the face segment, the speaker area in pip/split.
+    for f in doc["face"]:
+        inside = [v for v in views if v["t0"] <= f["t"] < v["t1"]]
+        if inside:
+            assert inside[0]["layout"] != "screen" and f["box"] == inside[0]["speaker"], f

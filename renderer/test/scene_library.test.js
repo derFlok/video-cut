@@ -303,3 +303,19 @@ test("a calm caption block (two lines, ~38 characters) fits the lower band of a 
       assert.equal(overlapArea(box, face), 0, msg);
     }
 });
+
+test("a portrait screenshot uses the safe height, may cover the face, keeps caption room", () => {
+  const tokens = tokensFor("blur", { w: 13, z: 0.9 });
+  const mod = scene("screenshot_frame");
+  const phone = { width: 1170, height: 2532 };
+  const env = makeEnv(tokens, FACES.centre, { "phone.png": phone, "shot.png": SHOT });
+  const tall = mod.layout(fakeCtx(), { scene: "screenshot_frame", t0: 0, t1: 3, props: { file: "phone.png" } }, env);
+  const usable = SIZE[1] - SAFE.top - SAFE.bottom;
+  const h = tall.box[3] - tall.box[1];
+  assert.ok(tall.stage && h > usable * 0.6 && h <= usable * 0.8, `portrait card height ${h} of ${usable}`);
+  assert.ok(tall.box[1] >= SAFE.top && tall.box[3] <= SIZE[1] - SAFE.bottom, "inside the safe area");
+  // Landscape stays a card clear of the face, as before.
+  const env2 = makeEnv(tokens, FACES.centre, { "shot.png": SHOT });
+  const wide = mod.layout(fakeCtx(), { scene: "screenshot_frame", t0: 0, t1: 3, props: { file: "shot.png" } }, env2);
+  assert.ok(!wide.stage && !wide.overlapsFace);
+});

@@ -195,3 +195,16 @@ def test_screen_rejections(capsys, tmp_path, monkeypatch):
     scr.write_bytes(b"x")
     code, s, _ = run_tool(capsys, "job", "screen", "--job", "r1", str(scr))
     assert code == 1 and "only a human" in s["error"]
+
+
+def test_new_with_many_assets_in_one_flag(capsys, tmp_path, videocut_home):
+    shots = []
+    for name in ("one.png", "two.jpg", "three.webp"):
+        (tmp_path / name).write_bytes(b"img")
+        shots.append(str(tmp_path / name))
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(_video(tmp_path)), "--id", "m", "--asset", *shots[:2],
+        "--asset", shots[2],
+    )  # fmt: skip
+    assert code == 0, s
+    assert s["assets"] == ["input/one.png", "input/two.jpg", "input/three.webp"]

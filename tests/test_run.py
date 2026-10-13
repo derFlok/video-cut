@@ -324,3 +324,39 @@ def test_failed_overlay_verify_is_not_recorded_as_done(fake, videocut_home, monk
     job = Path(lines[0].split("job: ")[1])
     assert run.run(job.name, say=lines.append) == 4
     assert [c[0] for c in claude.calls].count("overlays") == 2  # retried, not "already done"
+
+
+def test_demo_prep_order_and_sync_stop(monkeypatch, tmp_path):
+    job = tmp_path / "demo-job"
+    (job / "work").mkdir(parents=True)
+    (job / "job.json").write_text(json.dumps({"id": "demo-job", "screen": "input/s.mov"}))
+    calls = []
+
+    def tool(_job, *argv):
+        calls.append(list(argv))
+        if argv == ("sync",):
+            return {"ok": True, "method": "audio_xcorr", "confidence": 0.8, "offset_s": 1.5}
+        return {"ok": True}
+
+    monkeypatch.setattr(run, "tool", tool)
+    REAL_PREP(job, say=lambda _: None)
+    assert calls == run.DEMO_PREP
+    assert ["sync"] in calls and calls.index(["sync"]) < calls.index(["screen"])
+
+    def weak(_job, *argv):
+        if argv == ("sync",):
+            return {"ok": True, "method": "clap", "confidence": 0.1, "offset_s": 0.0}
+        return {"ok": True}
+
+    monkeypatch.setattr(run, "tool", weak)
+    with pytest.raises(run.RunError, match="--offset"):
+        REAL_PREP(job, say=lambda _: None)
+
+    def failing(_job, *argv):
+        if argv == ("sync",):
+            raise run.RunError("videocut tool sync failed: the screen recording has no audio")
+        return {"ok": True}
+
+    monkeypatch.setattr(run, "tool", failing)
+    with pytest.raises(run.RunError, match="no audio.*--offset"):
+        REAL_PREP(job, say=lambda _: None)

@@ -48,7 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--brand", help="brand id: captions and overlays in this brand's look")
     r.add_argument("--recut", action="store_true", help="cut again even if the cut is done")
     r.add_argument(
-        "--asset", action="append", metavar="FILE", help="extra input image for a new job"
+        "--asset",
+        action="extend",
+        nargs="+",
+        metavar="FILE",
+        help="extra input images (screenshots) for a new job; several files, repeatable",
+    )
+    r.add_argument(
+        "--screen",
+        metavar="FILE",
+        help="screen recording made at the same time (product demo) for a new job",
     )
 
     t = sub.add_parser("tool", help="pipeline commands used by Claude inside a job")

@@ -34,6 +34,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import edl
 from ..paths import tool_env
 from .common import (
     ToolError,
@@ -540,23 +541,45 @@ def screen(args) -> dict:
         f"{len(doc['clicks'])} clicks, {len(doc['scenes'])} scene changes, "
         f"{len(doc['zoom_targets'])} zoom targets (max zoom {doc['max_zoom']['screen']}x)"
     )
-    for z in doc["zoom_targets"]:
-        print(f"  {z['t0']:.2f}-{z['t1']:.2f}s box {z['box']} zoom {z['zoom']}x")
     return _summary(job, out, doc, reused=False)
 
 
 def _summary(job: Path, out: Path, doc: dict, reused: bool) -> dict:
+    """The summary; with a valid work/sync.json every zoom target and click also carries
+    its CAMERA time (camera_t0/camera_t1, camera_t = screen time - offset_s), the time EDL
+    segments and screen_zoom keys use."""
+    sync = edl.read_sync(job / "work" / "sync.json")
+    off = sync["offset_s"] if sync else None
+
+    def cam(t):
+        return round(t - off, 3)
+
+    targets = []
+    for z in doc["zoom_targets"][:20]:
+        t = {
+            k: z[k]
+            for k in ("t0", "t1", "box", "view", "zoom", "max_zoom", "max_zoom_split")
+            if k in z
+        }
+        if off is not None:
+            t["camera_t0"], t["camera_t1"] = cam(z["t0"]), cam(z["t1"])
+        targets.append(t)
+        when = f" (camera {t['camera_t0']:.2f}-{t['camera_t1']:.2f}s)" if off is not None else ""
+        print(f"  {z['t0']:.2f}-{z['t1']:.2f}s{when} box {z['box']} zoom {z['zoom']}x")
+    clicks = [
+        {**c, **({"camera_t": cam(c["t"])} if off is not None else {})} for c in doc["clicks"][:40]
+    ]
     return {
         "file": str(out.relative_to(job)),
         "reused": reused,
         "size": doc["size"],
         "max_zoom": doc.get("max_zoom"),
+        "offset_s": off,
         "activity": len(doc["activity"]),
         "clicks": len(doc["clicks"]),
+        "click_list": clicks,
         "scenes": doc["scenes"],
-        "zoom_targets": [
-            {k: z[k] for k in ("t0", "t1", "box", "zoom")} for z in doc["zoom_targets"][:20]
-        ],
+        "zoom_targets": targets,
     }
 
 

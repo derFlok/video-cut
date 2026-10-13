@@ -245,6 +245,10 @@ def test_sheet_screen(capsys, analysed):
     )  # fmt: skip
     sw, sh = (int(v) for v in probe.stdout.strip().split(","))
     assert sw <= 1080 and sh <= 1920
+    # no times: an overview of the whole recording (what `videocut run` prep makes)
+    code, s, out = run_tool(capsys, "sheet", "screen", "--job", str(job))
+    assert code == 0, out
+    assert s["t0"] == 0 and s["t1"] == pytest.approx(doc["duration"], abs=0.1) and s["tiles"] >= 6
     # without screen.json the strip is still made, just without overlays
     (job / "work" / "screen.json").unlink()
     code, s, out = run_tool(capsys, "sheet", "screen", "0", "3", "--job", str(job))

@@ -2,7 +2,10 @@
 
     prep     job new (when a file is given), then the deterministic tools: ingest --denoise,
              face (face track + blinks), transcribe (also writes candidates +
-             takes_packed.md), sheet contact
+             takes_packed.md), sheet contact. A product demo (`--screen <recording>`, or
+             job.json "screen") runs ingest (camera + screen) -> sync -> screen -> face ->
+             transcribe -> sheet contact + sheet screen, and stops with a hint for
+             `tool sync --offset` when the recordings cannot be synced reliably
     plan     Claude run with the `plan` skill -> work/project.md, nothing is cut
     approve  the human reads work/project.md and approves it (prompt; `--approve` skips it)
     cut      Claude run with the `cut` skill (resumes the plan session when the plan is
@@ -49,6 +52,19 @@ from .tools.job import (
 
 TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
 PREP = [["ingest", "--denoise"], ["face"], ["transcribe"], ["sheet", "contact"]]
+# Product demo (job.json "screen"): ingest also prepares the screen recording, sync aligns it
+# with the camera, screen finds activity, clicks and zoom targets, and one overview sheet of
+# the screen joins the contact sheets.
+DEMO_PREP = [
+    ["ingest", "--denoise"],
+    ["sync"],
+    ["screen"],
+    ["face"],
+    ["transcribe"],
+    ["sheet", "contact"],
+    ["sheet", "screen"],
+]
+SYNC_MIN_CONFIDENCE = 0.3  # tool sync's own threshold; below it the offset is a guess
 TEMPLATES = ROOT / "templates"
 PLAN_PROMPT = (
     "Use the video-cut:plan skill to plan the edit of the Video Cut job in the current folder. "
@@ -97,7 +113,11 @@ def _main(main, argv: list[str]) -> int:
 
 
 def new_job(
-    video: Path, type_: str | None, brief: str | None, assets: list[str] | None = None
+    video: Path,
+    type_: str | None,
+    brief: str | None,
+    assets: list[str] | None = None,
+    screen: str | None = None,
 ) -> Path:
     from .cli import main
 
@@ -105,8 +125,9 @@ def new_job(
     argv = ["tool", "job", "new", str(video)]
     argv += ["--type", type_] if type_ else []
     argv += ["--brief", brief] if brief else []
-    for a in assets or []:
-        argv += ["--asset", a]
+    argv += ["--screen", screen] if screen else []
+    if assets:
+        argv += ["--asset", *assets]
     with contextlib.redirect_stdout(buf):
         code = _main(main, argv)
     lines = buf.getvalue().strip().splitlines()
@@ -117,13 +138,20 @@ def new_job(
 
 
 def open_job(
-    ref: str, type_: str | None, brief: str | None, assets: list[str] | None = None
+    ref: str,
+    type_: str | None,
+    brief: str | None,
+    assets: list[str] | None = None,
+    screen: str | None = None,
 ) -> Path:
     p = Path(ref).expanduser()
     if p.is_file():
-        return new_job(p, type_, brief, assets)
-    if assets:
-        raise RunError("--asset only works when a new job is made from a recording")
+        return new_job(p, type_, brief, assets, screen)
+    if assets or screen:
+        raise RunError(
+            "--asset/--screen only work when a new job is made from a recording "
+            "(for an existing job: `videocut tool job screen <file>`)"
+        )
     try:
         job = resolve_job(ref)
     except ToolError as e:
@@ -137,15 +165,42 @@ def open_job(
     return job
 
 
+def sync_stop(job: Path, why: str) -> RunError:
+    return RunError(
+        f"the screen recording could not be synced reliably ({why}). Find a moment you can "
+        "see or hear in both recordings (a click, a clap, a word), then set the offset by "
+        f"hand: `videocut tool sync --job {job.name} --offset <screen_time - camera_time>` "
+        f"and run `videocut run {job.name}` again"
+    )
+
+
 def prep(job: Path, steps: list[list[str]] | None = None, say=print) -> None:
-    for argv in steps if steps is not None else PREP:
+    if steps is None:
+        steps = DEMO_PREP if read_job(job).get("screen") else PREP
+    for argv in steps:
         t0 = time.monotonic()
-        s = tool(job, *argv)
+        try:
+            s = tool(job, *argv)
+        except RunError as e:
+            if argv == ["sync"]:
+                raise sync_stop(job, str(e).split(": ", 1)[-1]) from None
+            raise
+        if (
+            argv == ["sync"]
+            and s.get("method") != "manual"
+            and (s.get("confidence") or 0) < SYNC_MIN_CONFIDENCE
+        ):
+            raise sync_stop(job, f"confidence {s.get('confidence')}")
         extra = {
             k: s[k]
-            for k in ("sheets", "words", "transcribed", "denoised", "found_pct", "blinks")
+            for k in (
+                "sheets", "words", "transcribed", "denoised", "found_pct", "blinks",
+                "offset_s", "method", "confidence",
+            )
             if k in s
-        }
+        }  # fmt: skip
+        if argv == ["screen"]:
+            extra = {"clicks": s.get("clicks"), "zoom_targets": len(s.get("zoom_targets", []))}
         say(f"  {' '.join(argv):<16} {time.monotonic() - t0:5.1f}s  {extra or ''}".rstrip())
     # Claude may only read inside the job folder, so the reel contract is copied in.
     type_, dst = read_job(job).get("type") or "", job / "work" / "contract.md"
@@ -324,12 +379,13 @@ def run(
     brand: str | None = None,
     recut: bool = False,
     assets: list[str] | None = None,
+    screen: str | None = None,
     say=print,
     ask: Callable[[str], str] = input,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
-    job = open_job(ref, type_, brief, assets)
+    job = open_job(ref, type_, brief, assets, screen)
     say(f"job: {job}")
     if brand:
         update_job(job, brand=brand_id(brand))
@@ -431,6 +487,7 @@ def main(args) -> int:
             brand=args.brand,
             recut=args.recut,
             assets=args.asset,
+            screen=args.screen,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:
