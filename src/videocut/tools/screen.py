@@ -318,7 +318,7 @@ def analyse(frames, aw: int, ah: int, fps: float) -> dict:
                 if not b["ring"] and not b["cursor"]:
                     items.append([*b["box"], b["n"], False])
         for x0, y0, x1, y1, n, has_short in merge_boxes(items, GROUP_PX):
-            box = [round(v, 4) for v in np.array([x0, y0, x1, y1]) / norm]
+            box = [round(float(v), 4) for v in np.array([x0, y0, x1, y1]) / norm]
             score = min(1.0, n / max(1, (x1 - x0) * (y1 - y0)))
             activity.append({"t": round(t, 2), "box": box, "score": round(score, 3)})
             regions.append((t, box, has_short))

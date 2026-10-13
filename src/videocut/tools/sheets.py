@@ -1,4 +1,4 @@
-"""`videocut tool sheet contact|burst|timeline`: the pictures Claude uses to "see".
+"""`videocut tool sheet contact|burst|timeline|screen`: the pictures Claude uses to "see".
 
 contact:   3x3 contact sheets over work/proxy.mp4, one tile every N seconds
            -> work/sheets/contact_NN.jpg
@@ -6,6 +6,9 @@ burst:     frames around source time t (+-span) plus the waveform of the same wi
            marker at t -> work/sheets/burst_<t>.jpg
 timeline:  filmstrip + waveform + word labels (work/words.json) + candidate shading
            (work/candidates.json) for [t0, t1] -> work/sheets/timeline_<t0>_<t1>.jpg
+screen:    contact strip of the screen recording over screen time [t0, t1] with the analysis of
+           work/screen.json drawn in (activity yellow, clicks red, zoom targets green)
+           -> work/sheets/screen_<t0>_<t1>.jpg
 
 Every tile carries its source time and frame number ("mm:ss.ss · f<frame>"). Sheets stay
 within the image budget of docs/BRIEF.md §6 (<= 1080x1920, never more than 2000 px a side).
@@ -16,13 +19,17 @@ import tempfile
 from pathlib import Path
 
 from . import _image as im
-from .common import ToolError, job_parent, resolve_job, run_tool
+from .common import ToolError, is_fresh, job_parent, resolve_job, run_tool
+from .screen import probe_screen, screen_source
 
 COLS = 3
 WAVE_H = 140
 STRIP_W = 1800
 STRIP_TILES = 10
 MAX_TIMELINE_S = 120.0
+SCREEN_FPS = 30  # macOS recordings are VFR: sample on a fixed grid before selecting
+SCREEN_MAX_TILES = 10
+ACTIVITY_COLOR, CLICK_COLOR, TARGET_COLOR = "0xffd400", "0xff2d2d", "0x2dff6e"
 PAUSE_COLOR = "cyan@0.30"
 FILLER_COLOR = "red@0.35"
 
@@ -328,8 +335,112 @@ def timeline(args) -> dict:
     }
 
 
+# ---------------------------------------------------------------- screen
+
+
+def _screen_input(job: Path) -> Path:
+    src = screen_source(job)
+    proxy = job / "work" / "screen_proxy.mp4"
+    return proxy if proxy.is_file() and is_fresh([proxy], [src]) else src
+
+
+def _box_filters(doc: dict | None, t: float, tw: int, th: int) -> list[str]:
+    """drawbox filters for what screen.json says about the frame at screen time t."""
+    if not doc:
+        return []
+    half = 0.5 / SCREEN_FPS
+    on = f"between(t\\,{t - half:.6f}\\,{t + half - 1e-6:.6f})"
+
+    def rect(box, color, thick):
+        x0, y0 = int(box[0] * tw), int(box[1] * th)
+        w, h = max(2, int(box[2] * tw) - x0), max(2, int(box[3] * th) - y0)
+        return f"drawbox=x={x0}:y={y0}:w={w}:h={h}:color={color}:t={thick}:enable='{on}'"
+
+    out = []
+    for z in doc.get("zoom_targets", []):
+        if z["t0"] - half <= t <= z["t1"] + half:
+            out.append(rect(z["box"], TARGET_COLOR, 4))
+    for a in doc.get("activity", []):
+        if abs(a["t"] - t) <= 0.35:
+            out.append(rect(a["box"], ACTIVITY_COLOR, 2))
+    r = 0.025
+    for c in doc.get("clicks", []):
+        if -0.2 <= t - c["t"] <= 0.6:
+            box = [c["x"] - r, c["y"] - r * tw / th, c["x"] + r, c["y"] + r * tw / th]
+            out.append(rect(box, CLICK_COLOR, 3))
+    return out
+
+
+def screen_sheet(args) -> dict:
+    if not args.t1 > args.t0 >= 0:
+        raise ToolError("need 0 <= t0 < t1")
+    job = resolve_job(args.job)
+    src = _screen_input(job)
+    info = probe_screen(src)
+    w, h = info["size"]
+    dur = info["duration"] or args.t1
+    t0, t1 = args.t0, min(args.t1, dur)
+    if t1 <= t0:
+        raise ToolError(f"window {args.t0}..{args.t1} is outside the recording ({dur:.2f}s)")
+    doc = _load(job / "work" / "screen.json")
+    span = t1 - t0
+    n = args.tiles or min(SCREEN_MAX_TILES, max(2, round(span * 2)))
+    n = max(1, min(n, SCREEN_MAX_TILES, int(span * SCREEN_FPS) or 1))
+    cell = span / n
+    times = sorted({im.snap(t0 + (i + 0.5) * cell, SCREEN_FPS) for i in range(n)})
+    n = len(times)
+    cols = min(n, 2 if w >= h else 3)
+    rows = -(-n // cols)
+    tw = 1080 // cols // 2 * 2
+    th = max(2, round(tw * h / w / 2) * 2)
+    if rows * th > 1920:
+        th = 1920 // rows // 2 * 2
+        tw = max(2, round(th * w / h / 2) * 2)
+    font = im.find_font()
+    # Per tile: its own boxes (enabled for exactly that frame), applied after the selection.
+    chains = []
+    for t in times:
+        chains.append(_box_filters(doc, t, tw, th))
+    boxes = [f for c in chains for f in c]
+    graph = (
+        f"[0:v]fps={SCREEN_FPS},select='{im.select_times(times, SCREEN_FPS)}',scale={tw}:{th}"
+        + ("," + ",".join(boxes) if boxes else "")
+        + _label(font, SCREEN_FPS, max(14, tw // 22))
+        + f",tile={cols}x{rows}:padding=0:margin=0[out]"
+    )
+    name = f"screen_{_tag(t0)}_{_tag(t1)}.jpg"
+    (f,) = im.render_jpegs(
+        [["-ss", f"{max(0.0, times[0] - 0.5):.4f}", "-copyts", "-i", str(src)]],
+        graph,
+        _sheets_dir(job),
+        [name],
+    )
+    marks = {
+        "activity": sum(1 for c in chains for b in c if ACTIVITY_COLOR in b),
+        "clicks": sum(1 for c in chains for b in c if CLICK_COLOR in b),
+        "zoom_targets": sum(1 for c in chains for b in c if TARGET_COLOR in b),
+    }
+    print(
+        f"{f.relative_to(job)}: screen {im.fmt_time(times[0])}..{im.fmt_time(times[-1])}, "
+        f"{n} tiles {tw}x{th}"
+        + ("" if doc else " (no work/screen.json: run `videocut tool screen` for the overlays)")
+    )
+    return {
+        "file": str(f.relative_to(job)),
+        "t0": round(t0, 3),
+        "t1": round(t1, 3),
+        "times": [round(x, 3) for x in times],
+        "tiles": n,
+        "tile": [tw, th],
+        "overlays": doc is not None,
+        "marks": marks,
+        "colors": {"activity": "yellow", "click": "red", "zoom_target": "green"},
+        "labels": font is not None,
+    }
+
+
 def register(subparsers) -> None:
-    p = subparsers.add_parser("sheet", help="contact, burst and timeline sheets")
+    p = subparsers.add_parser("sheet", help="contact, burst, timeline and screen sheets")
     sub = p.add_subparsers(dest="sheet_cmd", required=True)
     c = sub.add_parser("contact", help="3x3 contact sheets", parents=[job_parent()])
     c.add_argument("--every", type=float, default=2.0, metavar="S", help="seconds between tiles")
@@ -342,3 +453,13 @@ def register(subparsers) -> None:
     t.add_argument("t0", type=float)
     t.add_argument("t1", type=float)
     t.set_defaults(handler=run_tool("sheet timeline", timeline))
+    sc = sub.add_parser(
+        "screen", help="screen recording strip with activity, clicks and zoom targets",
+        parents=[job_parent()],
+    )  # fmt: skip
+    sc.add_argument("t0", type=float, help="screen time in seconds")
+    sc.add_argument("t1", type=float)
+    sc.add_argument(
+        "--tiles", type=int, default=0, metavar="N", help="tiles (default: auto, <= 10)"
+    )
+    sc.set_defaults(handler=run_tool("sheet screen", screen_sheet))
