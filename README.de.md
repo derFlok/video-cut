@@ -87,7 +87,7 @@ Optionen: `--approve` (ohne Nachfrage), `--replan`, `--recut`, `--brand <id>`, `
 (Screenshots für einen neuen Auftrag; als letzte Option angeben), `--demo-data` (gefundene
 persönliche Daten sind Demodaten), `--format 9:16|16:9|1:1|4:5` (Ausgabeformat; bei einem
 bestehenden Auftrag ersetzt es das Format und schneidet neu), `--cut-style calm|standard|tight`
-(siehe unten), `--max-turns N`. Zeit, Turns,
+(siehe unten), `--target 90|5m|2:30|auto` (Ziellänge, siehe unten), `--max-turns N`. Zeit, Turns,
 Kosten und Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
 
 **Ausgabeformat** (je Video): `9:16` 1080×1920 (Reels, Shorts, Stories), `16:9` 1920×1080
@@ -106,6 +106,13 @@ Screenshots, sonst `standard`. Ändern mit `videocut tool job cut-style <id> sta
 der App (Plan- oder Ergebnisseite); der freigegebene Plan und deine Entscheidung zu
 persönlichen Daten bleiben, die App bietet an, neu zu schneiden. Jeder Schnitt wird auf
 eine echte Pause im Ton gelegt, und die Prüfung schlägt an, wenn ein Wort abgeschnitten ist.
+
+**Ziellänge** (je Video): `auto` ergibt Reels von 30–60 s (30–45 s für einen Gedanken) und
+lässt eine Produktdemo so lang laufen, wie der Inhalt braucht – straff, aber vollständig.
+Mit einer Länge (z. B. `5m`) zielt der Plan auf ± 15 % davon; er streckt nie – reicht das
+Material nicht, sagt er das und schlägt die natürliche Länge vor. Wählbar beim Anlegen
+oder später mit `videocut tool job target <id> 5m` bzw. auf der Planseite; eine Änderung
+braucht einen neuen Plan und eine neue Freigabe.
 
 ## Produktdemo aufnehmen
 

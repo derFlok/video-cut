@@ -107,7 +107,8 @@ Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--scre
 screen recording made at the same time, for a new job), `--asset FILE...` (screenshots for a
 new job; put it last), `--demo-data` (personal data the plan found is demo data),
 `--format 9:16|16:9|1:1|4:5` (output format; for an existing job it replaces the format and
-cuts again), `--cut-style calm|standard|tight` (see below), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
+cuts again), `--cut-style calm|standard|tight` (see below), `--target 90|5m|2:30|auto` (target
+length, see below), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
 logged in `work/runs.jsonl`.
 
 **Output format** (per video): `9:16` 1080×1920 (Reels, Shorts, Stories), `16:9` 1920×1080
@@ -126,6 +127,13 @@ the job has a screen recording or screenshots, else `standard`. Change it with
 approved plan and your personal-data decision stay, and the app offers to cut again.
 Every cut point is moved to a real pause in the audio and verify fails a reel where a word
 is cut off.
+
+**Target length** (per video): `auto` gives reels of 30–60 s (30–45 s for a thought) and lets
+a product demo run as long as its content needs, tight but complete. Set a length (e.g.
+`5m`) and the plan aims for it ± 15 %; it never pads — if there is not enough material it
+says so and proposes the natural length. Choose it when creating the video or later with
+`videocut tool job target <id> 5m` / on the plan page; changing it needs a new plan and a
+new approval.
 
 ## Recording a product demo
 

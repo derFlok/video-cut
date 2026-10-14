@@ -581,9 +581,28 @@
   render from `audio.wav` matches the render from the source stream sample for sample),
   `test_snap.py`, `test_align.py`, `test_time_base.py`, cut style in `test_job.py`,
   `test_run.py`, `test_server.py`, app `progress.test.tsx`.
-- README: cut style; recording tip: the microphone on in both recordings.
+- **Target length per video** (`tools/_length.py`): job.json `target_s` or automatic (30–45 s
+  for a thought, 30–60 s for other talking heads, as long as needed for a demo with screen
+  material); a set target means ± 15 %. `job new --target`, `job target <job> <len|auto>`,
+  `videocut run --target` (90, 90s, 5m, 2:30), human only; `job show` prints the range.
+  A changed target makes the plan stale and revokes the approval (also recorded in the
+  approval record); the next run plans again. Skills: the plan sizes the keep list to it
+  and never pads, overlays about 2–4 ideas per minute, cut/revise stay inside it. API:
+  `target_s` on create, `target_s`/`target_resolved`/`plan_target_stale` in the detail,
+  `PUT /api/jobs/{id}/target`. App: "Ziellänge" on "New video" (Automatisch, 30 s … 10 Min,
+  custom mm:ss) and on the plan page next to the estimated length, "Plan neu erstellen"
+  for a stale plan.
+- README: cut style and target length; recording tip: the microphone on in both
+  recordings.
 
 ### Fixed — Cut quality
 - A recording whose audio starts before its video was cut and proxied in container time:
   the picture of every cut was off by the lead (render, layouts and the proxy now start
   the camera at its first frame).
+- Review fixes: the video-time pad/trim was counted at the source's sample rate (a
+  44.1 kHz recording got 9 % too much: 20 ms for 0.25 s); an old job whose audio is rebuilt
+  rather than shifted now moves its EDL too (once); `edl snap` waits for the upgrade of an
+  old job instead of mixing time bases; a segment that keeps no word never snaps into a
+  dropped word that spans its edge; a segment's own longer `xfade_ms` gets the quiet room
+  it needs; a reel from before cut records goes stale when a style is set; a recut shows
+  no plan stage.

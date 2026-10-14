@@ -131,8 +131,11 @@ and screen-zoom keys too; redact blocks were measured on the video and stay). Th
 cut and overlay records follow the EDL (same cut, new time base), so a finished reel stays
 finished. The plan keeps its numbers: they guide the cut, the words decide it. A
 `"time_base": "shifting"` marker makes an interrupted upgrade rebuild instead of shifting
-twice. Without an upgrade, `_audio_env.wav_offset` and `edl snap` still read such a job
-correctly (`author_offset`).
+twice; the EDL moves exactly once also when the audio is rebuilt instead of shifted (a
+changed `--denoise`, a re-probe; marker `edl_shifted`), and keeps its file time. Pads and
+trims are counted in 48 kHz samples whatever the source rate. Before an upgrade,
+`_audio_env.wav_offset` still reads such a job correctly for checks; `edl snap` waits
+(skipped with a hint) instead of mixing both time bases.
 
 **Word alignment** (`tools/align.py`, run by `transcribe` unless `--no-align`, again by
 `videocut tool align`): Whisper chains consecutive words and ends them 40-330 ms early.
@@ -182,6 +185,24 @@ personal-data decision as they are.
 
 job.json `lang` (`de` default, `en`) is the language of the plan's and reports'
 human-facing text; the skills write in it.
+
+## Target length (`tools/_length.py`)
+
+job.json `target_s` (seconds) is the length the human wants; absent means automatic: 30-45 s
+for type `thought`, 30-60 s for the other talking-head types, and no fixed length for a job
+with a screen recording or screenshots ("as long as the content needs, tight but complete";
+the plan states its estimate, `plan.json` `estimated_s`). A set target means target ± 15 %
+(`target_range`). `job show` prints it with its range; the plan sizes the keep list to it
+(never pads; too little material: it says so and proposes the natural length), overlays
+plan about 2-4 ideas per minute, cut and revise stay inside the range (revise goes beyond
+only when the feedback asks). Set by a human only: `job new --target`, `job target <job>
+<len|auto>` (90, 90s, 5m, 2:30; 5 s - 3 h), `videocut run --target`, `POST /api/jobs`
+`target_s`, `PUT /api/jobs/{id}/target`; refused inside an agent run. Unlike the cut style
+it changes the content: a plan run records the target it planned for (job.json
+`plan_target`); a changed target makes the plan stale and revokes the approval (the
+approval record also stores `target_s`, and `is_approved` compares it), a stale plan cannot
+be approved, and the next run plans again (the app offers "Plan neu erstellen" through the
+plan-feedback path, keeping earlier plan edits). A cut records its target.
 
 ## Skills and `videocut run`
 
@@ -583,7 +604,7 @@ the neutral example, logo/font upload with `role`, cached preview sheet), `jobs`
 create by multipart upload, detail, delete to `$VIDEOCUT_HOME/trash`), `jobs/{id}/start`,
 `events` (server-sent events: `stage` (with `at`, the stage's start, ISO), `log`, `tool`,
 `gate`, `error`, `done`; replayed on connect, so a reloaded page keeps the stage's start),
-`cut-style` (PUT), `recut` (POST: cut + overlays again with the approved plan), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
+`cut-style` (PUT), `target` (PUT), `recut` (POST: cut + overlays again with the approved plan), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
 `media/{reel|preview|cover|screen_proxy|camera_proxy|history/reel-<k>.mp4}` (HTTP Range),
 `download`. Errors are `{"detail": {"message", "code"?, "errors"?}}`; 409 codes: `busy` (a
 run is queued or active), `stale` (the plan changed since it was read), `state`, `exists`,
@@ -597,7 +618,8 @@ a run stops at the plan gate (exit code 3 → gate `plan`) and the UI answers th
 running | waiting | done | error`, stage `prep, plan, approval, cut, overlays, verify, done,
 revise, plan_revise, error`, gate `plan | result | null`. The job detail also carries
 `stage_since` (start of the running stage), `failed_stage`, `has_screen`, `cut_style`
-(stored or `auto`), `cut_style_resolved`, `cut_stale`, `source_duration_s` and `lang`; the
+(stored or `auto`), `cut_style_resolved`, `cut_stale`, `source_duration_s`, `lang`,
+`target_s`, `target_resolved`, `plan_target_stale` and `plan_target_s`; the
 app's "What is happening" line counts the time in the step from `stage_since`.
 
 Security model:
