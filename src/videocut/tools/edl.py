@@ -17,6 +17,18 @@ also lies outside every word of work/words.json (when present) as a suggestion.
 Readability warnings (never a failure): a screen window whose UI text would be lower than
 _layouts.TEXT_MIN_PX output px is reported as `screen_text_small` with the zoom it needs.
 
+Cut points in speech (error `cut_in_speech`): every segment `in`/`out` whose +-20 ms of
+work/audio.wav lies within 12 dB of the job's speech median (_audio_env) clips a word, unless
+the segment has "speech_cut_ok": "<reason>"; `edl snap` moves them to quiet points. Two
+segments that continue each other in the source (out == next in) are not a cut there.
+"fade_ms" is legacy (render crossfades every cut, segment "xfade_ms" overrides the length).
+
+`videocut tool edl snap`: moves every `in`/`out` to the nearest quiet point within the cut
+style's snap_window_s, never across a word the segment must not contain (_snap.py), keeps
+the originals as "in_src"/"out_src" and writes work/edl.json (captions, overlays, broll and
+cover follow in output time). Idempotent. Prints {moved, max_shift_ms, unresolved}.
+Render runs it before every render.
+
 `videocut tool edl locate <output_s>`: what the reel shows at an output time (feedback such
 as "at 0:12 zoom out less"): the segment, the source (camera) time, its layout, the zoom key
 in force (face `zoom_keys` or screen `screen_zoom`, by index), the EDL overlays on screen
@@ -38,11 +50,13 @@ from ..edl import (
     output_spans,
     output_to_source,
     read_sync,
+    remap_output_times,
     source_to_output,
+    validate,
 )
-from . import _layouts
+from . import _audio_env, _layouts, _snap
 from ._geometry import sized
-from .common import ToolError, job_parent, resolve_job, run_tool
+from .common import ToolError, job_parent, read_job, resolve_job, run_tool, write_json
 from .face import load_face
 from .job import redaction_enforced
 
@@ -73,13 +87,21 @@ def check(args) -> dict:
         ) from None
     if job is not None:  # personal data the human decided to redact (or all, by default)
         cands, _ = redaction_enforced(job)
-        gaps = redaction.missing(cands, json.loads(path.read_text()), job)
-        if gaps:
-            errs = [
-                f"{g['where']}: redaction_missing: candidate {g['id']} of work/redaction.json "
-                f"is not covered; add {json.dumps(g['need'])}"
-                for g in gaps
-            ]
+        raw = json.loads(path.read_text())
+        errs = [
+            f"{g['where']}: redaction_missing: candidate {g['id']} of work/redaction.json "
+            f"is not covered; add {json.dumps(g['need'])}"
+            for g in redaction.missing(cands, raw, job)
+        ]
+        env = _audio_env.job_envelope(job) if _wav_matches(job, edl.source) else None
+        errs += [
+            f"$.segments[{c['segment']}].{c['edge']}: cut_in_speech: {c['t']} cuts into "
+            f"speech ({c['level_db']} dB, speech median {round(env.speech_db, 1)} dB); "
+            "run `videocut tool edl snap`, move the cut to a pause, or set "
+            '"speech_cut_ok": "<reason>"'
+            for c in (_snap.in_speech(raw, env, duration) if env else [])
+        ]
+        if errs:
             for err in errs:
                 print(err)
             raise ToolError(f"{len(errs)} problem(s) in {path.name}: " + "; ".join(errs[:5]))
@@ -105,6 +127,94 @@ def check(args) -> dict:
 
 def _num(v) -> bool:
     return isinstance(v, int | float) and not isinstance(v, bool)
+
+
+def _wav_matches(job: Path, source: str) -> bool:
+    """work/audio.wav is the audio of the EDL source (ingest made it from job.json "source")."""
+    try:
+        return read_job(job).get("source") == source and (job / "work" / "audio.wav").is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def _words(job: Path) -> tuple[list[dict], bool]:
+    """(words of work/words.json with numeric times in video time, are they aligned?)."""
+    try:
+        words = json.loads((job / "work" / "words.json").read_text())["words"]
+        words = [w for w in words if all(_num(w.get(k)) for k in ("t0", "t1"))]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        words = []
+    off = _audio_env.wav_offset(job)  # a legacy job: words are in audio-stream time
+    if off:
+        words = [{**w, "t0": w["t0"] + off, "t1": w["t1"] + off} for w in words]
+    try:
+        meta = json.loads((job / "work" / "transcribe.json").read_text())
+        aligned = isinstance(meta.get("align"), dict)
+    except (OSError, ValueError, AttributeError):
+        aligned = False
+    return words, aligned or any("t0_asr" in w for w in words)
+
+
+def snap_job(job: Path, write: bool = True) -> dict:
+    """Snap work/edl.json of `job` (see `snap`); writes it only when a cut point moved.
+    Returns the summary plus "style", "written" and "skipped" (why nothing was snapped)."""
+    path = job / "work" / "edl.json"
+    data = json.loads(path.read_text())
+    probe = job / "work" / "probe.json"
+    duration = json.loads(probe.read_text())["duration"] if probe.is_file() else None
+    if validate(data, duration):
+        raise ToolError("work/edl.json is invalid; run `videocut tool edl check`")
+    style = _snap.cut_style(read_job(job))
+    base = {
+        "moved": 0,
+        "max_shift_ms": 0,
+        "unresolved": [],
+        "style": style["name"],
+        "written": False,
+    }
+    if not _wav_matches(job, data["source"]):
+        return {**base, "skipped": "no work/audio.wav of the EDL source"}
+    env = _audio_env.job_envelope(job)
+    if env is None:
+        return {**base, "skipped": "work/audio.wav is unreadable"}
+    words, aligned = _words(job)
+    # A legacy job (audio.wav and words.json in audio-stream time): the cut points were
+    # placed on those words, so snapping starts from them shifted into video time.
+    legacy = env.offset
+    sync = read_sync(job / "work" / "sync.json")
+    new, summary = _snap.snap(
+        data, env, words, style["snap_window_s"], style["xfade_ms"] / 1000, duration, aligned,
+        legacy, tuple(sync["overlap"]) if sync else None,
+    )  # fmt: skip
+    out = {**base, **summary, "aligned_words": aligned}
+    if legacy:
+        out["legacy_offset_s"] = round(legacy, 4)
+    if summary["moved"]:
+        new = remap_output_times(new, data["segments"], new["segments"])
+        if write:
+            write_json(path, new)
+            out["written"] = True
+    return out
+
+
+def snap(args) -> dict:
+    job = resolve_job(args.job)
+    if not (job / "work" / "edl.json").is_file():
+        raise ToolError(f"EDL not found: {job / 'work' / 'edl.json'}")
+    out = snap_job(job, write=not args.dry_run)
+    if out.get("skipped"):
+        print(f"not snapped: {out['skipped']}")
+    dry = out["moved"] and not out["written"]
+    print(
+        f"snapped: {out['moved']} cut point(s) moved, max {out['max_shift_ms']} ms "
+        f"(style {out['style']})" + ("; dry run, edl.json unchanged" if dry else "")
+    )
+    for u in out["unresolved"]:
+        print(
+            f"unresolved: $.segments[{u['segment']}].{u['edge']} at {u['t']} stays in speech "
+            f'({u["level_db"]} dB): move the cut to a pause or set "speech_cut_ok"'
+        )
+    return out
 
 
 def _blinks(job: Path, edl, duration: float | None) -> list[str]:
@@ -249,6 +359,11 @@ def register(subparsers) -> None:
     c = sub.add_parser("check", help="validate work/edl.json", parents=[job_parent()])
     c.add_argument("file", nargs="?", help="EDL file (default: work/edl.json of the job)")
     c.set_defaults(handler=run_tool("edl check", check))
+    sn = sub.add_parser(
+        "snap", help="move cut points to quiet points (work/edl.json)", parents=[job_parent()]
+    )
+    sn.add_argument("--dry-run", action="store_true", help="report only, do not write")
+    sn.set_defaults(handler=run_tool("edl snap", snap))
     lo = sub.add_parser(
         "locate", help="what the reel shows at an output time", parents=[job_parent()]
     )
