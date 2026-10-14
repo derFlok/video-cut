@@ -7,7 +7,16 @@ from pathlib import Path
 from .. import redaction as red
 from .. import run as pipeline
 from ..tools.common import ID_RE, JOB_FILE, ToolError, jobs_root, read_job
-from ..tools.job import is_approved, job_lang, project_sha, resolved_format, resolved_style
+from ..tools.job import (
+    is_approved,
+    job_lang,
+    plan_made_for,
+    plan_target_stale,
+    project_sha,
+    resolved_format,
+    resolved_range,
+    resolved_style,
+)
 from .runs import Channel
 
 # GET /api/jobs/{id}/media/{name}: the only files the media route serves.
@@ -159,6 +168,24 @@ def _cut_style(data: dict) -> tuple[str, str | None]:
     return data.get("cut_style") or "auto", resolved
 
 
+def _target(job: Path, data: dict) -> dict:
+    """The target length as the API shows it: target_s (null: auto), target_resolved
+    ({min_s, max_s} or null: no fixed range, also for an invalid value), and whether the
+    plan was made for another target (plan_target_stale, with the length it was made for)."""
+    try:
+        rng = resolved_range(data)
+    except ToolError:
+        rng = None
+    target = data.get("target_s")
+    stale = plan_target_stale(job, data)
+    return {
+        "target_s": target if isinstance(target, (int, float)) else None,
+        "target_resolved": None if rng is None else {"min_s": rng[0], "max_s": rng[1]},
+        "plan_target_stale": stale,
+        "plan_target_s": plan_made_for(data) if stale else None,
+    }
+
+
 def cut_stale(job: Path) -> bool:
     """A reel of the approved plan exists but no longer matches the job (another cut style,
     format, plan or personal-data decision): the app offers to cut again (/recut)."""
@@ -191,6 +218,7 @@ def summary(job: Path, ch: Channel | None) -> dict:
         "brand": data.get("brand"),
         "format": fmt,
         "cut_style": _cut_style(data)[0],
+        "target_s": data.get("target_s"),
         "status": st,
         "stage": stage,
         "queued": ch is not None and ch.state == "queued",
@@ -249,6 +277,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "cut_style": cut_style,
         "cut_style_resolved": style_resolved,
         "cut_stale": cut_stale(job),
+        **_target(job, data),
         "source_duration_s": source_duration(job),
         "lang": job_lang(data),
         "title": title(job, data),

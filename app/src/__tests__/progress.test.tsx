@@ -6,6 +6,7 @@ import type { JobDetail, Stage } from "../api/types";
 import type { LogLine } from "../components/LiveLog";
 import { I18nProvider, STRINGS } from "../i18n";
 import { installMock } from "../mock/server";
+import { parseMmss, targetLabel } from "../components/TargetLength";
 import { activity, expectedSeconds, isInterim, lockReason, recutEstimate } from "../progress";
 import { JobPage } from "../screens/JobPage";
 import { NewJob } from "../screens/NewJob";
@@ -117,6 +118,108 @@ describe("cut style", () => {
     expect(await screen.findByTestId("recut")).toBeInTheDocument();
     await user.selectOptions(select, "standard");
     await waitFor(() => expect(screen.queryByTestId("recut")).not.toBeInTheDocument());
+  });
+});
+
+describe("target length", () => {
+  const upload = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(await screen.findByText("Gedanke des Tages"));
+    await user.upload(screen.getByLabelText(/Kamera-Aufnahme/), file("take.mov", 200));
+  };
+
+  it("reads mm:ss and names lengths", () => {
+    expect(parseMmss("2:30")).toBe(150);
+    expect(parseMmss("90")).toBe(90);
+    expect(parseMmss(" 10:00 ")).toBe(600);
+    for (const bad of ["2:75", "abc", "0:03", "", "1:2"]) expect(parseMmss(bad)).toBeNull();
+    const tt = (k: Parameters<typeof t>[0], v?: Record<string, string | number>) => t(k, v);
+    expect(targetLabel(null, tt)).toBe(t("target.auto"));
+    expect([60, 90, 120, 300, 150].map((s) => targetLabel(s, tt))).toEqual(["60 s", "90 s", "2 Min", "5 Min", "2:30 Min"]);
+  });
+
+  it("sends auto by default and shows the hint", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<NewJob />);
+    await upload(user);
+    expect(screen.getByLabelText(t("target.new"))).toHaveValue("auto");
+    expect(screen.getByTestId("target-hint")).toHaveTextContent(t("target.auto.hint"));
+    await user.click(screen.getByRole("button", { name: t("new.submit") }));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/jobs\/job-/));
+    expect((lastCall(mock, "/api/jobs")!.body as FormData).get("target_s")).toBe("auto");
+  });
+
+  it("sends a preset in seconds", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<NewJob />);
+    await upload(user);
+    const select = screen.getByLabelText(t("target.new"));
+    for (const name of ["Automatisch", "30 s", "60 s", "90 s", "2 Min", "3 Min", "5 Min", "10 Min", t("target.custom")])
+      expect(screen.getByRole("option", { name })).toBeInTheDocument();
+    await user.selectOptions(select, "300");
+    await user.click(screen.getByRole("button", { name: t("new.submit") }));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/jobs\/job-/));
+    expect((lastCall(mock, "/api/jobs")!.body as FormData).get("target_s")).toBe("300");
+    const id = window.location.hash.split("/").pop()!;
+    expect(mock.state.jobs.get(id)!.detail.target_resolved).toEqual({ min_s: 255, max_s: 345 });
+  });
+
+  it("takes a custom mm:ss and blocks an invalid one", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<NewJob />);
+    await upload(user);
+    await user.selectOptions(screen.getByLabelText(t("target.new")), "custom");
+    const input = screen.getByLabelText(t("target.custom.label"));
+    await user.type(input, "2:75");
+    expect(screen.getByRole("alert")).toHaveTextContent(t("target.custom.invalid"));
+    const before = mock.state.calls.length;
+    await user.click(screen.getByRole("button", { name: t("new.submit") }));
+    expect(mock.state.calls.slice(before).some((c) => c.path === "/api/jobs")).toBe(false);
+    await user.clear(input);
+    await user.type(input, "2:30");
+    await user.click(screen.getByRole("button", { name: t("new.submit") }));
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/jobs\/job-/));
+    expect((lastCall(mock, "/api/jobs")!.body as FormData).get("target_s")).toBe("150");
+  });
+
+  it("changing it on the plan makes the plan stale and replans through plan feedback", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<JobPage id="job-approval" />);
+    // a demo without a target: no fixed length; the plan's estimate is shown next to it
+    const summary = await screen.findByTestId("target-summary");
+    expect(summary).toHaveTextContent(t("target.range.none"));
+    expect(summary).toHaveTextContent(t("target.estimate", { t: "0:41" }));
+    const approve = screen.getByRole("button", { name: t("plan.approve") });
+    expect(approve).toBeEnabled();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: t("target.title") }), "300");
+    expect(screen.getByText(t("target.change.note"))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: t("target.apply") }));
+    expect(lastCall(mock, "/api/jobs/job-approval/target")!.body).toEqual({ target_s: 300 });
+    const stale = await screen.findByTestId("target-stale");
+    expect(stale).toHaveTextContent(t("target.stale", { old: "Automatisch", new: "5 Min" }));
+    expect(screen.getByTestId("target-summary")).toHaveTextContent(t("target.range", { min: "4:15", max: "5:45 Min" }));
+    expect(screen.getByRole("button", { name: t("plan.approve") })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: t("target.replan") }));
+    expect(lastCall(mock, "/api/jobs/job-approval/plan/feedback")!.body).toEqual({
+      text: t("target.replan.text", { len: "5 Min" }),
+    });
+    await waitFor(() => expect(screen.queryByTestId("target-stale")).not.toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByRole("button", { name: t("plan.approve") })).toBeEnabled(), { timeout: 3000 });
+    expect(mock.state.jobs.get("job-approval")!.detail.plan_target_stale).toBe(false);
+  });
+
+  it("is shown read-only after approval", async () => {
+    installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<JobPage id="job-done" />);
+    await user.click(await screen.findByText(t("job.plan.show")));
+    expect(await screen.findByTestId("target-value")).toHaveTextContent(`${t("target.title")}: ${t("target.auto")}`);
+    expect(screen.queryByRole("combobox", { name: t("target.title") })).not.toBeInTheDocument();
   });
 });
 

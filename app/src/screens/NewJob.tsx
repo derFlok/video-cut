@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api/client";
-import { FORMATS, type BrandSummary, type CutStyleChoice, type FormatChoice, type VideoType } from "../api/types";
+import { FORMATS, type BrandSummary, type CutStyleChoice, type FormatChoice, type TargetChoice, type VideoType } from "../api/types";
 import { AspectIcon } from "../components/AspectIcon";
 import { CutStyleSelect } from "../components/CutStyle";
+import { TargetSelect } from "../components/TargetLength";
 import { DropZone, formatBytes, hasExt, IMAGE_EXT, VIDEO_EXT } from "../components/DropZone";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { useI18n, type T } from "../i18n";
@@ -45,6 +46,8 @@ export function NewJob() {
   const [format, setFormat] = useState<FormatChoice>("auto");
   const [brief, setBrief] = useState("");
   const [cutStyle, setCutStyle] = useState<CutStyleChoice>("auto");
+  // undefined: a custom length that is not valid yet (blocks the upload)
+  const [target, setTarget] = useState<TargetChoice | undefined>(null);
   const [tried, setTried] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState<"idle" | "upload" | "start">("idle");
@@ -62,12 +65,13 @@ export function NewJob() {
   useEffect(load, []);
 
   const errors = types ? validateNewJob(draft, types, t) : [];
+  if (target === undefined) errors.push(t("target.custom.invalid"));
   const busy = phase !== "idle";
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setTried(true);
-    if (!types || errors.length || !draft.camera || !draft.type) return;
+    if (!types || errors.length || !draft.camera || !draft.type || target === undefined) return;
     setSendErr(null);
     setPhase("upload");
     setProgress(0);
@@ -82,6 +86,7 @@ export function NewJob() {
           format,
           brief: brief.trim() || undefined,
           cut_style: cutStyle,
+          target_s: target,
         },
         (p) => setProgress(p.total ? Math.round((p.loaded / p.total) * 100) : null),
       );
@@ -235,6 +240,13 @@ export function NewJob() {
           {t("style.new")}
         </label>
         <CutStyleSelect id="cut-style" value={cutStyle} resolved={withScreen ? "calm" : "standard"} onChange={setCutStyle} />
+      </div>
+
+      <div className="field target-pick">
+        <label htmlFor="target" className="h2">
+          {t("target.new")}
+        </label>
+        <TargetSelect id="target" value={target} onChange={setTarget} />
       </div>
 
       <div className="field">

@@ -15,8 +15,22 @@ import type {
   Plan,
   RedactionDecision,
   Session,
+  TargetChoice,
+  TargetRange,
   VideoType,
 } from "./types";
+
+/** PUT /api/jobs/{id}/target. */
+export interface TargetResult {
+  id: string;
+  target_s: number | null;
+  target_resolved: TargetRange | null;
+  previous: number | null;
+  plan_stale: boolean;
+  approval_revoked: boolean;
+  reel_stale: boolean;
+  approved: boolean;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -162,6 +176,8 @@ export const api = {
       format?: FormatChoice;
       brief?: string;
       cut_style?: CutStyleChoice;
+      /** Seconds, or null for automatic (sent as "auto"). */
+      target_s?: TargetChoice;
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -172,6 +188,7 @@ export const api = {
     if (fields.format) form.append("format", fields.format);
     if (fields.brief) form.append("brief", fields.brief);
     if (fields.cut_style) form.append("cut_style", fields.cut_style);
+    if (fields.target_s !== undefined) form.append("target_s", fields.target_s === null ? "auto" : String(fields.target_s));
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);
@@ -197,6 +214,9 @@ export const api = {
     call<unknown>("POST", `${J(id)}/approve`, redaction ? { plan_sha, redaction } : { plan_sha }),
   setCutStyle: (id: string, cut_style: CutStyleChoice) => call<JobDetail>("PUT", `${J(id)}/cut-style`, { cut_style }),
   recut: (id: string) => call<unknown>("POST", `${J(id)}/recut`),
+  /** Store the target length; a plan made for another one goes stale (plan again). */
+  setTarget: (id: string, target_s: TargetChoice) =>
+    call<TargetResult>("PUT", `${J(id)}/target`, { target_s: target_s === null ? "auto" : target_s }),
   feedback: (id: string, text: string, at_s?: number) =>
     call<unknown>("POST", `${J(id)}/feedback`, at_s === undefined ? { text } : { text, at_s }),
 

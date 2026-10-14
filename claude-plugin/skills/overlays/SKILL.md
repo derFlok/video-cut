@@ -94,9 +94,11 @@ Add `overlays` to `work/edl.json`, times in **output** seconds:
 - Take the times from the caption words (`captions[].words[]` are output time): start on
   the first word the overlay belongs to, end 1.5–3.5 s later, at a word boundary.
 - At most **one overlay at a time** (captions are separate and always on), none in the first
-  1.5 s, ~6 s or more between two, 2–4 for 30–60 s. Fewer is better than filler.
+  1.5 s, ~6 s or more between two; about **2–4 per minute** of output (2–4 for a 30–60 s
+  reel, ~10–20 for a 5-minute demo). Fewer is better than filler.
 - Follow the plan's overlay ideas; drop an idea whose words were cut. A plan without that
-  section: pick 2–3 moments yourself from the core message and the spoken words.
+  section: pick about 2–3 moments per minute yourself from the core message and the spoken
+  words.
 
 | Scene | props | Use |
 |---|---|---|
