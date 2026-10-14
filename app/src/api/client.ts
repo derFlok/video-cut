@@ -6,6 +6,7 @@
 import type {
   Brand,
   BrandSummary,
+  CutStyleChoice,
   Format,
   FormatChoice,
   JobDetail,
@@ -160,6 +161,7 @@ export const api = {
       brand?: string;
       format?: FormatChoice;
       brief?: string;
+      cut_style?: CutStyleChoice;
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -169,6 +171,7 @@ export const api = {
     if (fields.brand) form.append("brand", fields.brand);
     if (fields.format) form.append("format", fields.format);
     if (fields.brief) form.append("brief", fields.brief);
+    if (fields.cut_style) form.append("cut_style", fields.cut_style);
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);
@@ -192,6 +195,8 @@ export const api = {
   planFeedback: (id: string, text: string) => call<unknown>("POST", `${J(id)}/plan/feedback`, { text }),
   approve: (id: string, plan_sha: string, redaction: RedactionDecision | null) =>
     call<unknown>("POST", `${J(id)}/approve`, redaction ? { plan_sha, redaction } : { plan_sha }),
+  setCutStyle: (id: string, cut_style: CutStyleChoice) => call<JobDetail>("PUT", `${J(id)}/cut-style`, { cut_style }),
+  recut: (id: string) => call<unknown>("POST", `${J(id)}/recut`),
   feedback: (id: string, text: string, at_s?: number) =>
     call<unknown>("POST", `${J(id)}/feedback`, at_s === undefined ? { text } : { text, at_s }),
 

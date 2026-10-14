@@ -5,6 +5,11 @@ export type Format = "9:16" | "16:9" | "1:1" | "4:5";
 export type FormatChoice = "auto" | Format;
 export const FORMATS: Format[] = ["9:16", "16:9", "1:1", "4:5"];
 
+/** How tightly the reel is cut; "auto" lets the server pick (calm with screen material). */
+export type CutStyle = "calm" | "standard" | "tight";
+export type CutStyleChoice = "auto" | CutStyle;
+export const CUT_STYLES: CutStyleChoice[] = ["auto", "calm", "standard", "tight"];
+
 export type Stage =
   | "prep"
   | "plan"
@@ -156,6 +161,16 @@ export interface JobDetail {
   title?: string | null;
   brief?: string | null;
   created?: string;
+  /** The stored choice (absent: automatic) and what it resolves to. */
+  cut_style?: CutStyle | "auto" | null;
+  cut_style_resolved?: CutStyle | null;
+  /** The current reel was cut with another style or format than the resolved one. */
+  cut_stale?: boolean;
+  /** Length of the camera recording (work/probe.json), for the duration hints. */
+  source_duration_s?: number | null;
+  has_screen?: boolean;
+  /** The stage a failed run stopped in. */
+  failed_stage?: Stage | null;
 }
 
 export interface PlanKeep {
