@@ -507,3 +507,17 @@
 - Jobs planned before this change: their e-mail/phone/name candidates have no measured
   text, so verify of a revision reports `redaction_unchecked` until the plan is made
   again.
+- verify: a still screen over several consecutive screen segments is no longer a frozen
+  picture (the exempt spans are merged first, not only when a pip bubble is present).
+
+### Observed — measured redaction
+- Real plan run (Opus 5.5) on a generated demo (24.8 s camera, contact card that scrolls,
+  "redact all"): the agent named the text, the whole card as area, ran `redact measure`;
+  3 of 3 measured "ok". Plan 66.9 s / 16 turns / USD 0.35, cut 221.6 s / 25 turns /
+  USD 0.69. Verify: 404 coverage checks, 0 leaks, `screen_flagged` empty (17.7 s for
+  the 20 s 16:9 reel); not ok only for a click at a cut in the generated speech.
+- Measured boxes vs known positions on generated material: IoU > 0.8 for every static
+  sample; the track covers the text at every frame while it scrolls.
+- On a real 4K screen recording (248 s): ~0.48 s per sampled frame with 4 threads
+  (Vision dominates); two texts over 215 s took 150 s; the packet scan for frame times
+  0.5 s; 29 frame gaps > 0.5 s (up to 2 s) that a plain seek got wrong.

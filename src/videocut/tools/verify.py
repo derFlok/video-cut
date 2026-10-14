@@ -645,9 +645,9 @@ def verify(args) -> dict:
     # held tail). A static end card is not a frozen picture (one frame of slack each end).
     sched = _plates.for_job(job, edl, edl.output_duration()) if edl is not None else None
     plates = full_frame_spans(sched.overlays) if sched is not None else []
-    still = plates + still_screen
-    if bubbles:  # touching spans count as one (a still screen running into a pip stretch)
-        still = merge_spans(still + [(a, b) for a, b, _ in bubbles], 1 / fps)
+    # touching spans count as one (a still screen over several segments, or running into
+    # a pip stretch)
+    still = merge_spans(plates + still_screen + [(a, b) for a, b, _ in bubbles], 1 / fps)
     stretches = [
         s
         for s in bad_stretches(reel, video_dur)
