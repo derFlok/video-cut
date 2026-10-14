@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { JobDetail, JobEvent, Stage } from "../api/types";
+import { CutStylePanel } from "../components/CutStyle";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog, type LogLine } from "../components/LiveLog";
 import { StatusChip } from "../components/StatusChip";
+import { StatusLine } from "../components/StatusLine";
 import { Stepper } from "../components/Stepper";
 import { clock, money, useI18n } from "../i18n";
+import { kindOf, type RunKind } from "../progress";
 import { go } from "../router";
 import { PlanReview } from "./PlanReview";
 import { Result } from "./Result";
@@ -26,6 +29,11 @@ export interface Live {
   reload: () => Promise<void>;
   /** Mark a run as started by this page (before the first event arrives). */
   begin: (stage: Stage) => void;
+  /** The kind of run the current stage belongs to (a revision also ends in "verify"). */
+  kind: RunKind;
+  /** When the current stage began (ms, this page's clock) and its lines so far. */
+  stageSince: number;
+  stageLines: LogLine[];
 }
 
 /** Job detail plus its live event stream (the server replays the current state on connect). */
@@ -38,6 +46,18 @@ export function useLiveJob(id: string): Live {
   const [lastOk, setLastOk] = useState<boolean | null>(null);
   const [lastStage, setLastStage] = useState<Stage | undefined>(undefined);
   const stageRef = useRef<Stage | undefined>(undefined);
+  const [kind, setKind] = useState<RunKind>(null);
+  const [stageSince, setStageSince] = useState(() => Date.now());
+  const [stageFrom, setStageFrom] = useState(0);
+  const seq = useRef(0);
+  const eventStage = useRef<Stage | undefined>(undefined);
+  const enterStage = useCallback((stage: Stage) => {
+    if (eventStage.current === stage) return;
+    eventStage.current = stage;
+    setKind((k) => kindOf(stage, k));
+    setStageSince(Date.now());
+    setStageFrom(seq.current);
+  }, []);
 
   const reload = useCallback(async () => {
     try {
@@ -53,7 +73,7 @@ export function useLiveJob(id: string): Live {
 
   useEffect(() => {
     void reload();
-    const add = (l: LogLine) => setLines((prev) => [...prev.slice(-(MAX_LINES - 1)), l]);
+    const add = (l: LogLine) => setLines((prev) => [...prev.slice(-(MAX_LINES - 1)), { ...l, n: seq.current++ }]);
     const close = api.events(
       id,
       (ev: JobEvent) => {
@@ -63,6 +83,7 @@ export function useLiveJob(id: string): Live {
             // run moved on (gates, done and error end it).
             const moved = stageRef.current !== undefined && stageRef.current !== ev.stage;
             stageRef.current = ev.stage;
+            enterStage(ev.stage);
             if (ev.stage !== "error") setLastStage(ev.stage);
             setJob((j) => (j ? { ...j, stage: ev.stage } : j));
             if (ev.stage === "error") setRunning(false);
@@ -96,16 +117,20 @@ export function useLiveJob(id: string): Live {
       () => undefined, // EventSource reconnects by itself
     );
     return close;
-  }, [id, reload]);
+  }, [id, reload, enterStage]);
 
   const begin = useCallback((stage: Stage) => {
     stageRef.current = stage;
+    eventStage.current = undefined;
+    setKind(null);
+    enterStage(stage);
     setRunning(true);
     setLastOk(null);
     setJob((j) => (j ? { ...j, stage, status: "running" } : j));
-  }, []);
+  }, [enterStage]);
 
-  return { job, error, lines, running, tick, lastOk, lastStage, reload, begin };
+  const stageLines = lines.filter((l) => (l.n ?? 0) >= stageFrom);
+  return { job, error, lines, running, tick, lastOk, lastStage, reload, begin, kind, stageSince, stageLines };
 }
 
 function useElapsed(running: boolean): number {
@@ -175,8 +200,8 @@ export function JobPage({ id }: { id: string }) {
 
       <section className="panel stack">
         <Stepper stage={job.stage} status={running ? "running" : job.status} lastGood={live.lastStage} />
+        <StatusLine live={live} />
         <div className="meta-row">
-          <span>{running ? t(job.stage === "prep" ? "job.working.prep" : "job.working") : job.status === "error" ? t("job.failed") : t("job.idle")}</span>
           <span>{t("job.elapsed", { t: clock(wall) })}</span>
           <span>{t("job.cost", { c: hasCost ? money(cost, lang) : "—" })}</span>
         </div>
@@ -191,6 +216,7 @@ export function JobPage({ id }: { id: string }) {
         <ErrorBanner error={actionErr} />
       </section>
 
+      {atGateOrLater && <CutStylePanel live={live} />}
       {showPlan && <PlanReview live={live} />}
       {job.outputs?.reel && job.approved && job.stage !== "plan_revise" && (
         <>

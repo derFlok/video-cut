@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api/client";
-import { FORMATS, type BrandSummary, type FormatChoice, type VideoType } from "../api/types";
+import { FORMATS, type BrandSummary, type CutStyleChoice, type FormatChoice, type VideoType } from "../api/types";
 import { AspectIcon } from "../components/AspectIcon";
+import { CutStyleSelect } from "../components/CutStyle";
 import { DropZone, formatBytes, hasExt, IMAGE_EXT, VIDEO_EXT } from "../components/DropZone";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { useI18n, type T } from "../i18n";
@@ -43,6 +44,7 @@ export function NewJob() {
   const [brand, setBrand] = useState("");
   const [format, setFormat] = useState<FormatChoice>("auto");
   const [brief, setBrief] = useState("");
+  const [cutStyle, setCutStyle] = useState<CutStyleChoice>("auto");
   const [tried, setTried] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState<"idle" | "upload" | "start">("idle");
@@ -79,6 +81,7 @@ export function NewJob() {
           brand: brand || undefined,
           format,
           brief: brief.trim() || undefined,
+          cut_style: cutStyle,
         },
         (p) => setProgress(p.total ? Math.round((p.loaded / p.total) * 100) : null),
       );
@@ -226,6 +229,13 @@ export function NewJob() {
           </div>
         </div>
       </fieldset>
+
+      <div className="field">
+        <label htmlFor="cut-style" className="h2">
+          {t("style.new")}
+        </label>
+        <CutStyleSelect id="cut-style" value={cutStyle} resolved={withScreen ? "calm" : "standard"} onChange={setCutStyle} />
+      </div>
 
       <div className="field">
         <label htmlFor="brief" className="h2">

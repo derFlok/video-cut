@@ -52,6 +52,11 @@ const SHOTS = [
   ["08-brands", "#/brands"],
   ["09-brand-editor", "#/brands/dark"],
   ["10-error-job", "#/jobs/job-error"],
+  ["11-overlays-running", "#/jobs/job-overlays"],
+  ["12-recut", "#/jobs/job-done", async (p) => {
+    await p.getByRole("combobox", { name: "Schnittstil" }).selectOption("calm");
+    await p.getByRole("button", { name: "Neu schneiden" }).waitFor();
+  }],
 ];
 
 const browser = await chromium.launch();

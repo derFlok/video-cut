@@ -28,6 +28,8 @@ interface MockJob {
   title: string | null;
   plan: Plan | null;
   events: JobEvent[];
+  /** The style the current reel was cut with. */
+  cutWith?: string;
 }
 
 export interface MockState {
@@ -142,14 +144,29 @@ function baseDetail(id: string, over: Partial<JobDetail>): JobDetail {
     verify: null,
     runs: [],
     revisions: [],
+    cut_style: "auto",
+    cut_style_resolved: over.has_screen ? "calm" : "standard",
+    cut_stale: false,
+    source_duration_s: 64.2,
+    has_screen: false,
     ...over,
   };
 }
 
+const resolveStyle = (d: JobDetail) =>
+  d.cut_style && d.cut_style !== "auto" ? d.cut_style : d.has_screen ? "calm" : "standard";
+
 function seedJobs(): Map<string, MockJob> {
   const jobs = new Map<string, MockJob>();
   const add = (id: string, title: string | null, created: string, d: Partial<JobDetail>, plan: Plan | null) =>
-    jobs.set(id, { detail: baseDetail(id, { title, created, ...d, plan_sha: plan?.sha ?? null }), created, title, plan, events: [{ t: "stage", stage: d.stage ?? "prep" }] });
+    jobs.set(id, {
+      detail: baseDetail(id, { title, created, ...d, plan_sha: plan?.sha ?? null }),
+      created,
+      title,
+      plan,
+      events: [{ t: "stage", stage: d.stage ?? "prep" }],
+      cutWith: d.outputs?.reel ? (d.has_screen ? "calm" : "standard") : undefined,
+    });
   const p1 = planFor("Warum ein fester Ablauf Zeit spart");
   add(
     "job-approval",
@@ -162,6 +179,8 @@ function seedJobs(): Map<string, MockJob> {
       format_resolved: "16:9",
       status: "waiting",
       stage: "approval",
+      has_screen: true,
+      source_duration_s: 251.8,
       brief: "Kurz halten, Fokus auf den Ablauf",
       redaction: { candidates: clone(CANDIDATES), decision: null },
       runs: [
@@ -209,10 +228,41 @@ function seedJobs(): Map<string, MockJob> {
     },
     planFor("Drei Tipps für den Start"),
   );
-  add("job-running", "Neue Funktion in 40 Sekunden", "2026-10-13T08:02:00", { type: "walkthrough", status: "running", stage: "prep", format: "16:9", format_resolved: "16:9", runs: [] }, null);
-  add("job-error", null, "2026-10-09T11:00:00", { type: "myth", status: "error", stage: "error", runs: [{ phase: "prep", wall_s: 12, turns: null, cost_usd: null }] }, null);
+  add("job-running", "Neue Funktion in 40 Sekunden", "2026-10-13T08:02:00", { type: "walkthrough", status: "running", stage: "prep", format: "16:9", format_resolved: "16:9", has_screen: true, source_duration_s: 251.8, runs: [] }, null);
+  add(
+    "job-overlays",
+    "Ablauf in drei Schritten",
+    "2026-10-13T10:30:00",
+    {
+      type: "walkthrough",
+      status: "running",
+      stage: "overlays",
+      approved: true,
+      has_screen: true,
+      format: "16:9",
+      format_resolved: "16:9",
+      source_duration_s: 596.1,
+      outputs: { reel: "out/reel.mp4", preview: null, cover: null },
+      runs: [
+        { phase: "plan", wall_s: 254, turns: 30, cost_usd: 1.42 },
+        { phase: "cut", wall_s: 1459, turns: 88, cost_usd: 2.49 },
+      ],
+    },
+    planFor("Ablauf in drei Schritten"),
+  );
+  add("job-error", null, "2026-10-09T11:00:00", { type: "myth", status: "error", stage: "error", failed_stage: "prep", runs: [{ phase: "prep", wall_s: 12, turns: null, cost_usd: null }] }, null);
   const running = jobs.get("job-running")!;
-  running.events.push({ t: "log", text: "Audio wird extrahiert (48 kHz) …" }, { t: "tool", text: "Bash: videocut tool transcribe job-running" }, { t: "log", text: "Transkript: 412 Wörter, 18 Pausen." });
+  running.events.push(
+    { t: "log", text: "  ingest --denoise   41.2s  {'denoised': True}" },
+    { t: "log", text: "  sync               3.1s  {'offset_s': 1.24, 'method': 'audio', 'confidence': 0.91}" },
+    { t: "log", text: "  screen             22.4s  {'clicks': 14, 'zoom_targets': 6}" },
+    { t: "log", text: "  redact text        30.2s  {'texts': 88, 'suggest': 2}" },
+    { t: "log", text: "  face               18.9s  {'found_pct': 98.4, 'blinks': 51}" },
+  );
+  jobs.get("job-overlays")!.events.push(
+    { t: "log", text: "overlays: Claude is working" },
+    { t: "tool", text: "Bash: videocut tool captions --job job-overlays" },
+  );
   return jobs;
 }
 
@@ -385,8 +435,29 @@ export function createMock(opts: MockOptions = {}) {
         d.approved = true;
         d.redaction.decision = req.redaction ? { ...req.redaction } : null;
         void simulate(id, ["cut", "overlays", "verify"], "result", () => {
+          job.cutWith = resolveStyle(d);
+          d.cut_stale = false;
           d.outputs = { reel: "out/reel.mp4", preview: "out/preview.mp4", cover: "out/cover.jpg" };
           d.verify = { ok: true, checks: { loudness: { ok: true } }, flagged: [], overlay_flagged: [], screen_flagged: [] };
+        });
+        return json(202, { ok: true });
+      }
+      if (b === "cut-style" && method === "PUT") {
+        const v = String((body as { cut_style?: string })?.cut_style ?? "");
+        if (!["auto", "calm", "standard", "tight"].includes(v)) return json(422, { detail: `unknown cut style '${v}'` });
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        d.cut_style = v as JobDetail["cut_style"];
+        d.cut_style_resolved = resolveStyle(d);
+        d.cut_stale = !!d.outputs?.reel && d.approved && job.cutWith !== d.cut_style_resolved;
+        return json(200, d);
+      }
+      if (b === "recut" && method === "POST") {
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        if (!d.approved || !job.plan) return json(409, { detail: { message: "the plan is not approved", code: "state" } });
+        void simulate(id, ["cut", "overlays", "verify"], "result", () => {
+          job.cutWith = resolveStyle(d);
+          d.cut_stale = false;
+          d.outputs = { reel: "out/reel.mp4", preview: "out/preview.mp4", cover: "out/cover.jpg" };
         });
         return json(202, { ok: true });
       }
@@ -431,8 +502,12 @@ export function createMock(opts: MockOptions = {}) {
       const withScreen = form.get("screen") instanceof File || form.getAll("assets").length > 0;
       const fmt = String(form.get("format") ?? "auto");
       const title = camera.name.replace(/\.[^.]+$/, "");
+      const style = String(form.get("cut_style") ?? "auto");
       state.jobs.set(id, {
         detail: baseDetail(id, {
+          has_screen: withScreen,
+          cut_style: style as JobDetail["cut_style"],
+          cut_style_resolved: (style === "auto" ? (withScreen ? "calm" : "standard") : style) as JobDetail["cut_style_resolved"],
           type: String(form.get("type")),
           brand: (form.get("brand") as string) || null,
           format: fmt as JobDetail["format"],

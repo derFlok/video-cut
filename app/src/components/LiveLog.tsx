@@ -4,6 +4,8 @@ import { useI18n } from "../i18n";
 export interface LogLine {
   kind: "log" | "tool" | "error" | "stage";
   text: string;
+  /** Running number of the line on this page (the status line reads the current stage's lines). */
+  n?: number;
 }
 
 /** Turns a raw tool line ("Bash: videocut tool edl locate 12.4") into something readable. */
