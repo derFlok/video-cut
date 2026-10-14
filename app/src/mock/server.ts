@@ -156,17 +156,23 @@ function baseDetail(id: string, over: Partial<JobDetail>): JobDetail {
 const resolveStyle = (d: JobDetail) =>
   d.cut_style && d.cut_style !== "auto" ? d.cut_style : d.has_screen ? "calm" : "standard";
 
+/** How long the seeded running jobs have been in their stage. */
+export const RUNNING_FOR_MS = 125_000;
+
 function seedJobs(): Map<string, MockJob> {
   const jobs = new Map<string, MockJob>();
-  const add = (id: string, title: string | null, created: string, d: Partial<JobDetail>, plan: Plan | null) =>
+  const add = (id: string, title: string | null, created: string, d: Partial<JobDetail>, plan: Plan | null) => {
+    // a running job has been in its stage for a while (the page was reloaded meanwhile)
+    const at = d.status === "running" ? new Date(Date.now() - RUNNING_FOR_MS).toISOString() : undefined;
     jobs.set(id, {
-      detail: baseDetail(id, { title, created, ...d, plan_sha: plan?.sha ?? null }),
+      detail: baseDetail(id, { title, created, ...d, stage_since: at ?? null, plan_sha: plan?.sha ?? null }),
       created,
       title,
       plan,
-      events: [{ t: "stage", stage: d.stage ?? "prep" }],
+      events: [{ t: "stage", stage: d.stage ?? "prep", ...(at ? { at } : {}) }],
       cutWith: d.outputs?.reel ? (d.has_screen ? "calm" : "standard") : undefined,
     });
+  };
   const p1 = planFor("Warum ein fester Ablauf Zeit spart");
   add(
     "job-approval",
@@ -290,8 +296,10 @@ export function createMock(opts: MockOptions = {}) {
     const job = state.jobs.get(id);
     if (!job) return;
     if (ev.t === "stage") {
+      ev = { ...ev, at: ev.at ?? new Date().toISOString() };
       job.events = job.events.filter((e) => e.t !== "stage");
       job.detail.stage = ev.stage;
+      job.detail.stage_since = ev.at;
     }
     job.events.push(ev);
     listeners.get(id)?.forEach((cb) => cb(ev));

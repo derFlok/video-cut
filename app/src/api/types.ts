@@ -169,6 +169,8 @@ export interface JobDetail {
   /** Length of the camera recording (work/probe.json), for the duration hints. */
   source_duration_s?: number | null;
   has_screen?: boolean;
+  /** When the running stage started (ISO); null when nothing runs. */
+  stage_since?: string | null;
   /** The stage a failed run stopped in. */
   failed_stage?: Stage | null;
 }
@@ -209,7 +211,8 @@ export interface Plan {
 }
 
 export type JobEvent =
-  | { t: "stage"; stage: Stage }
+  /** `at`: when the stage started (ISO); a replayed event keeps its original time. */
+  | { t: "stage"; stage: Stage; at?: string }
   | { t: "log"; text: string }
   | { t: "tool"; text: string }
   | { t: "gate"; gate: "plan" | "result" }

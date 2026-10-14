@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import clips
@@ -569,6 +571,38 @@ def test_one_run_at_a_time(client, fake):
     client.app.state.runs.wait_idle()
 
 
+def test_stage_events_and_the_job_carry_the_stage_start(client, fake, monkeypatch):
+    """A reloaded page counts "since ... in this step" from the server's stage start."""
+    make_job()
+    inside, release = threading.Event(), threading.Event()
+
+    def slow(job, say, ask):
+        say("prep:")
+        inside.set()
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(fake, "start", slow)
+    before = datetime.now(UTC)
+    client.post("/api/jobs/j1/start")
+    assert inside.wait(5)
+    try:
+        stage = [e for e in events(client, "j1") if e["t"] == "stage"][-1]
+        d = client.get("/api/jobs/j1").json()
+        assert d["status"] == "running" and d["stage"] == stage["stage"] == "prep"
+        assert d["stage_since"] == stage["at"]
+        started = datetime.fromisoformat(stage["at"])
+        assert before - timedelta(seconds=1) <= started <= datetime.now(UTC)
+        # replaying the run later gives the same start, not the time of the replay
+        time.sleep(0.01)
+        again = [e for e in events(client, "j1") if e["t"] == "stage"][-1]
+        assert again["at"] == stage["at"]
+    finally:
+        release.set()
+        client.app.state.runs.wait_idle()
+    assert client.get("/api/jobs/j1").json()["stage_since"] is None
+
+
 def test_a_failing_run_reports_the_error(client, fake, monkeypatch):
     make_job()
 
@@ -583,7 +617,7 @@ def test_a_failing_run_reports_the_error(client, fake, monkeypatch):
     assert evs[-1]["t"] == "done" and evs[-1]["ok"] is False
     d = client.get("/api/jobs/j1").json()
     assert d["status"] == "error" and d["stage"] == "error" and "no tokens" in d["error"]
-    assert {"t": "stage", "stage": "error"} in evs
+    assert ("stage", "error") in [(e["t"], e.get("stage")) for e in evs]
 
 
 def test_the_worker_survives_a_system_exit(client, fake, monkeypatch):

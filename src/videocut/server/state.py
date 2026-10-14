@@ -254,6 +254,8 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "title": title(job, data),
         "status": st,
         "stage": stage,
+        # when the running stage started (ISO), for "since ... in this step" after a reload
+        "stage_since": ch.stage_at if st == "running" and ch.stage == stage else None,
         "queued": ch is not None and ch.state == "queued",
         "gate": gate(job, data) if st != "running" else None,
         "error": ch.error if ch is not None and ch.state == "idle" else None,

@@ -51,11 +51,17 @@ export function useLiveJob(id: string): Live {
   const [stageFrom, setStageFrom] = useState(0);
   const seq = useRef(0);
   const eventStage = useRef<Stage | undefined>(undefined);
-  const enterStage = useCallback((stage: Stage) => {
-    if (eventStage.current === stage) return;
+  const enterStage = useCallback((stage: Stage, at?: string | null) => {
+    // The server's start time (from the event or the job) survives a reload of the page;
+    // without one the step starts now.
+    const started = at ? Date.parse(at) : NaN;
+    if (eventStage.current === stage) {
+      if (!Number.isNaN(started)) setStageSince(Math.min(started, Date.now()));
+      return;
+    }
     eventStage.current = stage;
     setKind((k) => kindOf(stage, k));
-    setStageSince(Date.now());
+    setStageSince(Number.isNaN(started) ? Date.now() : Math.min(started, Date.now()));
     setStageFrom(seq.current);
   }, []);
 
@@ -63,13 +69,14 @@ export function useLiveJob(id: string): Live {
     try {
       const j = await api.job(id);
       stageRef.current = j.stage;
+      if (j.status === "running" && j.stage_since) enterStage(j.stage, j.stage_since);
       setJob(j);
       setRunning(j.status === "running");
       setError(null);
     } catch (e) {
       setError(e);
     }
-  }, [id]);
+  }, [id, enterStage]);
 
   useEffect(() => {
     void reload();
@@ -83,7 +90,7 @@ export function useLiveJob(id: string): Live {
             // run moved on (gates, done and error end it).
             const moved = stageRef.current !== undefined && stageRef.current !== ev.stage;
             stageRef.current = ev.stage;
-            enterStage(ev.stage);
+            enterStage(ev.stage, ev.at);
             if (ev.stage !== "error") setLastStage(ev.stage);
             setJob((j) => (j ? { ...j, stage: ev.stage } : j));
             if (ev.stage === "error") setRunning(false);

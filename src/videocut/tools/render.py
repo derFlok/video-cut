@@ -134,9 +134,14 @@ def _finite(v) -> float | None:
 def _audio_input(job: Path, src: Path, rel: str, info: dict) -> tuple[list[str], str, str]:
     """(extra ffmpeg input args, filter input label, description) for the audio to cut."""
     wav, meta = job / "work" / "audio.wav", job / "work" / "audio.json"
-    # The wav starts at the audio's first sample; only use it when that is where the video
-    # starts too, else cutting it by source time would shift the audio.
-    aligned = abs(info.get("audio_start", 0) - info.get("video_start", 0)) < 0.001
+    # The wav is in video time when ingest says so ("time_base": "video": padded or trimmed
+    # by the audio stream's start). A legacy wav starts at the audio's first sample, so it
+    # is only usable when that is where the video starts too.
+    try:
+        video_time = json.loads(meta.read_text()).get("time_base") == "video"
+    except (OSError, ValueError, AttributeError):
+        video_time = False
+    aligned = video_time or abs(info.get("audio_start", 0) - info.get("video_start", 0)) < 0.001
     fresh = meta.is_file() and is_fresh([wav, meta], [src])
     if read_job(job).get("source") == rel and aligned and fresh:
         return ["-i", str(wav)], "1:a", "work/audio.wav"

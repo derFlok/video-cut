@@ -33,26 +33,18 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from . import _style
 from ._audio_env import HOP_S, NEAR_S, Envelope
-
-# Until the cut-style module (_style.py) is in this branch: its suggested values.
-_STYLES = {
-    "calm": {"xfade_ms": 120, "snap_window_s": 0.35},
-    "standard": {"xfade_ms": 80, "snap_window_s": 0.30},
-    "tight": {"xfade_ms": 50, "snap_window_s": 0.25},
-}
+from .common import ToolError
 
 
 def cut_style(job: dict) -> dict:
-    """The job's cut style (job.json dict): xfade_ms, snap_window_s, ..."""
+    """The job's cut style (job.json dict): xfade_ms, snap_window_s, ... (ToolError when
+    job.json names an unknown one)."""
     try:
-        from . import _style
-    except ImportError:
-        name = job.get("cut_style")
-        if name not in _STYLES:
-            name = "calm" if job.get("screen") else "standard"
-        return {"name": name, **_STYLES[name]}
-    return {"name": _style.job_style(job), **_style.style(job)}
+        return _style.style(job)
+    except _style.StyleError as e:
+        raise ToolError(f"job.json: {e}") from e
 
 
 WORD_TOL_S = 0.02

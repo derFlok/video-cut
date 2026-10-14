@@ -166,7 +166,8 @@ describe("what is happening", () => {
     // the demo job has finished ingest, sync, screen, text and face: transcribing now
     expect(await screen.findByText(t("now.prep.transcribe"))).toBeInTheDocument();
     const meta = await screen.findByTestId("now-meta");
-    expect(meta).toHaveTextContent(t("now.since", { t: "0:00" }));
+    // the stage started before the page was opened: the time counts from the server's start
+    expect(meta).toHaveTextContent(/2:0[5-9]/);
     // 30 s + 0.5 × 251.8 s ≈ 2.6 min
     expect(meta).toHaveTextContent(t("now.expected.video", { about: "ca. 3 Min.", len: "4:11" }));
   });
