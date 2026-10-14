@@ -177,18 +177,21 @@ def snap_job(job: Path, write: bool = True) -> dict:
     env = _audio_env.job_envelope(job)
     if env is None:
         return {**base, "skipped": "work/audio.wav is unreadable"}
+    if env.offset:
+        # A job ingested before the video time base: snapping it would leave joins and
+        # fixed edges in the old time base, and the upgrade would then move it again.
+        return {
+            **base,
+            "skipped": "work/audio.wav is not in video time yet; run "
+            "`videocut tool ingest` (it moves the job into video time) and snap again",
+        }
     words, aligned = _words(job)
-    # A legacy job (audio.wav and words.json in audio-stream time): the cut points were
-    # placed on those words, so snapping starts from them shifted into video time.
-    legacy = env.offset
     sync = read_sync(job / "work" / "sync.json")
     new, summary = _snap.snap(
         data, env, words, style["snap_window_s"], style["xfade_ms"] / 1000, duration, aligned,
-        legacy, tuple(sync["overlap"]) if sync else None,
+        0.0, tuple(sync["overlap"]) if sync else None,
     )  # fmt: skip
     out = {**base, **summary, "aligned_words": aligned}
-    if legacy:
-        out["legacy_offset_s"] = round(legacy, 4)
     if summary["moved"]:
         new = remap_output_times(new, data["segments"], new["segments"])
         if write:

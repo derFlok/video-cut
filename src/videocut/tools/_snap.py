@@ -110,8 +110,8 @@ def _bounds(edge: str, t: float, words: list[dict], keep: list[int], window: flo
             lo = max(lo, min(t, words[last]["t1"] - WORD_TOL_S))
             if last + 1 < len(words):
                 hi = min(hi, max(t, _mid(words[last + 1])))
-        else:  # no word inside: never reach into a word around it
-            nxt = [w for w in words if w["t0"] >= t]
+        else:  # no word inside: never reach into a word around it (nor one across t)
+            nxt = [w for w in words if _mid(w) > t]
             if nxt:
                 hi = min(hi, max(t, _mid(nxt[0])))
     else:
@@ -123,7 +123,7 @@ def _bounds(edge: str, t: float, words: list[dict], keep: list[int], window: flo
             if first > 0:
                 lo = max(lo, min(t, _mid(words[first - 1])))
         else:
-            prev = [w for w in words if w["t1"] <= t]
+            prev = [w for w in words if _mid(w) < t]
             if prev:
                 lo = max(lo, min(t, _mid(prev[-1])))
     return lo, hi

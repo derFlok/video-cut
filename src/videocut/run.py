@@ -489,7 +489,10 @@ def cut_done(job: Path) -> bool:
     edl_t, verify_t = _mtime(job / "work" / "edl.json"), _mtime(vfile) or 0
     approved_t = datetime.fromisoformat(approval["at"]).timestamp()
     return (
-        verify.get("reel") == "out/reel.mp4"
+        # a cut from before cut styles was cut the way "tight" cuts now: a style the
+        # human set since makes it stale (absent: it stays, like an old record)
+        data.get("cut_style") in (None, "tight")
+        and verify.get("reel") == "out/reel.mp4"
         and not verify.get("preview")
         and edl_t is not None
         and verify_t >= max(edl_t, approved_t)

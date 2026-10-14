@@ -41,6 +41,7 @@ Idempotent: every output that is newer than its input is kept.
 
 import hashlib
 import json
+import os
 import shutil
 import tempfile
 from fractions import Fraction
@@ -169,10 +170,12 @@ def audio_offset(info: dict) -> float:
 def _shift(offset: float) -> list[str]:
     """ffmpeg audio filter that moves the first sample to `offset` (pad or trim)."""
     n = round(offset * RATE)
+    # at RATE first: the sample counts below are 48 kHz samples, whatever the source rate
+    to_rate = f"asetpts=PTS-STARTPTS,aresample={RATE}"
     if n > 0:
-        return ["-af", f"asetpts=PTS-STARTPTS,adelay=delays={n}S:all=1"]
+        return ["-af", f"{to_rate},adelay=delays={n}S:all=1"]
     if n < 0:
-        return ["-af", f"asetpts=PTS-STARTPTS,atrim=start_sample={-n},asetpts=PTS-STARTPTS"]
+        return ["-af", f"{to_rate},atrim=start_sample={-n},asetpts=PTS-STARTPTS"]
     return []
 
 
@@ -374,7 +377,10 @@ def _shift_edl(job: Path, offset: float, duration: float) -> bool:
     if not (isinstance(data, dict) and isinstance(data.get("segments"), list)):
         return False
     new = shift_source_times(data, offset, duration)
+    times = path.stat()
     write_json(path, new)
+    # same cut: keep the time, so a reel verified after it still counts (run.cut_done)
+    os.utime(path, ns=(times.st_atime_ns, times.st_mtime_ns))
     rec = read_job(job)
     fields = {}
     cut, overlays = rec.get("cut"), rec.get("overlays")
@@ -431,25 +437,31 @@ def ingest(args) -> dict:
             legacy = is_fresh([audio, meta], [raw])
         else:
             legacy = False
+        # The EDL's cut points were placed on the old words: it moves exactly once, also
+        # when the audio is rebuilt instead of shifted ("edl_shifted" in the marker).
+        mark = {**prev, "time_base": SHIFTING}
+        write_json(meta, mark)
+        if offset and not prev.get("edl_shifted") and _shift_edl(job, offset, info["duration"]):
+            upgraded.append("edl")
+        mark["edl_shifted"] = True
+        write_json(meta, mark)
+        if offset < 0:  # an old proxy of audio that starts first is not in video time
+            proxy.unlink(missing_ok=True)
         if legacy:
             # Ingested before the video time base: shift what exists (words included).
-            # A changed --denoise or an interrupted shift ("shifting") rebuilds instead.
+            # A changed --denoise or an interrupted shift ("shifting") rebuilds instead
+            # (and transcribes again).
             from .transcribe import shift_to_video_time
 
             words_fresh = is_fresh([work / "words.json", work / "transcribe.json"], [audio])
-            write_json(meta, {**prev, "time_base": SHIFTING})
             _shift_in_place(raw, offset)
             _shift_in_place(audio, offset)
-            prev = {**prev, **_time_record(offset)}
-            write_json(meta, prev)
-            upgraded.append("audio")
             if words_fresh:
                 shift_to_video_time(work, offset)
                 upgraded.append("words")
-            if offset and _shift_edl(job, offset, info["duration"]):
-                upgraded.append("edl")
-            if offset < 0:  # an old proxy of audio that starts first is not in video time
-                proxy.unlink(missing_ok=True)
+            prev = {**prev, **_time_record(offset)}
+            write_json(meta, prev)  # last: everything above is done
+            upgraded.insert(0, "audio")
         else:
             raw.unlink(missing_ok=True)
     step(

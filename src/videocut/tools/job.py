@@ -527,11 +527,12 @@ def set_cut_style(job: Path, value: str, say=print) -> dict:
     how = "default" if new_style is None else "set"
     say(f"{job.name}: cut style {now} ({how})")
     rec = data.get("cut")
-    stale = (
-        isinstance(rec, dict)
-        and rec.get("cut_style") != now
-        and (job / "out" / "reel.mp4").is_file()
-    )
+    reel = (job / "out" / "reel.mp4").is_file()
+    if not isinstance(rec, dict):
+        # a reel from before cut records (and styles): cut like "tight"; a style set now
+        # makes it stale (run.cut_done)
+        rec = {"cut_style": "tight"} if reel and new_style is not None else None
+    stale = isinstance(rec, dict) and rec.get("cut_style") != now and reel
     if stale:
         say(
             f"The cut of this job was made in the {rec.get('cut_style')} style. Cut again "

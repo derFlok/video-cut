@@ -271,7 +271,9 @@ def render(args) -> dict:
         ow, oh = max(2, ow // 4 * 2), max(2, oh // 4 * 2)
     style = _snap.cut_style(read_job(job))
     env = _audio_env.job_envelope(job) if snapped and not snapped.get("skipped") else None
-    caps = _snap.xfade_caps(data, env, style["xfade_ms"] / 2000) if env else None
+    # room for the longest crossfade asked for (a segment's own xfade_ms may exceed the style)
+    own = [s["xfade_ms"] for s in data["segments"] if isinstance(s.get("xfade_ms"), int | float)]
+    caps = _snap.xfade_caps(data, env, max([style["xfade_ms"], *own]) / 2000) if env else None
     plan = plan_mod.build(
         edl, tuple(info["size"]), (ow, oh), layouts if use_layouts else None,
         style["xfade_ms"] / 1000, info["duration"], caps,

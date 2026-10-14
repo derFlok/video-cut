@@ -37,6 +37,8 @@ STAGE_RE = re.compile(r"\n?(prep|plan|cut|overlays|revise|verify)\b")
 STAGE_BY_KIND = {
     "plan_feedback": {"plan": "plan_revise"},
     "feedback": {"plan": "revise", "cut": "revise", "overlays": "revise"},
+    # a recut keeps the approved plan ("plan: already approved"): no plan stage
+    "recut": {"plan": "cut"},
 }
 GATE_CODES = {3: "plan", 0: "result", 4: "result"}
 MAX_EVENTS = 5000  # per run; later log lines are dropped (stage/gate/done are kept)

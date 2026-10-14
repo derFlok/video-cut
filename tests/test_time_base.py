@@ -186,3 +186,46 @@ def test_interrupted_upgrade_rebuilds_instead_of_shifting_twice(capsys, clip_dir
     got, _ = energy.read_wav(work / "audio.wav")
     assert len(got) == len(expected) and lag(expected, got, rate) == pytest.approx(0, abs=0.001)
     assert json.loads((work / "audio.json").read_text())["time_base"] == "video"
+
+
+def test_a_44k_source_is_padded_by_the_same_time(capsys, clip_dir, portrait_clip):
+    """The pad is counted in 48 kHz samples whatever the source rate (screen recordings
+    and some cameras record 44.1 kHz)."""
+    k44 = clip_dir / "tb-44k.mp4"
+    if not k44.is_file():
+        clips._ff("-i", str(portrait_clip), "-c:v", "copy", "-c:a", "aac", "-ar", "44100",
+                  str(clip_dir / "tb-44k-plain.mp4"))  # fmt: skip
+    shifted = remux(clip_dir / "tb-44k-plain.mp4", k44, audio_delay=0.25)
+    ref = ingest(capsys, portrait_clip, "ref44")
+    job = ingest(capsys, shifted, "k44")
+    (a, rate), (b, _) = wav(ref), wav(job)
+    # the voice moved by the remux delay, not ~9 % more (counted in 44.1 kHz samples)
+    assert lag(a, b, rate) == pytest.approx(0.25, abs=0.005)
+
+
+def test_a_rebuilt_old_job_moves_its_edl_exactly_once(capsys, clip_dir, portrait_clip):
+    """An old job whose audio is rebuilt (here: an interrupted upgrade) instead of shifted
+    still moves its EDL into video time, and only once."""
+    shifted = remux(portrait_clip, clip_dir / "tb-old.mp4", audio_delay=0.2)
+    job = ingest(capsys, shifted, "rebuilt")
+    work = job / "work"
+    off = json.loads((work / "audio.json").read_text())["audio_offset_s"]
+    source = json.loads((job / "job.json").read_text())["source"]
+    edl = {"fps": 30, "size": [1080, 1920], "source": source,
+           "segments": [{"in": 0.5, "out": 1.5}]}  # fmt: skip
+    (work / "edl.json").write_text(json.dumps(edl))
+    meta = json.loads((work / "audio.json").read_text())
+    for name in ("time_base", "audio_offset_s"):
+        meta.pop(name)
+    (work / "audio.json").write_text(json.dumps({**meta, "time_base": "shifting"}))
+    code, s, _ = run_tool(capsys, "ingest", "--job", "rebuilt")
+    assert code == 0 and s["upgraded"] == ["edl"], s
+    code, s, _ = run_tool(capsys, "ingest", "--job", "rebuilt")
+    assert code == 0 and s["upgraded"] == [], s
+    seg = json.loads((work / "edl.json").read_text())["segments"][0]
+    assert (seg["in"], seg["out"]) == (round(0.5 + off, 4), round(1.5 + off, 4))
+    # a snap of a job not yet in video time would mix both time bases: it waits
+    meta = json.loads((work / "audio.json").read_text())
+    (work / "audio.json").write_text(json.dumps({"denoised": meta["denoised"]}))
+    code, s, _ = run_tool(capsys, "edl", "snap", "--job", "rebuilt")
+    assert code == 0 and "not in video time" in s["skipped"], s

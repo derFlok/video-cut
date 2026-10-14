@@ -86,6 +86,19 @@ def test_snap_never_pulls_in_a_dropped_word():
     assert out == 0.85  # nothing quiet in reach: the cut stays and is reported
 
 
+def test_snap_without_a_kept_word_stops_at_a_word_across_the_edge():
+    # wa 1.0-1.6 spans the out of a segment that keeps no word (wa's middle 1.3 lies
+    # after it); quiet follows at 1.6. The out may not reach that quiet through wa, and
+    # likewise an in may not reach back through wb into the quiet before it.
+    spans = [(1.0, 1.6), (2.2, 2.8)]
+    env = ae.from_samples(_signal(spans, 3.5), RATE)
+    words = [{"w": "wa", "t0": 1.0, "t1": 1.6}, {"w": "wb", "t0": 2.2, "t1": 2.8}]
+    new, _ = _snap.snap(_edl([{"in": 1.1, "out": 1.25}]), env, words, 0.6, 0.08)
+    assert new["segments"][0]["out"] <= 1.3 + 1e-6
+    new, _ = _snap.snap(_edl([{"in": 2.55, "out": 2.7}]), env, words, 0.6, 0.08)
+    assert new["segments"][0]["in"] >= 2.5 - 1e-6
+
+
 def test_snap_in_edges_joins_and_speech_cut_ok():
     env, words = _env(), _words()
     edl = _edl(

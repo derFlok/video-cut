@@ -306,6 +306,18 @@ def test_cut_style_change_marks_a_cut_stale(capsys, tmp_path):
     assert any("made in the calm style" in x and "videocut run s1" in x for x in said)
 
 
+def test_a_reel_from_before_cut_records_goes_stale_when_a_style_is_set(capsys, tmp_path):
+    from videocut.tools.job import set_cut_style
+
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "s0")
+    job = jobs_root() / "s0"
+    (job / "out" / "reel.mp4").write_bytes(b"reel")  # no job.json "cut" record
+    said = []
+    assert set_cut_style(job, "standard", said.append)["stale"]
+    assert any("made in the tight style" in x for x in said)
+    assert set_cut_style(job, "tight", said.append)["stale"] is False
+
+
 def test_only_a_human_sets_the_cut_style(capsys, tmp_path, monkeypatch):
     run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "h1")
     monkeypatch.setenv("VIDEOCUT_AGENT", "1")
