@@ -564,6 +564,8 @@ screenshots per step; not in CI).
 
 ## Decisions
 
+- **Local first.** Recordings and audio never leave the machine. Only transcript text,
+  downscaled stills and screen text read locally (OCR, `redact text`) go to Claude.
 - **macOS on Apple Silicon first.** Transcription runs on MLX.
 - **No Homebrew, no sudo.** Everything is installed into the repository folder, so
   `uninstall.sh` can remove it completely.

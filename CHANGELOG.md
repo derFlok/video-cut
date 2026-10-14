@@ -504,9 +504,11 @@
   before the time (macOS records a frame only when the screen changes; a plain seek gave
   the next change, up to 2 s later on a real recording), seeking to the pts itself
   (`-seek_timestamp 1`; also in the screen-time check of verify).
-- Jobs planned before this change: their e-mail/phone/name candidates have no measured
-  text, so verify of a revision reports `redaction_unchecked` until the plan is made
-  again.
+- Jobs planned before this change report `redaction_unchecked` (verify not ok) until they
+  are planned again: their e-mail/phone/name candidates have no measured text.
+- Data rule (CLAUDE.md rule 3, decided by the human): only transcript text, downscaled
+  stills and screen text read locally (OCR) go to Claude; recordings and audio never leave
+  the machine.
 - verify: a still screen over several consecutive screen segments is no longer a frozen
   picture (the exempt spans are merged first, not only when a pip bubble is present).
 

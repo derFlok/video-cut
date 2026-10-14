@@ -2,7 +2,7 @@
 
 **Claude schneidet deine Videos, auf deinem Mac.** Du nimmst dich beim Sprechen auf, legst die Datei rein, wählst Videoart und Marke. Video Cut macht daraus ein fertiges Kurzvideo: Füllwörter und Pausen raus, Hochformat 9:16 (oder 16:9, 1:1, 4:5 je Video), animierte Untertitel, Grafiken, die deine Aussagen belegen, sauberer Ton, Musik darunter.
 
-Video und Ton verlassen den Rechner nie. An Claude gehen nur Text (das Transkript) und kleine Standbilder an Entscheidungspunkten.
+Video und Ton verlassen den Rechner nie. An Claude gehen nur Text (das Transkript und der lokal auf dem Mac gelesene Bildschirmtext) und kleine Standbilder an Entscheidungspunkten.
 
 > **Stand: frühe Entwicklung (0.0.x).** Installer, Schnitt-Pipeline und die lokale App laufen; mit Ecken und Kanten ist zu rechnen. Gesamtkonzept: [`docs/BRIEF.md`](docs/BRIEF.md), Fortschritt: [`CHANGELOG.md`](CHANGELOG.md).
 
