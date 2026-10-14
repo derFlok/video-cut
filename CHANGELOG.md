@@ -606,3 +606,27 @@
   dropped word that spans its edge; a segment's own longer `xfade_ms` gets the quiet room
   it needs; a reel from before cut records goes stale when a style is set; a recut shows
   no plan stage.
+
+### Observed — cut quality (real runs, Opus 5.5, copies of two real jobs)
+- 10-min product demo (camera + screen, 16:9, approved plan and personal-data decision
+  kept, recut in style `calm` through `run.recut`): its audio starts 157 ms after the
+  video. The legacy upgrade alone moved the old cut's cut points in speech from 53 of 94 to
+  31 of 94. Alignment: median word shift 55 ms, p90 199 ms. Recut: 47 → 21 segments,
+  median segment 2.17 → 4.85 s, cut points in speech 53/94 → 3/38 (all three marked
+  `speech_cut_ok`: words without a pause between them), `speech_clipped` 0, reel 120.3 →
+  119.9 s. Cut 1507 s / 52 turns / USD 2.59 (before 1459 s / 71 / 2.49), overlays 1167 s /
+  22 turns / USD 0.90 (before 1062 s / 22 / 0.86). Verify not ok: 5 × `click`, 1 ×
+  `blink_at_cut`. Four of the clicks sit where the denoised track is digital silence on one
+  side (DeepFilterNet gates to zero) and room tone at −50…−70 dBFS on the other: the click
+  metric divides by a silent baseline; the cut makes no sample step (crossfaded). One
+  (44.3 s) fades a non-speech sound at −30…−46 dBFS into silence over the 30 ms crossfade
+  the agent set.
+- 66-s selfie talking head (9:16, recut in style `standard`): 14 → 9 segments, median
+  1.41 → 2.35 s, cut points in speech 11/28 → 3/18 (all `speech_cut_ok`), `speech_clipped`
+  0, reel 24.7 → 29.3 s; cut 390 s / 53 turns / USD 1.58 (before 190 s / 34 / 0.75),
+  overlays 251 s / 19 turns / USD 0.61. Verify not ok: 1 × `click` (a −63 dBFS mouth tick
+  of the source inside the outgoing crossfade tail, next to digital silence), 1 ×
+  `blink_at_cut` (no blink-free point in that pause).
+- Known: the click check flags low-level sound next to the denoiser's digital silence; a
+  follow-up should judge clicks against the source or an audible level, or keep a noise
+  floor in the denoised track.
