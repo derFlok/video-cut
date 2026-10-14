@@ -13,6 +13,7 @@ MODULES = [
     "job",
     "ingest",
     "transcribe",
+    "align",
     "sheets",
     "edl",
     "render",
