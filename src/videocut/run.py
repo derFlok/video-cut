@@ -35,8 +35,11 @@ straight to the cut, and a finished cut of the approved plan is kept (`--recut` 
 job.json "cut" records which plan, segments, redaction and output format it was).
 `--format` sets the output format (job.json "format", tools/_format.py): for a new job like
 `tool job new --format`, for an existing one like `tool job format` (a changed format makes
-the cut stale, so the cut runs again). Plan and cut prompts name the job's format. The
-overlay stage runs when `--brand` is given or when the brand's overlays are not done for
+the cut stale, so the cut runs again). Plan and cut prompts name the job's format.
+`--cut-style` likewise sets the cut style (job.json "cut_style", tools/_style.py; a changed
+style makes the cut stale) and the prompts name it and its parameters; `recut()` is the entry
+for "cut again with the approved plan" (the app's /recut: cut + overlays, no new approval).
+The overlay stage runs when `--brand` is given or when the brand's overlays are not done for
 the current cut. Every Claude run appends one line to work/runs.jsonl (wall time, turns,
 cost, tokens), and its raw event stream goes to work/claude-<phase>.jsonl.
 """
@@ -59,17 +62,20 @@ from pathlib import Path
 from . import agent
 from . import redaction as red
 from .paths import ROOT
-from .tools import _format
+from .tools import _format, _style
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
     approve_job,
     brand_id,
     is_approved,
+    job_lang,
     project_sha,
     read_approval,
     redaction_enforced,
     resolved_format,
+    resolved_style,
     revoke_approval,
+    set_cut_style,
     set_format,
 )
 
@@ -103,6 +109,12 @@ CUT_PROMPT = (
 FORMAT_NOTE = (
     ' Output format: {fmt} ({w}x{h}, job.json "format"); work/edl.json "size" is [{w}, {h}].'
 )
+STYLE_NOTE = (
+    ' Cut style: {name} (job.json "cut_style"): natural pauses up to {keep_pause_s} s stay '
+    "inside a segment, segments are at least {min_segment_s} s, {splice}; render crossfades "
+    "the audio {xfade_ms} ms at every cut. Human-facing text (plan, reports): {lang}."
+)
+LANG_NAMES = {"de": "German", "en": "English"}
 CUT_AGAIN = (
     " The job was cut before; the human asked to cut it again ({why}): write a new "
     "work/edl.json (segments only; captions and overlays are redone after the cut), render "
@@ -208,6 +220,8 @@ def new_job(
     assets: list[str] | None = None,
     screen: str | None = None,
     format_: str | None = None,
+    cut_style: str | None = None,
+    lang: str | None = None,
 ) -> Path:
     from .cli import main
 
@@ -216,6 +230,8 @@ def new_job(
     argv += ["--brief", brief] if brief else []
     argv += ["--screen", screen] if screen else []
     argv += ["--format", format_] if format_ else []
+    argv += ["--cut-style", cut_style] if cut_style else []
+    argv += ["--lang", lang] if lang else []
     if assets:
         argv += ["--asset", *assets]
     with capture_stdout() as buf:
@@ -235,10 +251,11 @@ def open_job(
     screen: str | None = None,
     format_: str | None = None,
     say=print,
+    cut_style: str | None = None,
 ) -> Path:
     p = Path(ref).expanduser()
     if p.is_file():
-        return new_job(p, type_, brief, assets, screen, format_)
+        return new_job(p, type_, brief, assets, screen, format_, cut_style)
     if assets or screen:
         raise RunError(
             "--asset/--screen only work when a new job is made from a recording "
@@ -256,6 +273,8 @@ def open_job(
         update_job(job, **changes)
     if format_:
         set_format(job, format_, say)  # the cut of another format goes stale (cut_done)
+    if cut_style:
+        set_cut_style(job, cut_style, say)  # the cut of another style goes stale (cut_done)
     return job
 
 
@@ -434,6 +453,9 @@ def cut_done(job: Path) -> bool:
             and rec.get("redaction_sha256", red_now := _redaction_sha(job)) == red_now
             # (before this field every cut was a 9:16 reel)
             and rec.get("format", _format.PORTRAIT) == fmt
+            # (a record from before cut styles: it stays until the style is changed,
+            # which stamps the record, tools/job.set_cut_style)
+            and rec.get("cut_style", style_now := resolved_style(data)) == style_now
         )
     vfile = job / "out" / "verify.json"
     try:
@@ -471,6 +493,7 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "segments_sha256": segments_sha(job),
             "redaction_sha256": _redaction_sha(job),
             "format": resolved_format(read_job(job)),
+            "cut_style": resolved_style(read_job(job)),
             "verify_ok": bool(verify.get("ok")),
         },
         overlays=None,  # a new cut has no overlays yet
@@ -584,9 +607,41 @@ def not_approved(job: Path, asked: bool) -> list[str]:
 
 
 def format_note(job: Path) -> str:
-    fmt = resolved_format(read_job(job))
+    """The job's output format and cut style, for every plan, cut and revise prompt."""
+    data = read_job(job)
+    fmt = resolved_format(data)
     w, h = _format.FORMATS[fmt]
-    return FORMAT_NOTE.format(fmt=fmt, w=w, h=h)
+    st = _style.STYLES[resolved_style(data)]
+    splice = (
+        "a sentence may be spliced only to drop: " + ", ".join(st["splice_only"])
+        if st["splice_in_sentence"]
+        else "never assemble a sentence from pieces"
+    )
+    lang = job_lang(data)
+    return FORMAT_NOTE.format(fmt=fmt, w=w, h=h) + STYLE_NOTE.format(
+        name=resolved_style(data), splice=splice, lang=LANG_NAMES[lang], **st
+    )
+
+
+def stale_why(job: Path) -> str:
+    """Why a cut that exists is not the current one (for the cut-again prompt)."""
+    data = read_job(job)
+    rec = data.get("cut")
+    approval = read_approval(job) or {}
+    if not isinstance(rec, dict):
+        return "the plan, the personal-data decision, the output format or the cut style changed"
+    why = []
+    if rec.get("project_sha256") != approval.get("project_sha256"):
+        why.append("the plan changed")
+    if rec.get("redaction_sha256", now := _redaction_sha(job)) != now:
+        why.append("the personal-data decision changed")
+    if rec.get("format", _format.PORTRAIT) != resolved_format(data):
+        why.append("the output format changed")
+    if rec.get("cut_style", style := resolved_style(data)) != style:
+        why.append(f"the cut style changed from {rec.get('cut_style')} to {style}")
+    if not why and rec.get("segments_sha256") != segments_sha(job):
+        why.append("work/edl.json changed after the cut")
+    return "; ".join(why) or "the human asked for it"
 
 
 def ask_approval(job: Path, ask: Callable[[str], str] = input) -> bool:
@@ -1057,19 +1112,21 @@ def run(
     feedback: str | None = None,
     at_s: float | None = None,
     plan_feedback: str | None = None,
+    cut_style: str | None = None,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
-              format_)  # fmt: skip
+              format_, cut_style)  # fmt: skip
     if feedback is not None and any(v is not None for v in others):
         raise RunError(
             "--feedback revises the finished reel; it cannot be combined with --plan-feedback, "
-            "--replan, --recut, --brand, --type, --brief, --asset, --screen or --format"
+            "--replan, --recut, --brand, --type, --brief, --asset, --screen, --format or "
+            "--cut-style"
         )
-    job = open_job(ref, type_, brief, assets, screen, format_, say)
+    job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style)
     say(f"job: {job}")
     if feedback is not None:
         return revise(job, feedback, at_s, max_turns, say)
@@ -1138,11 +1195,7 @@ def run(
         started = _fs_now(job)
         prompt = CUT_PROMPT + format_note(job)
         if not plan_session and (job / "out" / "reel.mp4").is_file():
-            why = (
-                "--recut"
-                if recut
-                else "the plan, the personal-data decision or the output format changed"
-            )
+            why = "--recut" if recut else stale_why(job)
             prompt += CUT_AGAIN.format(why=why)
         archive_revisions(job)
         claude(job, "cut", prompt, max_turns, resume, say)
@@ -1196,6 +1249,18 @@ def run(
     return 0 if verify.get("ok") else 4
 
 
+def recut(ref: str, say=print, ask: Callable[[str], str] = input, max_turns: int = 60) -> int:
+    """Cut again with the approved plan (e.g. after a changed cut style), then redo the
+    overlays: no new plan run and no new approval. RunError when the plan is not approved."""
+    try:
+        job = resolve_job(ref)
+    except ToolError as e:
+        raise RunError(str(e)) from None
+    if not is_approved(job):
+        raise RunError("cutting again needs an approved plan; approve the plan first")
+    return run(str(job), recut=True, max_turns=max_turns, say=say, ask=ask)
+
+
 def main(args) -> int:
     try:
         return run(
@@ -1214,6 +1279,7 @@ def main(args) -> int:
             feedback=args.feedback,
             at_s=args.at,
             plan_feedback=args.plan_feedback,
+            cut_style=args.cut_style,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

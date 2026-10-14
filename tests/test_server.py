@@ -20,7 +20,7 @@ from videocut.server import app as server_app
 from videocut.server import create_app
 from videocut.server.runs import Channel
 from videocut.tools.common import jobs_root
-from videocut.tools.job import is_approved, project_sha, read_approval
+from videocut.tools.job import approve_job, is_approved, project_sha, read_approval
 
 TOKEN = "test-token"
 BASE = "http://127.0.0.1:4300"
@@ -276,8 +276,9 @@ def test_job_create_by_upload(client, portrait_clip, tmp_path):
                 ("camera", (f"../{portrait_clip.name}", cam, "video/quicktime")),
                 ("assets[]", ("shot.png", img, "image/png")),
             ],
-            data={"type": "thought", "brand": "_example", "format": "4:5", "brief": "Short"},
-        )
+            data={"type": "thought", "brand": "_example", "format": "4:5", "brief": "Short",
+                  "cut_style": "tight", "lang": "en"},
+        )  # fmt: skip
     assert r.status_code == 200, r.text
     job_id = r.json()["id"]
     job = jobs_root() / job_id
@@ -295,6 +296,9 @@ def test_job_create_by_upload(client, portrait_clip, tmp_path):
     assert listed[0]["status"] == "new" and listed[0]["format"] == "4:5"
     shown = client.get(f"/api/jobs/{job_id}").json()
     assert shown["format_resolved"] == "4:5" and shown["outputs"] is None
+    assert (data["cut_style"], data["lang"]) == ("tight", "en")
+    assert shown["cut_style"] == shown["cut_style_resolved"] == "tight" and shown["lang"] == "en"
+    assert shown["cut_stale"] is False and shown["source_duration_s"] is None
     assert shown["approved"] is False and shown["plan_sha"] is None
 
 
@@ -818,3 +822,130 @@ def test_cli_ui_command_uses_the_server(monkeypatch):
 def _no_leftover_uploads():
     yield
     shutil.rmtree(jobs_root().parent / "uploads", ignore_errors=True)
+
+
+# ---------------------------------------------------------------- cut style, recut
+
+
+class RecutPipeline(FakePipeline):
+    def recut(self, job, say, ask):
+        self.calls.append(("recut", job.name, is_approved(job)))
+        say("cut: Claude is working")
+        pipeline.record_cut(job, project_sha(job))
+        return 0
+
+
+def test_cut_style_defaults_in_job_detail(client):
+    talk, demo = make_job("talk"), make_job("demo", screen="input/screen.mov")
+    (talk / "work" / "probe.json").write_text(json.dumps({"duration": 61.5}))
+    a, b = (client.get(f"/api/jobs/{j.name}").json() for j in (talk, demo))
+    assert (a["cut_style"], a["cut_style_resolved"]) == ("auto", "standard")
+    assert (b["cut_style"], b["cut_style_resolved"]) == ("auto", "calm")
+    assert a["lang"] == "de" and a["cut_stale"] is False
+    assert a["source_duration_s"] == 61.5 and b["source_duration_s"] is None
+    assert {j["id"]: j["cut_style"] for j in client.get("/api/jobs").json()} == {
+        "talk": "auto", "demo": "auto",
+    }  # fmt: skip
+
+
+def test_create_job_rejects_an_unknown_cut_style_or_lang(client, portrait_clip):
+    for field, value in (("cut_style", "slow"), ("lang", "fr")):
+        with portrait_clip.open("rb") as cam:
+            r = client.post(
+                "/api/jobs",
+                files=[("camera", (portrait_clip.name, cam, "video/quicktime"))],
+                data={field: value},
+            )
+        assert r.status_code == 400 and field in r.json()["detail"]["message"]
+    assert client.get("/api/jobs").json() == []
+
+
+def test_put_cut_style_stores_it_and_marks_the_cut_stale(client):
+    job = planned_job()
+    approve_job(job)
+    r = client.put("/api/jobs/j1/cut-style", json={"cut_style": "calm"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"id": "j1", "cut_style": "calm", "cut_style_resolved": "calm",
+                        "previous": "standard", "cut_stale": False}  # fmt: skip
+    cut_job(job)
+    shown = client.get("/api/jobs/j1").json()
+    assert shown["status"] == "done" and shown["cut_stale"] is False
+    r = client.put("/api/jobs/j1/cut-style", json={"cut_style": "tight"})
+    assert r.json()["cut_stale"] is True and r.json()["previous"] == "calm"
+    shown = client.get("/api/jobs/j1").json()
+    assert shown["cut_stale"] is True and shown["cut_style_resolved"] == "tight"
+    assert shown["approved"] is True and shown["stage"] == "cut"  # no new approval needed
+    # back to the style of the cut: fresh again; "auto" drops the explicit value
+    assert (
+        client.put("/api/jobs/j1/cut-style", json={"cut_style": "calm"}).json()["cut_stale"]
+        is False
+    )
+    r = client.put("/api/jobs/j1/cut-style", json={"cut_style": "auto"})
+    assert r.json()["cut_style"] == "auto" and r.json()["cut_style_resolved"] == "standard"
+    assert "cut_style" not in json.loads((job / "job.json").read_text())
+    assert client.put("/api/jobs/j1/cut-style", json={"cut_style": "fast"}).status_code == 422
+    assert client.put("/api/jobs/nope/cut-style", json={"cut_style": "calm"}).status_code == 404
+
+
+def test_a_cut_from_before_cut_styles_goes_stale_only_when_the_style_changes(client):
+    job = planned_job()
+    approve_job(job)
+    cut_job(job)
+    data = json.loads((job / "job.json").read_text())
+    del data["cut"]["cut_style"]
+    (job / "job.json").write_text(json.dumps(data))
+    assert client.get("/api/jobs/j1").json()["cut_stale"] is False
+    assert (
+        client.put("/api/jobs/j1/cut-style", json={"cut_style": "tight"}).json()["cut_stale"]
+        is False
+    )  # the old cut skill cut "tight"
+    assert (
+        client.put("/api/jobs/j1/cut-style", json={"cut_style": "calm"}).json()["cut_stale"] is True
+    )
+
+
+def test_recut_reruns_the_cut_with_the_approved_plan(fake):
+    runner = RecutPipeline()
+    c = TestClient(create_app(token=TOKEN, port=4300, runner=runner), base_url=BASE)
+    assert c.get(f"/?t={TOKEN}", follow_redirects=False).status_code == 303
+    c.headers.update(ORIGIN)
+    job = planned_job()
+    r = c.post("/api/jobs/j1/recut")
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "state"  # not approved
+    approve_job(job)
+    r = c.post("/api/jobs/j1/recut")
+    assert r.status_code == 409 and "no cut yet" in r.json()["detail"]["message"]
+    cut_job(job)
+    c.put("/api/jobs/j1/cut-style", json={"cut_style": "calm"})
+    assert c.get("/api/jobs/j1").json()["cut_stale"] is True
+    r = c.post("/api/jobs/j1/recut")
+    assert r.status_code == 200 and r.json()["run"] == "recut"
+    c.app.state.runs.wait_idle()
+    evs = events(c, "j1")
+    assert evs[-1]["t"] == "done" and evs[-1]["ok"] is True
+    assert {"t": "gate", "gate": "result"} in evs
+    assert runner.calls == [("recut", "j1", True)]
+    shown = c.get("/api/jobs/j1").json()
+    assert shown["cut_stale"] is False and shown["status"] == "done"
+    assert json.loads((job / "job.json").read_text())["cut"]["cut_style"] == "calm"
+
+
+def test_cut_style_cannot_change_while_a_run_is_active(client, fake):
+    job = planned_job()
+    approve_job(job)
+    cut_job(job)
+    fake.gate.clear()
+    try:
+        assert client.post("/api/jobs/j1/start").status_code == 200
+        r = client.put("/api/jobs/j1/cut-style", json={"cut_style": "calm"})
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+        assert client.post("/api/jobs/j1/recut").json()["detail"]["code"] == "busy"
+    finally:
+        fake.gate.set()
+
+
+def test_pipeline_recut_calls_run_recut(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(pipeline, "recut", lambda ref, say, ask: seen.append(ref) or 0)
+    assert server_app.Pipeline().recut(tmp_path, print, input) == 0
+    assert seen == [str(tmp_path)]

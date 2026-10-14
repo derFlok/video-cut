@@ -424,3 +424,77 @@ def test_a_cut_from_before_the_format_record_counts_as_9_16(fake):
     assert run.cut_done(job)
     (job / "job.json").write_text(json.dumps({**data, "screen": "input/s.mov"}))
     assert not run.cut_done(job)  # a demo job now defaults to 16:9: cut again
+
+
+def test_cut_style_reaches_the_prompts_and_a_changed_style_cuts_again(fake):
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), approve=True, cut_style="calm", say=lines.append) == 0
+    job = Path(lines[0].split("job: ")[1])
+    data = json.loads((job / "job.json").read_text())
+    assert data["cut_style"] == "calm" and data["cut"]["cut_style"] == "calm"
+    assert all("Cut style: calm" in p and "never assemble a sentence" in p
+               for p in claude.prompts)  # fmt: skip
+    assert all("Human-facing text (plan, reports): German" in p for p in claude.prompts)
+    assert run.run(job.name, say=lines.append) == 0 and len(claude.calls) == 2  # cut done
+    assert run.run(job.name, cut_style="tight", say=lines.append) == 0
+    assert [c[0] for c in claude.calls] == ["plan", "cut", "cut"]
+    assert "the cut style changed from calm to tight" in claude.prompts[2]
+    assert "Cut style: tight" in claude.prompts[2] and "filler, false_start" in claude.prompts[2]
+    assert any("made in the calm style" in x for x in lines)
+    assert json.loads((job / "job.json").read_text())["cut"]["cut_style"] == "tight"
+
+
+def test_the_default_style_follows_the_job_and_old_cut_records_stay_fresh(fake):
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), approve=True, say=lines.append) == 0
+    job = Path(lines[0].split("job: ")[1])
+    assert "Cut style: standard" in claude.prompts[0]
+    data = json.loads((job / "job.json").read_text())
+    assert data["cut"]["cut_style"] == "standard" and "cut_style" not in data
+    del data["cut"]["cut_style"]
+    (job / "job.json").write_text(json.dumps(data))
+    assert run.cut_done(job)  # a cut from before cut styles is not redone by itself
+    job_tool.set_cut_style(job, "standard", say=lambda _: None)
+    assert not run.cut_done(job)  # it was cut "tight": a changed style cuts again
+    assert "the cut style changed from tight to standard" in run.stale_why(job)
+
+
+def test_recut_entry_needs_an_approved_plan_and_cuts_again(fake):
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), say=lines.append, ask=lambda _: "no") == 3
+    job = Path(lines[0].split("job: ")[1])
+    with pytest.raises(run.RunError, match="approved plan"):
+        run.recut(job.name, say=lines.append)
+    job_tool.approve_job(job)
+    assert run.recut(job.name, say=lines.append) == 0
+    assert run.recut(str(job), say=lines.append) == 0
+    assert [c[0] for c in claude.calls] == ["plan", "cut", "cut"]
+    assert "cut it again (--recut)" in claude.prompts[2]
+
+
+def test_feedback_cannot_be_combined_with_a_cut_style(fake):
+    claude, video = fake
+    with pytest.raises(run.RunError, match="--cut-style"):
+        run.run(str(video), feedback="shorter", cut_style="calm", say=lambda _: None)
+
+
+def test_skills_follow_the_cut_style_and_the_job_language():
+    skills = {
+        n: (agent.PLUGIN / "skills" / n / "SKILL.md").read_text()
+        for n in ("plan", "cut", "overlays", "revise")
+    }
+    cut = skills["cut"]
+    assert "0.05 s" not in cut and "0.08 s" not in cut and '"fade_ms"' not in cut
+    assert "0.05 s" not in skills["revise"]
+    for text in (cut, skills["revise"]):
+        assert "videocut tool edl snap" in text and "videocut tool edl check" in text
+    assert "cut_in_speech" in cut and "speech_clipped" in cut and "speech_cut_ok" in cut
+    for style in ("calm", "standard", "tight", "keep_pause_s", "min_segment_s"):
+        assert style in cut and style in skills["plan"]
+    assert "Never assemble a" in cut and "never plan a sentence assembled" in skills["plan"]
+    for text in skills.values():
+        assert "cut_style" in text and "`lang`" in text
+    assert "Cut style: <cut_style>" in skills["plan"]

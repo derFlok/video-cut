@@ -69,6 +69,12 @@ def main(argv: list[str] | None = None) -> int:
         help="output format 9:16, 16:9, 1:1 or 4:5 (default: 16:9 with a screen recording or "
         "screenshots, else 9:16); for an existing job it replaces the format",
     )
+    r.add_argument(
+        "--cut-style",
+        help="cut style calm, standard or tight (default: calm with a screen recording or "
+        "screenshots, else standard); for an existing job it replaces the style and a "
+        "finished cut is cut again",
+    )
 
     r.add_argument(
         "--feedback",
