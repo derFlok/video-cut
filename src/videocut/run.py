@@ -1221,6 +1221,7 @@ def run(
             else:
                 request.unlink(missing_ok=True)  # never a stale request in a fresh plan run
             try:
+                planned_for = read_job(job).get("target_s")  # what the prompt asked for
                 res = claude(job, "plan", prompt, max_turns, None, say)
             finally:
                 request.unlink(missing_ok=True)
@@ -1232,7 +1233,9 @@ def run(
                 raise RunError("the plan run did not write work/project.md")
             if _mtime(edl) != edl_before or _snapshot(job / "out") != out_before:
                 raise RunError("the plan run wrote an EDL or rendered; it must only plan")
-            stamp_plan_target(job)  # the plan is now made for the current target length
+            stamp_plan_target(job, planned_for)  # the target this plan run was asked for
+            if plan_target_stale(job):
+                say("plan: the target length changed during the plan run; plan again")
             plan_session, plan_sha = res.session_id, project_sha(job)
         else:
             say("plan: using the existing work/project.md (--replan makes a new one)")

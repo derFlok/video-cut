@@ -101,7 +101,7 @@ def _planned(capsys, tmp_path, job_id="p1", *extra) -> Path:
     run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", job_id, *extra)
     job = jobs_root() / job_id
     (job / "work" / "project.md").write_text("# Plan\n")
-    job_tool.stamp_plan_target(job)
+    job_tool.stamp_plan_target(job, job_tool.read_job(job).get("target_s"))
     return job
 
 
@@ -127,7 +127,7 @@ def test_changing_the_target_makes_the_plan_stale_and_revokes_the_approval(capsy
     assert run_tool(capsys, "job", "approve", "p1")[0] == 0
     # a plan run for the new length clears the staleness
     run_tool(capsys, "job", "target", "p1", "90")
-    job_tool.stamp_plan_target(job)
+    job_tool.stamp_plan_target(job, 90)
     assert not job_tool.plan_target_stale(job)
     assert run_tool(capsys, "job", "approve", "p1")[0] == 0 and job_tool.is_approved(job)
 
@@ -236,3 +236,20 @@ def test_cli_run_passes_target(monkeypatch):
 def test_feedback_cannot_be_combined_with_target(claude):
     with pytest.raises(run.RunError, match="--target"):
         run.run("x", feedback="shorter", target="60")
+
+
+def test_a_plan_is_stamped_with_the_target_it_was_asked_for(capsys, tmp_path):
+    """The target changes while the plan run works: the plan stays made for the old one."""
+    job = _planned(capsys, tmp_path, "r1", "--target", "60")
+    run_tool(capsys, "job", "target", "r1", "5m")  # (during the run)
+    job_tool.stamp_plan_target(job, 60)  # what run.py stamps: the target before the run
+    assert job_tool.plan_target_stale(job)
+    assert run_tool(capsys, "job", "approve", "r1")[0] == 1
+
+
+def test_a_plan_written_outside_run_can_be_approved_with_a_target(capsys, tmp_path):
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "o1", "--target", "90")
+    job = jobs_root() / "o1"
+    (job / "work" / "project.md").write_text("# Plan\n")  # no plan_target record
+    assert not job_tool.plan_target_stale(job)
+    assert run_tool(capsys, "job", "approve", "o1")[0] == 0 and job_tool.is_approved(job)

@@ -160,7 +160,9 @@ def is_approved(job: Path) -> bool:
 
 def plan_target_stale(job: Path, data: dict | None = None) -> bool:
     """The plan (work/project.md) was made for another target length than the job's now.
-    A plan without a record (made before target lengths) was made for auto."""
+    A plan without a record (made before target lengths, or outside `run`) counts as made
+    for the current one: `job target` records the old target before changing it, and an
+    approval records its own (is_approved)."""
     if not (job / PROJECT).is_file():
         return False
     data = read_job(job) if data is None else data
@@ -170,13 +172,13 @@ def plan_target_stale(job: Path, data: dict | None = None) -> bool:
 def plan_made_for(data: dict):
     """The target length the current plan was made for (None: auto)."""
     rec = data.get("plan_target")
-    return rec.get("target_s") if isinstance(rec, dict) else None
+    return rec.get("target_s") if isinstance(rec, dict) else data.get("target_s")
 
 
-def stamp_plan_target(job: Path) -> None:
-    """Record that the current plan was made for the job's current target length (`run`
-    calls it after every plan run)."""
-    update_job(job, plan_target={"target_s": read_job(job).get("target_s")})
+def stamp_plan_target(job: Path, target_s) -> None:
+    """Record the target length the current plan was made for (`run` calls it after every
+    plan run, with the target the run was started for)."""
+    update_job(job, plan_target={"target_s": target_s})
 
 
 def approve_job(job: Path) -> dict:
