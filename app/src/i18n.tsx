@@ -132,6 +132,9 @@ const de = {
   "pd.kind.customer": "Kundendaten",
   "pd.kind.other": "Sonstiges",
   "pd.where.asset": "Screenshot {name}",
+  "pd.measured.partial": "Text nicht überall gefunden: dort wird der ganze markierte Bereich geschwärzt.",
+  "pd.measured.failed": "Text nicht gefunden: der ganze markierte Bereich wird geschwärzt.",
+  "pd.measured.none": "Position nicht gemessen: der ganze markierte Bereich wird geschwärzt.",
   "pd.count": "{n} von {total} werden geschwärzt.",
   "pd.confirm": "Freigeben",
 
@@ -358,6 +361,9 @@ const en: Record<Key, string> = {
   "pd.kind.customer": "Customer data",
   "pd.kind.other": "Other",
   "pd.where.asset": "Screenshot {name}",
+  "pd.measured.partial": "Text not found everywhere: there, the whole marked area is redacted.",
+  "pd.measured.failed": "Text not found: the whole marked area is redacted.",
+  "pd.measured.none": "Position not measured: the whole marked area is redacted.",
   "pd.count": "{n} of {total} will be redacted.",
   "pd.confirm": "Approve",
 

@@ -122,7 +122,7 @@ function planFor(title: string, variant = 0, note?: string): Plan {
 }
 
 const CANDIDATES: PdCandidate[] = [
-  { id: 1, kind: "email", t0: 18.0, t1: 24.1, box: [0.55, 0.3, 0.92, 0.38], reason: "E-Mail-Adresse in der Kontaktliste sichtbar." },
+  { id: 1, kind: "email", t0: 18.0, t1: 24.1, box: [0.55, 0.3, 0.92, 0.38], reason: "E-Mail-Adresse in der Kontaktliste sichtbar.", text: "erika.mustermann@example.com", measured: "ok" },
   { id: 2, kind: "name", asset: "input/shot-1.png", box: [0.06, 0.42, 0.45, 0.5], reason: "Vor- und Nachname in der Kopfzeile." },
 ];
 

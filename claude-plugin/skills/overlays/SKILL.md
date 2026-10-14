@@ -54,7 +54,8 @@ screenshot walkthrough) take file, sentence and `focus` from the plan's *Screens
 table and look at `work/sheets/assets_01.jpg` (`videocut tool sheet assets`) once instead
 of every image. `redact`: `videocut tool job show` → `redaction.redact` are the candidate
 ids of `work/redaction.json` to redact (the human's decision; without one: all); put the
-`box` of each of them whose `asset` is the item's `file` into its `redact` list
+box of each of them whose `asset` is the item's `file` into its `redact` list (its
+measured `track` boxes when it has a `track`, else its `box`)
 (`redaction.demo` ids are demo data: leave them visible). verify flags a missing one as
 `redaction_missing`. A portrait screenshot is
 drawn as tall as the safe area allows, at its top, with the caption below it (it may cover

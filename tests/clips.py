@@ -382,3 +382,108 @@ def screen_pair(
     }
     meta_file.write_text(json.dumps(meta))
     return cam, scr, meta
+
+
+# Contact-card screen recording for the redaction tests: a fake app with a contact card
+# (placeholder person "Erika Mustermann", an example.com address, a fictitious number) at
+# known positions; the card scrolls up once. Ground truth: the ink box of every field.
+CARD_FIELDS = [  # (key, text, x, y, size) in card px; "label"/"note" lines are not personal
+    ("label", "Kontakt", 60, 50, 40),
+    ("note", "Zuletzt bearbeitet am Montag", 60, 130, 30),
+    ("name", "Erika Mustermann", 60, 200, 44),
+    ("email", "erika.mustermann@example.com", 60, 280, 34),
+    ("phone", "+49 30 1234567", 60, 340, 34),
+    ("note2", "Termin bestätigt", 60, 410, 30),
+]
+CARD_SIZE = (1200, 520)
+CARD_XY = (900, 700)  # where the card sits on the 2880x1800 screen before the scroll
+CARD_SCROLL = (7.3, 0.8, 360)  # screen time it starts, seconds it takes, px it moves up
+FONTS = ("/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/Helvetica.ttc",
+         "/Library/Fonts/Arial.ttf")  # fmt: skip
+
+
+def font() -> str | None:
+    return next((f for f in FONTS if Path(f).is_file()), None)
+
+
+def _card_png(folder: Path, out: Path, keys: list[str]) -> None:
+    w, h = CARD_SIZE
+    parts = [f"drawbox=x=0:y=0:w={w}:h=90:color=0xE8E8E8:t=fill"]
+    for key, text, x, y, size in CARD_FIELDS:
+        if key not in keys:
+            continue
+        tf = folder / f"card-{key}.txt"
+        tf.write_text(text)
+        parts.append(
+            f"drawtext=fontfile={font()}:textfile={tf}:x={x}:y={y}:fontsize={size}"
+            ":fontcolor=0x202020"
+        )
+    _ff("-f", "lavfi", "-i", f"color=c=white:s={w}x{h}", "-vf", ",".join(parts),
+        "-frames:v", "1", str(out))  # fmt: skip
+
+
+def _gray_png(path: Path, size: tuple[int, int]):
+    import numpy as np
+
+    raw = subprocess.run(
+        [ffmpeg(), "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+        capture_output=True, check=True,
+    ).stdout  # fmt: skip
+    return np.frombuffer(raw, np.uint8).reshape(size[1], size[0]).astype(int)
+
+
+def contact_screen(folder: Path, seconds: float) -> tuple[Path, dict]:
+    """Screen recording (2880x1800, 30 fps) with the contact card. Returns (file, meta):
+    meta {"fields": {key: [x0, y0, x1, y1] screen px before the scroll}, "scroll": [t0, dt,
+    dy], "size"}; box_at(meta, key, t) gives a field's box at screen time t."""
+    import json
+
+    import numpy as np
+
+    folder.mkdir(parents=True, exist_ok=True)
+    out, meta_file = folder / f"contact-{seconds:.2f}.mp4", folder / f"contact-{seconds:.2f}.json"
+    if out.is_file() and meta_file.is_file():
+        return out, json.loads(meta_file.read_text())
+    card = folder / "card.png"
+    keys = [k for k, *_ in CARD_FIELDS]
+    _card_png(folder, card, keys)
+    empty = folder / "card-empty.png"
+    _card_png(folder, empty, [])
+    base = _gray_png(empty, CARD_SIZE)
+    fields = {}
+    for key in keys:
+        one = folder / f"card-only-{key}.png"
+        _card_png(folder, one, [key])
+        ink = np.abs(_gray_png(one, CARD_SIZE) - base) > 40
+        rows, cols = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
+        fields[key] = [int(CARD_XY[0] + cols[0]), int(CARD_XY[1] + rows[0]),
+                       int(CARD_XY[0] + cols[-1] + 1), int(CARD_XY[1] + rows[-1] + 1)]  # fmt: skip
+    w, h = SCREEN_SIZE
+    bg = folder / "contact-bg.png"
+    _ff("-f", "lavfi", "-i", f"color=c=0x303030:s={w}x{h}", "-vf",
+        f"drawbox=x=0:y=0:w={w}:h=70:color=gray:t=fill,"
+        "drawbox=x=160:y=160:w=2560:h=1500:color=0xF4F4F4:t=fill,"
+        "drawbox=x=160:y=160:w=2560:h=90:color=0x707070:t=fill",
+        "-frames:v", "1", str(bg))  # fmt: skip
+    s0, dt, dy = CARD_SCROLL
+    y = f"{CARD_XY[1]}-{dy}*clip((t-{s0})/{dt}\\,0\\,1)"
+    _ff(
+        "-loop", "1", "-framerate", str(FPS), "-i", str(bg),
+        "-loop", "1", "-framerate", str(FPS), "-i", str(card),
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+        "-filter_complex", f"[0:v][1:v]overlay=x={CARD_XY[0]}:y='{y}',format=yuv420p[v]",
+        "-map", "[v]", "-map", "2:a", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "12",
+        "-colorspace", "bt709", "-c:a", "aac", "-t", f"{seconds:.3f}", str(out),
+    )  # fmt: skip
+    meta = {"fields": fields, "scroll": [s0, dt, dy], "size": [w, h]}
+    meta_file.write_text(json.dumps(meta))
+    return out, meta
+
+
+def box_at(meta: dict, key: str, t: float) -> list[float]:
+    """Normalised box of field `key` at screen time t (frame times on the 30 fps grid)."""
+    s0, dt, dy = meta["scroll"]
+    shift = dy * min(max((t - s0) / dt, 0.0), 1.0)
+    x0, y0, x1, y1 = meta["fields"][key]
+    w, h = meta["size"]
+    return [x0 / w, (y0 - shift) / h, x1 / w, (y1 - shift) / h]

@@ -16,8 +16,11 @@ work/project.md that the plan run writes for the app.
      "risks": ["..."]}
 
 All times are source (camera) seconds. `views` is empty for a talking-head job.
-`personal_data` repeats work/redaction.json (the same ids, kinds, times/assets and boxes);
-a screenshot candidate has "asset" instead of t0/t1. `still` is filled in by
+`personal_data` repeats work/redaction.json (the same ids, kinds, times/assets and boxes,
+after `videocut tool redact measure`); a screenshot candidate has "asset" instead of t0/t1.
+Every e-mail, phone or name candidate names its "text" and every candidate with text is
+measured ("measured"), otherwise the check fails. `still`, `still_t` (camera s) and
+`still_boxes` (the boxes drawn on it: what will be covered) are filled in by
 `videocut tool sheet plan`. Prints one line per problem with its JSON path.
 """
 
@@ -151,10 +154,11 @@ def validate(
         if not isinstance(it, dict):
             errs.append(f"{p}: must be an object")
             continue
-        c = {k: v for k, v in it.items() if k not in ("still",)}
+        c = {k: v for k, v in it.items() if k not in ("still", "still_t", "still_boxes")}
         errs += [m.replace("$.candidates[0]", p) for m in redaction.validate({"candidates": [c]})]
     if not any(m.startswith("$.personal_data[") for m in errs):
         errs += _same_candidates(pd, candidates)
+    errs += _unmeasured(candidates or [])
 
     risks, e = _items(data, "risks")
     errs += e + [f"$.risks[{i}]: must be a string" for i, r in enumerate(risks) if not _text(r)]
@@ -164,6 +168,25 @@ def validate(
 def _key(c: dict) -> tuple:
     where = (c.get("asset"),) if "asset" in c else (round(c["t0"], 2), round(c["t1"], 2))
     return (c["id"], c["kind"], *where, tuple(round(v, 3) for v in c["box"]))
+
+
+def _unmeasured(candidates: list[dict]) -> list[str]:
+    """Personal data is placed by measurement, never by eye: an e-mail, phone or name
+    candidate names its exact text, and every candidate with text has been measured."""
+    errs = []
+    for c in candidates:
+        cid = c.get("id")
+        if "text" not in c and c.get("kind") in redaction.TEXT_KINDS:
+            errs.append(
+                f'{redaction.FILE} candidate {cid}: needs "text" (the exact text on the '
+                "screen, see `videocut tool redact text`) so its position can be measured"
+            )
+        elif "text" in c and not redaction.is_measured(c):
+            errs.append(
+                f"{redaction.FILE} candidate {cid}: not measured (or changed since); run "
+                "`videocut tool redact measure`, then copy the candidates into personal_data"
+            )
+    return errs
 
 
 def _same_candidates(pd: list[dict], candidates: list[dict] | None) -> list[str]:

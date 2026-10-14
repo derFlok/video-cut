@@ -54,6 +54,7 @@ ARTEFACTS = [
     "work/screen_proxy.mp4",
     "work/sync.json",
     "work/screen.json",
+    "work/screen_text.json",
     "work/redaction.json",
     "work/words.json",
     "work/takes_packed.md",
@@ -167,6 +168,8 @@ SCREEN_OUTPUTS = [
     "work/screen_proxy.mp4",
     "work/sync.json",
     "work/screen.json",
+    "work/screen_text.json",
+    "work/redaction_measure.json",
 ]
 
 

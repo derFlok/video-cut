@@ -466,3 +466,60 @@
   often English, while the UI is German.
 - FastAPI 0.143 pulls in `opentelemetry-api`. SSE keep-alive every 15 s; `?follow=0` replays
   the events once and closes.
+
+### Fixed — Personal-data redaction: measured boxes and a real coverage check
+- Redaction boxes are measured, never estimated by eye. In 2 of 2 real runs the plan agent
+  placed the boxes from downscaled stills about one text line too high: the block covered
+  the line above and the name stayed readable, and verify did not notice (it only checked
+  that a block was drawn where the box said).
+- Local text recognition (`tools/_ocr.py`): macOS Vision (`VNRecognizeTextRequest`) called
+  through the Objective-C runtime with ctypes. No download, no package, no compiler;
+  frames are handed over in memory and never leave the machine. Off macOS the tools say
+  so and verify fails closed (`redaction_unchecked`).
+- `videocut tool redact text` → `work/screen_text.json`: the text on the screen recording
+  every 2 s and after every scene change, with camera times, boxes and pattern hits
+  (e-mail, phone, IBAN-like); also the text of a job's screenshots. Part of the demo prep
+  in `videocut run`, so the plan agent reads it instantly.
+- `videocut tool redact measure`: the plan agent names WHICH text is personal (`text` in
+  `work/redaction.json`, the whole panel as `box`); the tool finds WHERE, follows it while
+  the page scrolls (1 s grid, halved down to 1/15 s where it moves, appears or
+  disappears) and writes a `track` of time pieces with the measured box plus a margin.
+  Fail closed: where the text is not found, the whole named area is covered and the
+  candidate says so (`measured` partial/failed, `note`; the app shows it in the
+  personal-data dialog). `plan check` fails while an e-mail/phone/name candidate has no
+  text or a text candidate is not measured. Render, overlays, `edl check` (it now prints
+  the exact block to add) and the plan stills use the measured track.
+- verify `coverage`: for every enforced text candidate, sampled output frames of every
+  screen segment that shows it (5 per segment plus one per second of every screen
+  segment): the text is found again on the screen frame the reel shows, mapped through
+  layout and zoom into output px, and must be ≥ 98 % block colour; the reel frame itself
+  is read too (the text readable there is a leak). Either is `redaction_leak`, a hard
+  failure with output time and candidate id.
+- `redaction_unchecked` (verify not ok): an e-mail/phone/name candidate shown without
+  `text`, a text candidate edited after it was measured (`measure_sig`), a frame that
+  cannot be read, or no text recognition. A text found only outside the named area counts
+  as not found there (the whole area is covered). Screenshot candidates: the text found
+  on the image must lie inside the redact boxes of every `screenshot_frame` showing it.
+- Frames of a screen recording are taken as the reel shows them: the last frame at or
+  before the time (macOS records a frame only when the screen changes; a plain seek gave
+  the next change, up to 2 s later on a real recording), seeking to the pts itself
+  (`-seek_timestamp 1`; also in the screen-time check of verify).
+- Jobs planned before this change report `redaction_unchecked` (verify not ok) until they
+  are planned again: their e-mail/phone/name candidates have no measured text.
+- Data rule (CLAUDE.md rule 3, decided by the human): only transcript text, downscaled
+  stills and screen text read locally (OCR) go to Claude; recordings and audio never leave
+  the machine.
+- verify: a still screen over several consecutive screen segments is no longer a frozen
+  picture (the exempt spans are merged first, not only when a pip bubble is present).
+
+### Observed — measured redaction
+- Real plan run (Opus 5.5) on a generated demo (24.8 s camera, contact card that scrolls,
+  "redact all"): the agent named the text, the whole card as area, ran `redact measure`;
+  3 of 3 measured "ok". Plan 66.9 s / 16 turns / USD 0.35, cut 221.6 s / 25 turns /
+  USD 0.69. Verify: 404 coverage checks, 0 leaks, `screen_flagged` empty (17.7 s for
+  the 20 s 16:9 reel); not ok only for a click at a cut in the generated speech.
+- Measured boxes vs known positions on generated material: IoU > 0.8 for every static
+  sample; the track covers the text at every frame while it scrolls.
+- On a real 4K screen recording (248 s): ~0.48 s per sampled frame with 4 threads
+  (Vision dominates); two texts over 215 s took 150 s; the packet scan for frame times
+  0.5 s; 29 frame gaps > 0.5 s (up to 2 s) that a plain seek got wrong.

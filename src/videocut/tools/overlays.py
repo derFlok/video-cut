@@ -42,7 +42,7 @@ from pathlib import Path
 from .. import brand
 from ..edl import EdlError, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
-from ..redaction import same_asset
+from ..redaction import asset_boxes, same_asset
 from . import _layouts, _plates
 from . import _render_plan as plan_mod
 from ._geometry import face_track, framed, map_box, safe_zones, sized
@@ -146,7 +146,10 @@ def _redacted(job: Path, item: dict, cands: list[dict]) -> dict:
     if item.get("scene") != "screenshot_frame" or not isinstance(props, dict):
         return item
     boxes = [
-        c["box"] for c in cands if "asset" in c and same_asset(job, props.get("file"), c["asset"])
+        b
+        for c in cands
+        if "asset" in c and same_asset(job, props.get("file"), c["asset"])
+        for b in asset_boxes(c)
     ]
     if not boxes:
         return item

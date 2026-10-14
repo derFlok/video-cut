@@ -11,8 +11,8 @@ anything substantial.
    A local pre-commit hook rejects words listed in `.git/info/forbidden-words` (never committed).
 2. **Claude is the editor.** No third-party AI editing SaaS. Every step is an open CLI/library whose
    output is a file Claude can inspect.
-3. **Local first.** Recordings and audio never leave the machine. Only transcript text and
-   downscaled stills go to Claude.
+3. **Local first.** Recordings and audio never leave the machine. Only transcript text,
+   downscaled stills and screen text read locally (OCR) go to Claude.
 4. **Human gate before cutting.** Claude proposes a plan; cutting starts after approval.
 5. **Auth.** Never read, store or forward Claude login tokens. Only start the official `claude`
    program, or pass an API key from the keychain. "Claude Code" never appears in the product name.

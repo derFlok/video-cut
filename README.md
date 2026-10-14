@@ -2,7 +2,7 @@
 
 **Claude cuts your videos, on your Mac.** Record yourself talking, drop the file in, pick a video type and a brand, and Video Cut turns it into a finished short video: filler words and pauses removed, vertical 9:16 framing (or 16:9, 1:1, 4:5 per video), animated captions, graphics that back up what you say, clean audio, music underneath.
 
-Video and audio never leave your machine. Claude only receives text (the transcript) and small still images at decision points.
+Video and audio never leave your machine. Claude only receives text (the transcript and the screen text read locally on your Mac) and small still images at decision points.
 
 > **Status: early development (0.0.x).** Installer, editing pipeline and the local app work; expect rough edges. See [`docs/BRIEF.md`](docs/BRIEF.md) for the full design and [`CHANGELOG.md`](CHANGELOG.md) for progress.
 
@@ -142,7 +142,9 @@ Default: `16:9` when the job has a screen recording or screenshots (a product de
    and you below), where to zoom in, and which places may show personal data (e-mail addresses, phone numbers,
    names). **Demo data?** You are asked at approval: all demo, redact all, or pick numbers
    (or pass `--demo-data`). Without an answer everything listed is covered with solid
-   blocks.
+   blocks. Their position is measured on the recording with the Mac's own text
+   recognition (on this machine), and the check reads the finished reel to confirm the
+   text is covered.
 5. If the sync is unsure, the run stops and tells you how to set it by hand:
    `videocut tool sync --job <id> --offset <seconds>` (screen time minus camera time of one
    moment you can see or hear in both), then `videocut run <id>`.
@@ -166,7 +168,7 @@ files (start from `brands/_example`).
 ## Privacy
 
 - Recordings, audio and renders stay on your Mac.
-- Sent to Anthropic: transcript text and downscaled still frames.
+- Sent to Anthropic: transcript text, downscaled still frames and screen text read locally (OCR).
 - Downloads at install time: the tools and models listed in `manifest/tools.json`, nothing else.
 - Do not film other people without their consent, and do not show customer data on screen.
 

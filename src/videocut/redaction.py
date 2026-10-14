@@ -11,6 +11,19 @@
         ]}
         kind: email | phone | name | customer | other
 
+    Measured positions (`videocut tool redact measure`, never estimated by eye): a screen
+    candidate with "text" (the exact text, as `videocut tool redact text` lists it) gets
+        "range": [t0, t1]   the time the plan named (kept; t0/t1 become the measured hull)
+        "track": [{"t0", "t1", "box", "text_box", "source"}]   camera time pieces: source
+                            "ocr": box = the measured text (text_box) plus a margin, the
+                            union over the piece; "area": the text was not found there,
+                            box = the whole named area plus AREA_PAD (fail closed)
+        "measured": "ok" | "partial" | "failed", "note": what the human should know,
+        "measure_sig": fingerprint of text, box and range (measure_sig(); is_measured())
+    "box" stays the area the plan named (the panel the item is in). Blocks are drawn from
+    the track when there is one, from the box otherwise (pieces()). A screenshot candidate
+    with "text" gets "track": [{"box", "text_box", "source"}] (no times).
+
     $VIDEOCUT_HOME/state/<job>/redaction_decision.json   the HUMAN decision (`videocut tool
                           job redaction`, or the approval prompt of `videocut run`), outside
                           the agent-writable job folder: {"job", "at", "method",
@@ -38,8 +51,11 @@ from .paths import state_dir
 
 FILE = "work/redaction.json"
 KINDS = ("email", "phone", "name", "customer", "other")
+TEXT_KINDS = ("email", "phone", "name")  # always text: placed by measurement (plan check)
 EPS = 1e-3  # seconds
 BOX_TOL = 0.005  # a redact box may be this much smaller than the candidate on each side
+MEASURED = ("ok", "partial", "failed")
+SOURCES = ("ocr", "area")
 
 
 class RedactionError(ValueError):
@@ -84,7 +100,69 @@ def validate(data) -> list[str]:
                 errs.append(f"{p}.asset: must be a job-relative image path (job.json assets)")
         elif not (_num(c.get("t0")) and _num(c.get("t1")) and c["t0"] < c["t1"]):
             errs.append(f"{p}: needs camera seconds t0 < t1 (or an asset)")
+        errs += _measure_errors(c, p)
     return errs
+
+
+def _measure_errors(c: dict, p: str) -> list[str]:
+    errs = []
+    if "text" in c and not (isinstance(c["text"], str) and c["text"].strip()):
+        errs.append(f"{p}.text: must be the non-empty text shown on the screen")
+    if "measured" in c and c["measured"] not in MEASURED:
+        errs.append(f"{p}.measured: must be one of {', '.join(MEASURED)}")
+    if "note" in c and not isinstance(c["note"], str):
+        errs.append(f"{p}.note: must be a string")
+    if "measure_sig" in c and not isinstance(c["measure_sig"], str):
+        errs.append(f"{p}.measure_sig: must be a string")
+    r = c.get("range")
+    if "range" in c and not (
+        isinstance(r, list) and len(r) == 2 and _num(r[0]) and _num(r[1]) and r[0] < r[1]
+    ):
+        errs.append(f"{p}.range: must be [t0, t1] camera seconds")
+    if "track" not in c:
+        return errs
+    tr = c["track"]
+    if not isinstance(tr, list) or not tr:
+        return [*errs, f"{p}.track: must be a non-empty list"]
+    timed = "asset" not in c
+    for j, k in enumerate(tr):
+        q = f"{p}.track[{j}]"
+        if not isinstance(k, dict) or not _box(k.get("box")):
+            errs.append(f"{q}.box: must be [x0, y0, x1, y1] in 0..1")
+            continue
+        if "text_box" in k and not _box(k["text_box"]):
+            errs.append(f"{q}.text_box: must be [x0, y0, x1, y1] in 0..1")
+        if k.get("source") not in SOURCES:
+            errs.append(f"{q}.source: must be one of {', '.join(SOURCES)}")
+        if timed and not (_num(k.get("t0")) and _num(k.get("t1")) and k["t0"] < k["t1"]):
+            errs.append(f"{q}: needs camera seconds t0 < t1")
+    return errs
+
+
+def measure_sig(c: dict) -> str:
+    """Fingerprint of what a measurement was made for (text, the plan's area and times or
+    asset): a candidate edited after `redact measure` no longer matches its track."""
+    where = c.get("asset") if "asset" in c else c.get("range") or [c.get("t0"), c.get("t1")]
+    blob = json.dumps([c.get("text"), c.get("box"), where], ensure_ascii=False)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def is_measured(c: dict) -> bool:
+    """Whether candidate `c` with "text" carries a measurement made for exactly it."""
+    return (
+        bool(c.get("track"))
+        and c.get("measured") in MEASURED
+        and c.get("measure_sig") == measure_sig(c)
+    )
+
+
+def pieces(c: dict) -> list[dict]:
+    """What is drawn for candidate `c`: its measured track, else {t0, t1, box} (a screen
+    candidate) or {box} (a screenshot) from the candidate itself."""
+    if c.get("track"):
+        keys = ("box",) if "asset" in c else ("t0", "t1", "box")
+        return [{k: p[k] for k in keys} for p in c["track"]]
+    return [{"box": c["box"]}] if "asset" in c else [{k: c[k] for k in ("t0", "t1", "box")}]
 
 
 def load(job: Path) -> list[dict] | None:
@@ -206,7 +284,11 @@ def state_sha(cands: list[dict]) -> str | None:
 
 def _key(c: dict) -> tuple:
     where = ("asset", c["asset"]) if "asset" in c else ("t", round(c["t0"], 3), round(c["t1"], 3))
-    return (*where, tuple(round(v, 4) for v in c["box"]))
+    drawn = tuple(
+        (round(p.get("t0", 0), 3), round(p.get("t1", 0), 3), *(round(v, 4) for v in p["box"]))
+        for p in pieces(c)
+    )
+    return (*where, tuple(round(v, 4) for v in c["box"]), drawn)
 
 
 def enforced(job: Path, approved: list[dict] | None = None) -> tuple[list[dict], str]:
@@ -255,10 +337,16 @@ def screen_blocks(cands: list[dict], start: float, end: float) -> list[dict]:
     for c in cands:
         if "asset" in c:
             continue
-        t0, t1 = max(c["t0"], start), min(c["t1"], end)
-        if t1 - t0 > EPS:
-            out.append({"t0": round(t0, 4), "t1": round(t1, 4), "box": list(c["box"])})
+        for p in pieces(c):
+            t0, t1 = max(p["t0"], start), min(p["t1"], end)
+            if t1 - t0 > EPS:
+                out.append({"t0": round(t0, 4), "t1": round(t1, 4), "box": list(p["box"])})
     return out
+
+
+def asset_boxes(c: dict) -> list[list[float]]:
+    """The redact boxes of a screenshot candidate (measured, or its own box)."""
+    return [list(p["box"]) for p in pieces(c)]
 
 
 def covered(block: dict, reds: list) -> bool:
@@ -276,7 +364,8 @@ def missing(cands: list[dict], data: dict, job: Path) -> list[dict]:
     """Candidates to redact that the raw EDL `data` does not cover: a non-face segment
     showing the screen during the candidate's time without a redact block over its box,
     or a screenshot_frame of its asset (any spelling of the path, or a copy of the file)
-    without such a redact box. [{"id", "where"}]."""
+    without such a redact box. [{"id", "where", "need"}]: `need` is the block (screen) or
+    box (screenshot) to add."""
     segs = data.get("segments") if isinstance(data, dict) else None
     ovs = data.get("overlays") if isinstance(data, dict) else None
     out = []
@@ -289,8 +378,10 @@ def missing(cands: list[dict], data: dict, job: Path) -> list[dict]:
                 if not same_asset(job, props.get("file"), c["asset"]):
                     continue
                 boxes = props.get("redact") if isinstance(props.get("redact"), list) else []
-                if not any(_box(b) and _covers(b, c["box"]) for b in boxes):
-                    out.append({"id": c["id"], "where": f"$.overlays[{j}].props.redact"})
+                for need in asset_boxes(c):
+                    if not any(_box(b) and _covers(b, need) for b in boxes):
+                        out.append({"id": c["id"], "where": f"$.overlays[{j}].props.redact",
+                                    "need": need})  # fmt: skip
             continue
         for i, s in enumerate(segs if isinstance(segs, list) else []):
             if not isinstance(s, dict) or s.get("layout", "face") == "face":
@@ -298,12 +389,11 @@ def missing(cands: list[dict], data: dict, job: Path) -> list[dict]:
             a, b = s.get("in"), s.get("out")
             if not (_num(a) and _num(b)):
                 continue
-            t0, t1 = max(c["t0"], a), min(c["t1"], b)
-            if t1 - t0 <= EPS:
-                continue
             reds = s.get("redact") if isinstance(s.get("redact"), list) else []
-            if not covered({"t0": t0, "t1": t1, "box": c["box"]}, reds):
-                out.append({"id": c["id"], "where": f"$.segments[{i}].redact"})
+            for need in screen_blocks([c], a, b):
+                if not covered(need, reds):
+                    out.append({"id": c["id"], "where": f"$.segments[{i}].redact",
+                                "need": need})  # fmt: skip
     return out
 
 

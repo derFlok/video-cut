@@ -42,6 +42,7 @@
 | `ingest [--denoise]` | `ingest.py` |
 | `sync [--offset S] [--redo]` | `sync.py` |
 | `screen [--force]` | `screen.py` |
+| `redact text [--force]`, `redact measure` | `redact.py` |
 | `face` | `face.py` |
 | `transcribe [--model turbo\|parakeet] [--language]`, `candidates` | `transcribe.py` |
 | `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets` | `sheets.py` |
@@ -55,7 +56,7 @@ Helpers: `_transcribe_energy.py` (pauses, voiced gaps), `_transcribe_pack.py`
 framing, face track in output px, safe zones; shared by render, overlays and verify),
 `_color.py` (HDR → SDR), `_layouts.py` (screen/pip/split geometry, zoom windows and their
 filter graph; shared by render, overlays and verify), `_verify_screen.py` (the product-demo
-checks of verify).
+checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes).
 
 ## Job folder (`$VIDEOCUT_HOME/jobs/<id>/`)
 
@@ -68,12 +69,14 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            screen_probe.json, screen_audio.wav, screen_proxy.mp4                ingest (demo)
            sync.json                                                            sync
            screen.json                                                          screen
+           screen_text.json                                                     redact text
            face.json                                                             face
            words.json, transcribe.json, candidates.json, takes_packed.md         transcribe
            sheets/contact_NN.jpg, burst_*.jpg, timeline_*.jpg, screen_*.jpg,
            assets_NN.jpg                                                         sheet
            contract.md (reel contract of the type, copied by `run` if one exists)
            project.md, redaction.json (personal-data candidates)                 plan run
+           redaction.json track, redaction_measure.json (every sample)          redact measure
            plan.json (the plan as data for the app), plan_stills/view_NN.jpg,
            pd_NN.jpg (`sheet plan`), plan_feedback.json (during a plan feedback run)
            edl.json, render_filter.txt, cut_report.md                            cut run
@@ -346,7 +349,8 @@ cover the speaker (`stage`: verify does not flag `overlay_on_face` for it).
 
 **Verify** (`_verify_screen.py`): every redact block is sampled on up to 5 output frames of
 its range through the drawn zoom window; ≥ 90 % of its pixels must be the brand background
-(`redaction_missing`). The middle frame of each screen segment is compared with the screen
+(`redaction_missing`). `coverage` checks the personal data itself (see *Personal data*
+below): `redaction_leak`. The middle frame of each screen segment is compared with the screen
 recording at the mapped time and at ±0.5 s / ±1 s (`screen_time_mismatch` when another time
 matches clearly better). `screen_overlap` repeats the overlap rule of `edl check`. A cut
 into, out of or between screen views counts as a reframe (no `visual_jump`), a still screen
@@ -368,8 +372,58 @@ with the SHA-256 of redaction.json and a copy of it. Safe default: without a val
 the list is edited later. Render adds a redact block for every enforced screen candidate to
 the screen segments it overlaps (render.json `redaction`: source `decision` or `default`),
 overlays add enforced screenshot boxes to `screenshot_frame` items, and `edl check` /
-verify flag `redaction_missing` when the EDL itself lacks one (the cut must be explicit).
-An unreadable redaction.json fails closed (no approval, no render).
+verify flag `redaction_missing` when the EDL itself lacks one (the cut must be explicit;
+`edl check` prints the exact block to add). An unreadable redaction.json fails closed (no
+approval, no render).
+
+**Where personal data is: measured, not estimated** (`tools/redact.py`, `tools/_ocr.py`).
+Boxes estimated by eye from downscaled stills landed a text line too high in real runs (the
+name stayed readable). The agent now chooses WHICH text is personal, the tools say WHERE.
+Text recognition is macOS Vision (`VNRecognizeTextRequest`, accurate level, de/en, no
+language correction) called through the Objective-C runtime with ctypes: part of the OS,
+no download; frames are passed in memory, nothing is written or sent. Up to 4 frames are
+read at once (Vision runs outside the GIL; ~0.4 s per 4K frame on an M-series Mac, more
+threads do not help). A frame of the screen recording is the one the reel shows at that
+time: the last frame with pts ≤ t (+ half an output frame), found from the packet
+timestamps (macOS writes frames only on change; a plain seek returns the next change),
+grabbed with `-seek_timestamp 1` (the pts itself, not an offset from the file start).
+`redact text` (also in the demo prep) reads the screen every 2 s and 0.2 s after every
+scene change → `work/screen_text.json` [{t, camera_t, box, text, conf}] and the summary:
+distinct texts with times and `suggest` (e-mail, phone, IBAN-like by pattern), plus the
+text of the job's screenshots. The plan writes each candidate with `text` (required for
+email/phone/name; `plan check` fails otherwise) and `box` = the whole panel it is in;
+`redact measure` finds the text (approximate match: case, spacing, punctuation and a few
+OCR errors tolerated; the matched part of a line via Vision's `boundingBoxForRange`,
+tightened to its ink) on a 1 s grid over the candidate's range and outward from every
+sighting until it is gone (two empty grid samples: one recognition miss does not end it),
+halving every interval where it appears, disappears or moves by more than a quarter of
+its height, down to 1/15 s. A frame that cannot be decoded (except at the very end) stops
+the tool instead of counting as "not shown". Consecutive sightings become
+`track` pieces {t0, t1, box (union of both ends + 0.3 × text height, ≥ 6 px), text_box,
+source "ocr"}; a gap under 1 s between two matching sightings is bridged. Where the text
+is not found inside the plan's range, or only outside the named area (the same text
+elsewhere on the screen), the piece covers the whole `box` + 0.03 (source "area",
+`measured` "partial"/"failed", `note`): fail closed. `measure_sig` fingerprints text,
+box and range: a candidate edited after measuring no longer counts as measured
+(`redaction.is_measured`; `plan check` fails, verify flags `redaction_unchecked`). `t0`/`t1` grow to every time
+the text is shown; `range` keeps the plan's times. `sheet plan` draws the blocks of the
+track at the middle of the first measured piece (`still_t`, `still_boxes`), the app shows
+those boxes and the note.
+
+**Coverage check** (verify, `coverage`): for every enforced candidate with `text`, up to 5
+output frames of every screen segment overlapping its time plus one frame per second of
+every screen segment (for all of them). On each, the text is searched on the screen frame
+that the reel shows there; every place found, and the track's text box of that time (or
+its area), is mapped through the layout and the zoom window to output px, and ≥ 98 % of
+the visible part (not under a pip bubble) must be the block colour (`colors.bg`, ±28 per
+channel). The reel frame's screen view is read as well: the text found there is readable.
+Either flags `redaction_leak` (verify not ok) with output time, segment and candidate id.
+`redaction_unchecked` (not ok either): no text recognition, a reel or screen frame that
+cannot be read, an e-mail/phone/name candidate shown without `text`, or a text candidate
+not measured for its current text and area. The reel is decoded once and streamed (32
+frames at a time). Screenshots: the text found on the image must lie inside a redact box
+of every `screenshot_frame` item that shows it (`props.redact` plus the measured boxes
+overlays adds); the overlay itself is not read back from the reel.
 
 **Screenshots only.** `job new --asset FILE...` takes many images; `sheet assets` puts them
 on one numbered contact sheet (≤ 1080×1920, with sizes and orientation in the summary), so
@@ -510,6 +564,8 @@ screenshots per step; not in CI).
 
 ## Decisions
 
+- **Local first.** Recordings and audio never leave the machine. Only transcript text,
+  downscaled stills and screen text read locally (OCR, `redact text`) go to Claude.
 - **macOS on Apple Silicon first.** Transcription runs on MLX.
 - **No Homebrew, no sudo.** Everything is installed into the repository folder, so
   `uninstall.sh` can remove it completely.

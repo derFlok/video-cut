@@ -386,8 +386,14 @@ def test_undecided_candidate_is_redacted_by_render_and_flagged(capsys, material)
     assert s["redaction"] == {"source": "default", "candidates": [1]}
     code, s, out = run_tool(capsys, "verify", "--job", str(job))
     assert code == 0 and not s["ok"]
-    assert {"check": "decision", "id": 1, "where": "$.segments[4].redact",
-            "flags": ["redaction_missing"]} in s["screen_flagged"]  # fmt: skip
+    gap = {
+        "check": "decision",
+        "id": 1,
+        "where": "$.segments[4].redact",
+        "need": {"t0": 5.5, "t1": 7.0, "box": SECRET_BOX},
+        "flags": ["redaction_missing"],
+    }
+    assert gap in s["screen_flagged"]  # fmt: skip
     doc = json.loads((job / "out" / "verify.json").read_text())
     seg4 = [r for r in doc["screen"]["redaction"] if r["segment"] == 4]
     assert seg4 and all(x["bg_share"] >= 0.9 for r in seg4 for x in r["samples"])  # drawn
