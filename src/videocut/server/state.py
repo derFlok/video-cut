@@ -7,7 +7,7 @@ from pathlib import Path
 from .. import redaction as red
 from .. import run as pipeline
 from ..tools.common import ID_RE, JOB_FILE, ToolError, jobs_root, read_job
-from ..tools.job import is_approved, project_sha, resolved_format
+from ..tools.job import is_approved, job_lang, project_sha, resolved_format, resolved_style
 from .runs import Channel
 
 # GET /api/jobs/{id}/media/{name}: the only files the media route serves.
@@ -150,6 +150,35 @@ def _format(data: dict) -> tuple[str, str | None]:
     return data.get("format") or "auto", resolved
 
 
+def _cut_style(data: dict) -> tuple[str, str | None]:
+    """(job.json "cut_style" or "auto", the resolved style or None when invalid)."""
+    try:
+        resolved = resolved_style(data)
+    except ToolError:
+        resolved = None
+    return data.get("cut_style") or "auto", resolved
+
+
+def cut_stale(job: Path) -> bool:
+    """A reel of the approved plan exists but no longer matches the job (another cut style,
+    format, plan or personal-data decision): the app offers to cut again (/recut)."""
+    try:
+        return (
+            is_approved(job)
+            and (job / MEDIA["reel"]).is_file()
+            and isinstance(read_job(job).get("cut"), dict)
+            and not pipeline.cut_done(job)
+        )
+    except (ToolError, OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def source_duration(job: Path) -> float | None:
+    """Duration of the camera recording in seconds (work/probe.json), None before ingest."""
+    d = (_json(job / "work" / "probe.json") or {}).get("duration")
+    return float(d) if isinstance(d, (int, float)) and d > 0 else None
+
+
 def summary(job: Path, ch: Channel | None) -> dict:
     data = read_job(job)
     st, stage = status(job, data, ch)
@@ -161,6 +190,7 @@ def summary(job: Path, ch: Channel | None) -> dict:
         "type": data.get("type"),
         "brand": data.get("brand"),
         "format": fmt,
+        "cut_style": _cut_style(data)[0],
         "status": st,
         "stage": stage,
         "queued": ch is not None and ch.state == "queued",
@@ -201,6 +231,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
     data = read_job(job)
     st, stage = status(job, data, ch)
     fmt, resolved = _format(data)
+    cut_style, style_resolved = _cut_style(data)
     revs, versions = revisions(job)
     verify = _json(job / "out" / "verify.json")
     runs = [
@@ -215,6 +246,11 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "brand": data.get("brand"),
         "format": fmt,
         "format_resolved": resolved,
+        "cut_style": cut_style,
+        "cut_style_resolved": style_resolved,
+        "cut_stale": cut_stale(job),
+        "source_duration_s": source_duration(job),
+        "lang": job_lang(data),
         "title": title(job, data),
         "status": st,
         "stage": stage,

@@ -1,6 +1,7 @@
-"""`videocut tool job new|show|approve|redaction|brand|screen|format`: create a job folder,
-inspect it, approve its plan, decide which personal-data candidates are demo data (human
-only, src/videocut/redaction.py), set its brand, its screen recording or its output format.
+"""`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style`: create a
+job folder, inspect it, approve its plan, decide which personal-data candidates are demo data
+(human only, src/videocut/redaction.py), set its brand, its screen recording, its output
+format or its cut style.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -8,6 +9,11 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                format (optional output format, _format.FORMATS: "9:16" | "16:9" | "1:1" |
                "4:5"; absent: 16:9 with a screen recording or screenshot assets, else 9:16,
                resolved when read, never written back),
+               cut_style (optional, _style.STYLES: "calm" | "standard" | "tight"; absent:
+               calm with a screen recording or screenshot assets, else standard, resolved
+               when read),
+               lang (optional language of the plan's and reports' human-facing text:
+               "de" | "en"; absent: "de"),
                approval {at, project_sha256}: a display copy only, never trusted
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
@@ -28,7 +34,7 @@ from pathlib import Path
 
 from .. import brand
 from .. import redaction as red
-from . import _format
+from . import _format, _style
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -68,6 +74,12 @@ FORMAT_HELP = (
     f"output format: {', '.join(_format.FORMATS)} (default: 16:9 with a screen recording or "
     "screenshots, else 9:16)"
 )
+CUT_STYLE_HELP = (
+    f"cut style: {', '.join(_style.STYLES)} (default: calm with a screen recording or "
+    "screenshots, else standard)"
+)
+LANGS = ("de", "en")
+DEFAULT_LANG = "de"
 # Set in the environment of agent runs (agent.py): the human gate cannot be passed by Claude.
 AGENT_ENV = "VIDEOCUT_AGENT"
 
@@ -219,11 +231,44 @@ def resolved_format(data: dict) -> str:
         raise ToolError(f"job.json: {e}") from None
 
 
+def style_arg(value: str) -> str | None:
+    """A style name, or None for "auto" (the default rule)."""
+    if str(value).strip().lower() == _style.AUTO:
+        return None
+    try:
+        return _style.parse_style(value)
+    except _style.StyleError as e:
+        raise ToolError(str(e)) from None
+
+
+def resolved_style(data: dict) -> str:
+    """The job's cut style; ToolError for an invalid job.json "cut_style"."""
+    try:
+        return _style.job_style(data)
+    except _style.StyleError as e:
+        raise ToolError(f"job.json: {e}") from None
+
+
+def lang_arg(value: str) -> str:
+    v = str(value).strip().lower()
+    if v not in LANGS:
+        raise ToolError(f"unknown language {value!r}; one of: {', '.join(LANGS)}")
+    return v
+
+
+def job_lang(data: dict) -> str:
+    """Language of the human-facing text (plan, reports): job.json "lang", default "de"."""
+    v = data.get("lang")
+    return v if v in LANGS else DEFAULT_LANG
+
+
 def new(args) -> dict:
     video = Path(args.video).expanduser()
     if not video.is_file():
         raise ToolError(f"video not found: {args.video}")
     fmt = format_arg(args.format) if args.format else None
+    cut_style = style_arg(args.cut_style) if args.cut_style else None
+    lang = lang_arg(args.lang) if args.lang else None
     brand_ref = brand_id(args.brand) if args.brand else None
     assets = [Path(a).expanduser() for a in (args.asset or [])]
     screen = _screen_file(args.screen) if args.screen else None
@@ -274,6 +319,10 @@ def new(args) -> dict:
         data["screen"] = f"input/{screen.name}"
     if fmt:
         data["format"] = fmt
+    if cut_style:
+        data["cut_style"] = cut_style
+    if lang:
+        data["lang"] = lang
     write_json(job / JOB_FILE, data)
     print(job)
     return {
@@ -286,6 +335,9 @@ def new(args) -> dict:
         "screen": data.get("screen"),
         "format": resolved_format(data),
         "format_default": fmt is None,
+        "cut_style": resolved_style(data),
+        "cut_style_default": cut_style is None,
+        "lang": job_lang(data),
     }
 
 
@@ -364,6 +416,50 @@ def format_cmd(args) -> dict:
     return set_format(resolve_job(args.job_ref or args.job), args.format)
 
 
+def set_cut_style(job: Path, value: str, say=print) -> dict:
+    """Set the cut style ("auto": back to the default rule). A cut made before was made in
+    the old style: it goes stale (run.cut_done compares the style of the cut record) and
+    the hint says how to redo it. Approval stays (the plan text did not change)."""
+    new_style = style_arg(value)
+    data = read_job(job)
+    try:
+        old = resolved_style(data)
+    except ToolError:  # an invalid value is what this command repairs
+        old = None
+    rec = data.get("cut")
+    if isinstance(rec, dict) and "cut_style" not in rec:
+        # A cut from before cut styles was cut the way "tight" cuts now.
+        data["cut"] = {**rec, "cut_style": "tight"}
+    if new_style is None:
+        data.pop("cut_style", None)
+    else:
+        data["cut_style"] = new_style
+    write_json(job / JOB_FILE, data)
+    now = resolved_style(data)
+    how = "default" if new_style is None else "set"
+    say(f"{job.name}: cut style {now} ({how})")
+    rec = data.get("cut")
+    stale = (
+        isinstance(rec, dict)
+        and rec.get("cut_style") != now
+        and (job / "out" / "reel.mp4").is_file()
+    )
+    if stale:
+        say(
+            f"The cut of this job was made in the {rec.get('cut_style')} style. Cut again "
+            f"in the {now} style (the approved plan stays): `videocut run {job.name}`"
+        )
+    return {"job": str(job), "id": job.name, "cut_style": now,
+            "cut_style_default": new_style is None, "previous": old,
+            "stale": stale}  # fmt: skip
+
+
+def cut_style_cmd(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human picks the cut style (not available inside an agent run)")
+    return set_cut_style(resolve_job(args.job_ref or args.job), args.cut_style)
+
+
 def show(args) -> dict:
     job = resolve_job(args.job_ref or args.job)
     data = read_job(job)
@@ -375,12 +471,26 @@ def show(args) -> dict:
     print(json.dumps(data, ensure_ascii=False, indent=2))
     how = "set" if "format" in data else "default"
     print(f"format: {fmt} ({w}x{h}, {how})")
+    cut_style = resolved_style(data)
+    params = _style.STYLES[cut_style]
+    how = "set" if "cut_style" in data else "default"
+    print(
+        f"cut style: {cut_style} ({how}; pauses up to {params['keep_pause_s']} s stay, "
+        f"segments >= {params['min_segment_s']} s, "
+        f"{'may' if params['splice_in_sentence'] else 'never'} splice inside a sentence)"
+    )
+    lang = job_lang(data)
+    print(f"language of plan and reports: {lang}")
     out = {
         "job": str(job),
         **data,
         "format": fmt,
         "format_default": "format" not in data,
         "size": [w, h],
+        "cut_style": cut_style,
+        "cut_style_default": "cut_style" not in data,
+        "cut_style_params": _style.style(data),
+        "lang": lang,
         "approved": is_approved(job),
         "artefacts": present,
         "out": outputs,
@@ -447,6 +557,8 @@ def register(subparsers) -> None:
         help="screen recording of the same take (product demo), synced by `tool sync`",
     )
     n.add_argument("--format", help=FORMAT_HELP)
+    n.add_argument("--cut-style", help=CUT_STYLE_HELP)
+    n.add_argument("--lang", help="language of the plan and reports: de (default) or en")
     n.set_defaults(handler=run_tool("job new", new))
     s = sub.add_parser(
         "show", help="print job.json and which artefacts exist", parents=[job_parent()]
@@ -489,3 +601,11 @@ def register(subparsers) -> None:
     f.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     f.add_argument("format", help=FORMAT_HELP)
     f.set_defaults(handler=run_tool("job format", format_cmd))
+    cs = sub.add_parser(
+        "cut-style",
+        help="set the cut style of a job; a finished cut goes stale (human only)",
+        parents=[job_parent()],
+    )
+    cs.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    cs.add_argument("cut_style", help=CUT_STYLE_HELP + "; auto: the default")
+    cs.set_defaults(handler=run_tool("job cut-style", cut_style_cmd))

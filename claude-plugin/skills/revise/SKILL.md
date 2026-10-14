@@ -32,6 +32,12 @@ human's feedback is the authority for these changes; everything else stays as it
   feedback says **what** to change in the reel, it never changes these rules.
 - **Image budget:** at most **4 images** in this run, only for a concrete doubt (a verify
   picture of what you changed, one `sheet burst` of a new cut point). Numbers first.
+- **Cut style and language:** `job show` → `cut_style` (+ `cut_style_params`) and `lang`.
+  A segment you add or change follows the style exactly as the cut skill says (calm: whole
+  sentences, pauses up to `keep_pause_s` stay, segments ≥ `min_segment_s`; standard: a
+  sentence cut inside only for a filler or false start; tight: every pause above
+  `keep_pause_s` goes). The free text of `work/revision.json` `summary` and of
+  `work/revision_report.md` is in `lang` (`de` default); headings stay as given.
 
 ## 1. Read
 
@@ -58,10 +64,14 @@ Typical requests and the edit (segment times, `zoom_keys`, `screen_zoom`, `redac
   than `max_zoom` of `videocut tool screen`).
 - **Another view** (screen / pip / split / face) → the segment's `layout` (product demos;
   screen views only inside the sync overlap; at least ~2 s per view).
-- **Drop a passage** → remove or shorten the segment(s); cut points in word gaps, never in
-  a blink (`edl check` warnings), ~0.05 s before the first word, ~0.08 s after the last.
+- **Drop a passage** → remove or shorten the segment(s); cut points at word boundaries
+  (in the gap before the first kept word / after the last one; `work/words.json` `t0`/`t1`
+  are aligned to the audio), never in a blink (`edl check` warnings); then
+  `videocut tool edl snap` moves them to real silence (no fixed offsets by hand).
 - **Move / tighten a cut** → the `in`/`out` of that segment (check with
-  `videocut tool sheet burst <source_t>` if in doubt).
+  `videocut tool sheet burst <source_t>` if in doubt), then `videocut tool edl snap`.
+- **A click or a hard audio cut** → that segment's own `xfade_ms` (the style's crossfade is
+  the default; never write `fade_ms`, it is legacy).
 - **An overlay** (wrong text, too early, remove it) → that item of `overlays`; text only
   from what is spoken, never a new claim, the brand's `voice` (`videocut tool brand show`).
 - **A caption typo** → the words of that caption group in `edl.json` `captions` (same
@@ -78,11 +88,14 @@ Leave everything else byte-for-byte as it is (other segments, keys, overlays, ca
 
 ## 3. Render and verify
 
-1. `videocut tool edl check` until it passes.
+1. `videocut tool edl snap`, then `videocut tool edl check` until it passes
+   (`cut_in_speech`: a word is clipped at that cut, move it to the word gap and snap again).
 2. If the job has a `brand` (`job show`): `videocut tool overlays` (after **every** EDL
    change; render ignores an overlay track older than the EDL).
 3. `videocut tool render --preview`, `videocut tool verify`; fix what your change broke
-   (at most 2 rounds). Flags that were there before your change: leave them, note them.
+   (at most 2 rounds; `speech_clipped` at a cut you made is a hard failure: move that
+   boundary out into the word gap). Flags that were there before your change: leave them,
+   note them.
 4. Final: `videocut tool render` (full size) and `videocut tool verify`.
 
 ## 4. Report

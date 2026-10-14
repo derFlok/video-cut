@@ -26,6 +26,12 @@ brand's look, render, check and fix. **You never change the cut.**
   (`du` or `sie`).
 - **Image budget:** at most **4 images** in this run, only the overlay and caption sheets
   `videocut tool verify` writes. Numbers from tool summaries first.
+- **Language:** overlay and caption text is what is spoken, in the language spoken (never
+  translated). `videocut tool job show` → `lang` (`de` default, `en`) is the language of
+  the free text of `work/overlay_report.md` (*Why*, rounds, doubts); headings stay as given.
+- **Cut style** (`job show` → `cut_style`): it shaped the cut, you keep it. With `calm` the
+  reel breathes: prefer fewer overlays (2–3 for 60 s) and let each stay 2.5–4 s; with
+  `tight` keep them short (1.5–2.5 s) so they follow the faster pace.
 
 ## 1. Read
 
