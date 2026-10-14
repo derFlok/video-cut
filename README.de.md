@@ -122,7 +122,9 @@ Standard: `16:9`, wenn der Auftrag eine Bildschirmaufnahme oder Screenshots hat
    klein unter dem Bildschirm, oder Bildschirm oben und du unten), wohin gezoomt wird und welche Stellen persönliche Daten
    zeigen könnten (E-Mail-Adressen, Telefonnummern, Namen). **Demodaten?** Du wirst bei der
    Freigabe gefragt: alles Demo, alles abdecken oder Nummern wählen (oder `--demo-data`).
-   Ohne Antwort wird alles Gelistete mit vollen Flächen abgedeckt.
+   Ohne Antwort wird alles Gelistete mit vollen Flächen abgedeckt. Wo der Text steht, misst
+   die Texterkennung des Macs auf der Aufnahme (lokal), und die Prüfung liest das fertige
+   Reel, um sicherzugehen, dass er abgedeckt ist.
 5. Ist die Synchronisierung unsicher, hält der Lauf an und erklärt, wie du sie von Hand
    setzt: `videocut tool sync --job <id> --offset <Sekunden>` (Bildschirmzeit minus
    Kamerazeit eines Moments, den man in beiden sieht oder hört), dann `videocut run <id>`.

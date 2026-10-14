@@ -183,7 +183,8 @@ Write **every** suspected item (when unsure, list it), numbered from 1:
 - Screen recording: `t0`/`t1` in **camera** seconds (the whole time it is visible).
   Screenshot: `asset` (the file from `job.json` `assets`).
 
-Then **`videocut tool redact measure`**: it finds each `text` on the screen (within your
+Then **`videocut tool redact measure`** (about half a second per second of screen time
+the candidates span; give the command a 600000 ms timeout): it finds each `text` on the screen (within your
 times and wherever else it shows), follows it while the page scrolls, and writes the
 measured `track` (time pieces with boxes), `measured` (`ok`, `partial`, `failed`) and a
 `note` back into `work/redaction.json`; `t0`/`t1` may grow to every time the text is shown.

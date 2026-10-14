@@ -142,7 +142,9 @@ Default: `16:9` when the job has a screen recording or screenshots (a product de
    and you below), where to zoom in, and which places may show personal data (e-mail addresses, phone numbers,
    names). **Demo data?** You are asked at approval: all demo, redact all, or pick numbers
    (or pass `--demo-data`). Without an answer everything listed is covered with solid
-   blocks.
+   blocks. Their position is measured on the recording with the Mac's own text
+   recognition (on this machine), and the check reads the finished reel to confirm the
+   text is covered.
 5. If the sync is unsure, the run stops and tells you how to set it by hand:
    `videocut tool sync --job <id> --offset <seconds>` (screen time minus camera time of one
    moment you can see or hear in both), then `videocut run <id>`.

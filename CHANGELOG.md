@@ -466,3 +466,35 @@
   often English, while the UI is German.
 - FastAPI 0.143 pulls in `opentelemetry-api`. SSE keep-alive every 15 s; `?follow=0` replays
   the events once and closes.
+
+### Fixed — Personal-data redaction: measured boxes and a real coverage check
+- Redaction boxes are measured, never estimated by eye. In 2 of 2 real runs the plan agent
+  placed the boxes from downscaled stills about one text line too high: the block covered
+  the line above and the name stayed readable, and verify did not notice (it only checked
+  that a block was drawn where the box said).
+- Local text recognition (`tools/_ocr.py`): macOS Vision (`VNRecognizeTextRequest`) called
+  through the Objective-C runtime with ctypes. No download, no package, no compiler;
+  frames are handed over in memory and never leave the machine. Off macOS the tools say
+  so and verify fails closed (`redaction_unchecked`).
+- `videocut tool redact text` → `work/screen_text.json`: the text on the screen recording
+  every 2 s and after every scene change, with camera times, boxes and pattern hits
+  (e-mail, phone, IBAN-like); also the text of a job's screenshots. Part of the demo prep
+  in `videocut run`, so the plan agent reads it instantly.
+- `videocut tool redact measure`: the plan agent names WHICH text is personal (`text` in
+  `work/redaction.json`, the whole panel as `box`); the tool finds WHERE, follows it while
+  the page scrolls (1 s grid, halved down to 1/15 s where it moves, appears or
+  disappears) and writes a `track` of time pieces with the measured box plus a margin.
+  Fail closed: where the text is not found, the whole named area is covered and the
+  candidate says so (`measured` partial/failed, `note`; the app shows it in the
+  personal-data dialog). `plan check` fails while an e-mail/phone/name candidate has no
+  text or a text candidate is not measured. Render, overlays, `edl check` (it now prints
+  the exact block to add) and the plan stills use the measured track.
+- verify `coverage`: for every enforced text candidate, sampled output frames of every
+  screen segment that shows it (5 per segment plus one per second of every screen
+  segment): the text is found again on the screen frame the reel shows, mapped through
+  layout and zoom into output px, and must be ≥ 98 % block colour; the reel frame itself
+  is read too (the text readable there is a leak). Either is `redaction_leak`, a hard
+  failure with output time and candidate id.
+- Frames of a screen recording are taken as the reel shows them: the last frame at or
+  before the time (macOS records a frame only when the screen changes; a plain seek gave
+  the next change, up to 2 s later on a real recording).
