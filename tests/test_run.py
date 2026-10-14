@@ -498,3 +498,21 @@ def test_skills_follow_the_cut_style_and_the_job_language():
     for text in skills.values():
         assert "cut_style" in text and "`lang`" in text
     assert "Cut style: <cut_style>" in skills["plan"]
+
+
+def test_a_revision_first_moves_an_old_job_into_video_time(tmp_path, monkeypatch):
+    """A revision runs no prep: ingest upgrades a job ingested before the video time base
+    first, with the job's own denoise setting; an up-to-date job is left alone."""
+    calls = []
+    monkeypatch.setattr(run, "tool", lambda job, *argv: calls.append(argv) or {})
+    job = tmp_path / "j"
+    (job / "work").mkdir(parents=True)
+    meta = job / "work" / "audio.json"
+    run.upgrade_time_base(job)  # never ingested: nothing to move
+    meta.write_text(json.dumps({"denoised": True, "rate": 48000, "channels": 1}))
+    run.upgrade_time_base(job)
+    meta.write_text(json.dumps({"denoised": False, "time_base": "shifting"}))
+    run.upgrade_time_base(job)
+    meta.write_text(json.dumps({"denoised": True, "time_base": "video"}))
+    run.upgrade_time_base(job)
+    assert calls == [("ingest", "--denoise"), ("ingest",)]

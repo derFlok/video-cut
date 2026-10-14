@@ -12,6 +12,7 @@ Validation works on the raw JSON and reports every problem with a JSON path
 (`$.segments[2].out`), so Claude can fix an EDL in one round.
 """
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass, field
@@ -565,3 +566,44 @@ def remap_output_times(data: dict, before: list[dict], after: list[dict]) -> dic
     if _num(data.get("cover")):
         out["cover"] = move(data["cover"], False)
     return out
+
+
+def shift_source_times(data: dict, offset: float, duration: float | None = None) -> dict:
+    """Copy of the EDL dict with every cut point and zoom key moved by `offset` seconds
+    (ingest's upgrade of a job whose words were in audio-stream time: the cut was placed on
+    those words). `redact` blocks stay: they were measured on the video. Output times
+    (captions, overlays) do not change, since every segment keeps its length; a segment
+    that would leave [0, duration] is moved back inside as a whole."""
+
+    segs = []
+    for s in data.get("segments", []):
+        s = dict(s)
+        if _num(s.get("in")) and _num(s.get("out")):
+            d = offset
+            if s["in"] + d < 0:
+                d = -s["in"]
+            if duration is not None and s["out"] + d > duration:
+                d = duration - s["out"]
+            for k in ("in", "out", "in_src", "out_src"):
+                if _num(s.get(k)):
+                    s[k] = round(s[k] + d, 4)
+            if isinstance(s.get("zoom_keys"), list):
+                s["zoom_keys"] = [
+                    [round(k[0] + d, 4), *k[1:]] if isinstance(k, list) and k and _num(k[0]) else k
+                    for k in s["zoom_keys"]
+                ]
+            if isinstance(s.get("screen_zoom"), list):
+                s["screen_zoom"] = [
+                    {**k, "t": round(k["t"] + d, 4)} if isinstance(k, dict) and _num(k.get("t"))
+                    else k
+                    for k in s["screen_zoom"]
+                ]  # fmt: skip
+        segs.append(s)
+    return {**data, "segments": segs}
+
+
+def segments_sha(data: dict) -> str:
+    """Hash of what makes the cut (source, fps, size, segments) of an EDL dict; captions and
+    overlays are not part of it."""
+    cut = {k: data.get(k) for k in ("source", "fps", "size", "segments")}
+    return hashlib.sha256(json.dumps(cut, sort_keys=True).encode()).hexdigest()

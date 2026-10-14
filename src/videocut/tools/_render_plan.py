@@ -199,9 +199,11 @@ def _t(v: float) -> str:
     return f"{v:.6f}"
 
 
-def audio_chain(plan: Plan, audio_in: str) -> list[str]:
+def audio_chain(plan: Plan, audio_in: str, audio_offset: float = 0.0) -> list[str]:
     """Filter lines that cut `audio_in` (e.g. "1:a") into the segments (with their crossfade
-    halves), crossfade them at every cut and join them as [cut]."""
+    halves), crossfade them at every cut and join them as [cut]. `audio_offset`: where the
+    input's first sample lies in video time (0 for work/audio.wav, which is in video time;
+    audio_start - video_start for a source stream)."""
     lines = []
     for i, a in enumerate(plan.audio):
         f = [
@@ -219,10 +221,12 @@ def audio_chain(plan: Plan, audio_in: str) -> list[str]:
         lines.append(f"[a{i}]" + ",".join(f) + f"[ac{i}];")
     n = len(plan.audio)
     # first_pts=0 + async: an audio stream that starts after the video gets silence in
-    # front, so a segment from before its first sample is not shifted early
+    # front (one that starts before it loses what lies before video time 0), so a segment
+    # from before its first sample is not shifted early
+    # PTS-STARTPTS + offset: video time, whatever the container's first timestamp is
     split = (
-        f"[{audio_in}]aresample={RATE}:async=1:first_pts=0,aformat=channel_layouts=stereo,"
-        f"asplit={n}"
+        f"[{audio_in}]asetpts=PTS-STARTPTS{audio_offset:+.6f}/TB,"
+        f"aresample={RATE}:async=1:first_pts=0,aformat=channel_layouts=stereo,asplit={n}"
     ) + "".join(f"[a{i}]" for i in range(n))
     if n == 1:
         return [split + ";", *lines, "[ac0]anull[cut]"]
@@ -279,7 +283,10 @@ def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
     """Filter lines that cut, crop and scale `video_in` (e.g. "0:0") into the ranges and join
     them as [v]; `to_sdr` (a tonemap chain) runs once on the joined output-size frames."""
     n = len(plan.ranges)
-    lines = [f"[{video_in}]split={n}" + "".join(f"[v{i}]" for i in range(n)) + ";"]
+    # PTS-STARTPTS: video time (0 = the first frame) also when the audio starts earlier
+    lines = [
+        f"[{video_in}]setpts=PTS-STARTPTS,split={n}" + "".join(f"[v{i}]" for i in range(n)) + ";"
+    ]
     for i, r in enumerate(plan.ranges):
         f = range_filters(plan, r)
         lines.append(f"[v{i}]" + ",".join(f) + f"[vc{i}];")
@@ -297,6 +304,7 @@ def graph(
     audio_in: str,
     to_sdr: str = "",
     video: list[str] | None = None,
+    audio_offset: float = 0.0,
 ) -> str:
     """Full render graph: [v] video, [a] normalised audio (+ the silent tail). `video`
     replaces the face-only video lines (a render with layouts, _layouts.video_chain)."""
@@ -304,17 +312,17 @@ def graph(
     lines = [
         *(video if video is not None else video_chain(plan, video_in, to_sdr)),
         ";",
-        *audio_chain(plan, audio_in),
+        *audio_chain(plan, audio_in, audio_offset),
         ";",
         f"[cut]{loudnorm(measured)}{pad}[a]",
     ]
     return "\n".join(lines) + "\n"
 
 
-def measure_graph(plan: Plan, audio_in: str) -> str:
+def measure_graph(plan: Plan, audio_in: str, audio_offset: float = 0.0) -> str:
     """First pass: the cut audio into a measuring loudnorm, output [a] to discard."""
     lines = [
-        *audio_chain(plan, audio_in),
+        *audio_chain(plan, audio_in, audio_offset),
         ";",
         f"[cut]loudnorm=I={TARGET_I}:TP={TARGET_TP - TP_HEADROOM}:LRA={TARGET_LRA}"
         ":print_format=json[a]",

@@ -73,7 +73,7 @@ from .common import (
     write_json,
 )
 from .edl import snap_job
-from .ingest import probe
+from .ingest import audio_offset, probe
 from .job import PROJECT, is_approved, redaction_enforced
 
 CRF, PRESET = "18", "medium"
@@ -297,7 +297,9 @@ def render(args) -> dict:
     # First loudness pass (audio only, fast). Also run for previews: loudnorm turns digital
     # silence into NaN samples, so silence must be known before the render.
     mgraph = work / "render_measure.txt"
-    _write_graph(mgraph, plan_mod.measure_graph(plan, audio_in))
+    # a source stream is moved into video time by its start; work/audio.wav already is
+    a_off = 0.0 if audio_args else audio_offset(info)
+    _write_graph(mgraph, plan_mod.measure_graph(plan, audio_in, a_off))
     measured = _loudnorm_json(
         _ffmpeg_info(*inputs, "-/filter_complex", str(mgraph), "-map", "[a]", "-f", "null", "-")
     )
@@ -325,7 +327,7 @@ def render(args) -> dict:
                 f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
                 f" blurry; clamped to {c['max_zoom']}x"
             )
-    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video)
+    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off)
     if use_overlay:
         graph += composite_graph(len(inputs) // 2, plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]

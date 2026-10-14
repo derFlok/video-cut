@@ -61,6 +61,7 @@ from pathlib import Path
 
 from . import agent
 from . import redaction as red
+from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
 from .tools import _format, _style
 from .tools.common import ToolError, read_job, resolve_job, update_job
@@ -416,11 +417,9 @@ def segments_sha(job: Path) -> str | None:
     """Hash of what makes the cut (source, fps, size, segments) in work/edl.json; captions
     and overlays are not part of it."""
     try:
-        edl = json.loads((job / "work" / "edl.json").read_text())
-        cut = {k: edl.get(k) for k in ("source", "fps", "size", "segments")}
+        return edl_segments_sha(json.loads((job / "work" / "edl.json").read_text()))
     except (OSError, ValueError, AttributeError):
         return None
-    return hashlib.sha256(json.dumps(cut, sort_keys=True).encode()).hexdigest()
 
 
 def _final_verify(job: Path, started: float, phase: str) -> dict:
@@ -958,6 +957,19 @@ def _record_overlays(job: Path, brand: str, verify: dict) -> None:
     )
 
 
+def upgrade_time_base(job: Path) -> None:
+    """Move a job ingested before the video time base into it (ingest shifts its wavs,
+    words and EDL; the cut and overlay records follow). Nothing for an up-to-date job. A
+    revision runs no prep, so it does this first: otherwise its snap would place the cut
+    in video time and a later upgrade would shift it again."""
+    try:
+        meta = json.loads((job / "work" / "audio.json").read_text())
+    except (OSError, ValueError):
+        return
+    if isinstance(meta, dict) and meta.get("time_base") != "video":
+        tool(job, "ingest", *(["--denoise"] if meta.get("denoised") else []))
+
+
 def revise(
     job: Path, feedback: str, at_s: float | None = None, max_turns: int = 60, say=print
 ) -> int:
@@ -971,6 +983,7 @@ def revise(
         raise RunError(f"the plan of {job.name} is not approved; feedback needs a finished reel")
     if not ((out / "reel.mp4").is_file() and (work / "edl.json").is_file()):
         raise RunError(f"{job.name} has no finished reel yet; run `videocut run {job.name}`")
+    upgrade_time_base(job)
     if not cut_done(job):
         raise RunError(
             f"out/reel.mp4 of {job.name} is not the cut of the approved plan; "

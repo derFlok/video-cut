@@ -1,5 +1,6 @@
 """Video time base: ingest puts the wavs in video time; old jobs are shifted in place."""
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -9,7 +10,9 @@ import numpy as np
 import pytest
 from helpers import run_tool
 
+from videocut.edl import segments_sha
 from videocut.tools import _transcribe_energy as energy
+from videocut.tools.common import read_job, update_job
 
 pytestmark = pytest.mark.media
 FRAME = 1 / 30
@@ -103,9 +106,27 @@ def test_old_job_is_shifted_in_place_without_transcribing(capsys, clip_dir, port
     (work / "transcribe.json").write_text(
         json.dumps({"model": TURBO, "language": "de", "filler_prompt": True})
     )
+    # ... and cut: an EDL placed on those words, recorded as the finished cut
+    segs = [{"in": 0.45, "out": 1.5, "zoom_keys": [[1.0, 1.2]]}, {"in": 2.0, "out": 3.0}]
+    edl = {"fps": 30, "size": [1080, 1920], "source": "input/x.mp4", "segments": segs}
+    (work / "edl.json").write_text(json.dumps(edl))
+    sha = segments_sha(edl)
+    edl_file_sha = hashlib.sha256((work / "edl.json").read_bytes()).hexdigest()
+    overlays = {"segments_sha256": sha, "edl_sha256": edl_file_sha, "brand": "b"}
+    update_job(job, cut={"segments_sha256": sha, "project_sha256": "p"}, overlays=overlays)
     code, s, _ = run_tool(capsys, "ingest", "--job", "old")
     assert code == 0, s
-    assert set(s["upgraded"]) == {"audio", "words"} and s["audio_offset_s"] == off
+    assert set(s["upgraded"]) == {"audio", "words", "edl"} and s["audio_offset_s"] == off
+    moved_edl = json.loads((work / "edl.json").read_text())
+    assert [(g["in"], g["out"]) for g in moved_edl["segments"]] == [
+        (round(0.45 + off, 4), round(1.5 + off, 4)), (round(2.0 + off, 4), round(3.0 + off, 4))
+    ]  # fmt: skip
+    assert moved_edl["segments"][0]["zoom_keys"] == [[round(1.0 + off, 4), 1.2]]
+    rec = read_job(job)  # the same cut in the new time base: the records follow
+    assert rec["cut"]["segments_sha256"] == segments_sha(moved_edl)
+    assert rec["overlays"]["segments_sha256"] == segments_sha(moved_edl)
+    new_file_sha = hashlib.sha256((work / "edl.json").read_bytes()).hexdigest()
+    assert rec["overlays"]["edl_sha256"] == new_file_sha
     got, _ = energy.read_wav(new_audio)
     assert len(got) == len(expected) and lag(expected, got, rate) == pytest.approx(0, abs=0.001)
     meta = json.loads((work / "transcribe.json").read_text())

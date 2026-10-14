@@ -795,7 +795,11 @@ def video_chain(
     fps = plan.fps
     cams = [i for i, _ in enumerate(plan.ranges) if i not in segs or segs[i].layout != "screen"]
     if cams:
-        lines = [f"[{video_in}]split={len(cams)}" + "".join(f"[c{i}]" for i in cams) + ";"]
+        lines = [  # PTS-STARTPTS: video time, as in _render_plan.video_chain
+            f"[{video_in}]setpts=PTS-STARTPTS,split={len(cams)}"
+            + "".join(f"[c{i}]" for i in cams)
+            + ";"
+        ]
     else:  # screen only: the camera gives just the audio
         lines = [f"[{video_in}]nullsink;"]
     if segs:

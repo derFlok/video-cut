@@ -28,7 +28,9 @@ padded with silence (or trimmed) by audio_offset_s = audio_start - video_start, 
 in audio.wav or words.json is a time in the video. A job ingested before this rule
 (audio.json without "time_base") is upgraded in place: the wavs are shifted, and
 words.json (with alignment and candidates) is shifted along instead of transcribed again,
-so the words under an approved plan stay the same.
+so the words under an approved plan stay the same; work/edl.json, whose cut points were
+placed on those words, moves with them (the job.json cut and overlay records follow: it
+is the same cut). The plan keeps its numbers (they guide the cut, the words decide it).
 
 Audio comes from one deliberately chosen stream: the first AAC/PCM one, else the first
 other decodable one (phones add extra tracks such as spatial audio that ffmpeg's default
@@ -37,12 +39,14 @@ other decodable one (phones add extra tracks such as spatial audio that ffmpeg's
 Idempotent: every output that is newer than its input is kept.
 """
 
+import hashlib
 import json
 import shutil
 import tempfile
 from fractions import Fraction
 from pathlib import Path
 
+from ..edl import segments_sha, shift_source_times
 from ._color import is_hdr, output_tags, to_sdr
 from .common import (
     ToolError,
@@ -224,7 +228,9 @@ def _denoise(raw: Path, dst: Path) -> None:
 def _proxy(src: Path, dst: Path, info: dict) -> None:
     s = PROXY_SHORT_SIDE
     scale = f"scale='if(gt(iw,ih),-2,{s})':'if(gt(iw,ih),{s},-2)'"
-    vf = ",".join(f for f in (scale, to_sdr(info)) if f)
+    # proxy time = video time (0 = the first frame), also when the audio starts earlier
+    vf = ",".join(f for f in ("setpts=PTS-STARTPTS", scale, to_sdr(info)) if f)
+    af = f"asetpts=PTS-STARTPTS{audio_offset(info):+.6f}/TB,aresample=async=1:first_pts=0"
     ffmpeg_to(
         dst,
         "-i",
@@ -235,6 +241,8 @@ def _proxy(src: Path, dst: Path, info: dict) -> None:
         f"0:{info['audio_index']}",
         "-vf",
         vf,
+        "-af",
+        af,
         *output_tags(info),
         "-c:v",
         "libx264",
@@ -352,6 +360,41 @@ def _ingest_screen(job: Path, step, upgraded: list[str]) -> dict | None:
     }
 
 
+def _shift_edl(job: Path, offset: float, duration: float) -> bool:
+    """Move work/edl.json of an upgraded job into video time: its cut points were placed
+    on the words that just moved. It is the same approved cut described in the new time
+    base, so job.json's cut and overlay records follow it (the reel stays the finished
+    one; the next render cuts where the words really are)."""
+    path = job / "work" / "edl.json"
+    try:
+        raw = path.read_bytes()
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return False
+    if not (isinstance(data, dict) and isinstance(data.get("segments"), list)):
+        return False
+    new = shift_source_times(data, offset, duration)
+    write_json(path, new)
+    rec = read_job(job)
+    fields = {}
+    cut, overlays = rec.get("cut"), rec.get("overlays")
+    try:
+        old_sha, new_sha = segments_sha(data), segments_sha(new)
+    except (TypeError, ValueError):
+        return True
+    if isinstance(cut, dict) and cut.get("segments_sha256") == old_sha:
+        fields["cut"] = {**cut, "segments_sha256": new_sha}
+    if isinstance(overlays, dict):
+        if overlays.get("segments_sha256") == old_sha:
+            overlays = {**overlays, "segments_sha256": new_sha}
+        if overlays.get("edl_sha256") == hashlib.sha256(raw).hexdigest():
+            overlays = {**overlays, "edl_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        fields["overlays"] = overlays
+    if fields:
+        update_job(job, **fields)
+    return True
+
+
 def ingest(args) -> dict:
     job = resolve_job(args.job)
     src = source_path(job)
@@ -403,6 +446,10 @@ def ingest(args) -> dict:
             if words_fresh:
                 shift_to_video_time(work, offset)
                 upgraded.append("words")
+            if offset and _shift_edl(job, offset, info["duration"]):
+                upgraded.append("edl")
+            if offset < 0:  # an old proxy of audio that starts first is not in video time
+                proxy.unlink(missing_ok=True)
         else:
             raw.unlink(missing_ok=True)
     step(

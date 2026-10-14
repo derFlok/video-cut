@@ -115,7 +115,10 @@ def test_graph_has_every_range_and_loudnorm_second_pass():
     }
     g = rp.graph(plan, measured, "0:0", "1:a", _color.to_sdr({"color_transfer": "smpte2084"}))
     assert g.count("crop=") == 2 and g.count("atrim=start=") == 2
-    assert "[0:0]split=2" in g and "[1:a]aresample" in g
+    assert (
+        "[0:0]setpts=PTS-STARTPTS,split=2" in g
+        and "[1:a]asetpts=PTS-STARTPTS+0.000000/TB,aresample" in g
+    )
     assert "linear=true" in g and "measured_I=-20" in g and "tonemap=" in g
     assert "linear=true" not in rp.graph(plan, None, "0:0", "0:1")
     assert "print_format=json" in rp.measure_graph(plan, "0:1")

@@ -34,7 +34,8 @@ VIDEO_SHA = "8002561d31a3011a5e163717717ce3abe896047df461feb05d67c44e086d3e06"
 
 def test_face_only_graph_is_unchanged():
     # sha256 of the video lines origin/main produced for this EDL before layouts existed
-    # (the audio lines changed with the crossfades at every cut).
+    # (the audio lines changed with the crossfades at every cut; the camera input now
+    # starts with setpts=PTS-STARTPTS, so its time is video time).
     segs = [
         {"in": 0.3, "out": 1.0},
         {"in": 1.9, "out": 2.6, "crop": {"cx": 0.4, "cy": 0.5, "zoom": 1.0},
@@ -45,6 +46,8 @@ def test_face_only_graph_is_unchanged():
         plan = rp.with_tail(rp.build(edl, (1920, 1080), OUT, layouts), 5)
         g = rp.graph(plan, "silent", "0:0", "1:a", "zscale=x")
         video = g[: g.index("[1:a]")]
+        assert video.startswith("[0:0]setpts=PTS-STARTPTS,split=")
+        video = video.replace("[0:0]setpts=PTS-STARTPTS,", "[0:0]", 1)
         assert hashlib.sha256(video.encode()).hexdigest() == VIDEO_SHA
 
 
