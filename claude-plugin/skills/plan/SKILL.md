@@ -190,7 +190,8 @@ measured `track` (time pieces with boxes), `measured` (`ok`, `partial`, `failed`
 `note` back into `work/redaction.json`; `t0`/`t1` may grow to every time the text is shown.
 Where the text is not found, the whole `box` area is covered (`partial` / `failed`): say
 so in project.md (the note) and check the `text` spelling against `redact text` once;
-measure again after a fix. Do not edit `track`, `measured` or `note` yourself.
+measure again after a fix. Do not edit `track`, `measured`, `note` or `measure_sig` yourself; after changing a
+candidate's `text`, `box` or times, measure again.
 `plan check` fails while a text candidate is not measured.
 
 List the same items numbered under **Personal data** in project.md, each with the

@@ -43,6 +43,7 @@ SEGMENTS = {
 }  # fmt: skip
 FORMATS = {(1080, 1920): "9:16", (1920, 1080): "16:9"}
 
+PIECE = {"t0": 0.0, "t1": 7.5, "box": [0.3, 0.4, 0.5, 0.45], "source": "ocr"}
 ocr = pytest.mark.skipif(not _ocr.available(), reason="needs macOS Vision")
 
 
@@ -365,9 +366,17 @@ def test_plan_check_wants_text_candidates_measured():
     assert any('candidate 3: needs "text"' in e for e in errs), errs
     other = {"id": 4, "kind": "other", "t0": 0.0, "t1": 1.0, "box": [0, 0, 0.2, 0.2],
              "reason": "a face"}  # fmt: skip
-    done = [{**c, "measured": "ok"} for c in _cands()] + [other]
-    plan["personal_data"] = done
-    assert plan_tool.validate(plan, candidates=done) == []
+    done = []
+    for c in _cands():
+        c |= {"measured": "ok", "range": [c["t0"], c["t1"]], "track": [dict(PIECE)]}
+        done.append({**c, "measure_sig": red.measure_sig(c)})
+    plan["personal_data"] = [*done, other]
+    assert plan_tool.validate(plan, candidates=[*done, other]) == []
+    # a measurement does not carry over to another text or area
+    edited = [{**done[0], "text": "Max Beispielname"}, *done[1:], other]
+    plan["personal_data"] = edited
+    errs = plan_tool.validate(plan, candidates=edited)
+    assert errs == [errs[0]] and "candidate 1: not measured (or changed since)" in errs[0]
 
 
 @ocr
@@ -406,3 +415,59 @@ def test_grab_takes_the_frame_shown_on_a_variable_frame_rate_recording(tmp_path)
     info = {"duration": 8.0, "size": (64, 48)}
     red_at = {t: redact_tool.grab_screen(vfr, info, t)[24, 32, 0] > 200 for t in (1, 4.9, 5.0, 7)}
     assert red_at == {1: True, 4.9: True, 5.0: False, 7: False}
+
+
+def test_a_sighting_outside_the_named_area_does_not_count_as_covering_it():
+    """The text is shown twice; recognition only finds the copy outside the named area
+    between 3 and 5 s: the whole area is covered there."""
+
+    def look(t):
+        title = [[0.05, 0.02, 0.25, 0.04]]
+        return title if 3.0 <= t <= 5.0 else [*title, [0.6, 0.5, 0.8, 0.52]]
+
+    tr = redact_tool.Tracker(look, 8.0, (2880, 1800))
+    tr.run((1.0, 7.0), seeds=[])
+    pieces = tr.pieces((1.0, 7.0), [0.55, 0.45, 0.9, 0.6])
+    area = [p for p in pieces if p["source"] == "area"]
+    assert area and min(p["t0"] for p in area) <= 3.0 and max(p["t1"] for p in area) >= 5.0
+    assert all(p["t0"] >= 2.9 and p["t1"] <= 5.1 for p in area), area
+    assert redact_tool._status(pieces, cam=True)[0] == "partial"
+
+
+def test_verify_does_not_trust_unmeasured_or_edited_candidates():
+    from videocut.tools import _verify_screen as vs
+
+    c = {**_cands()[0], "range": [0.0, 7.5], "measured": "ok", "track": [dict(PIECE)]}
+    c["measure_sig"] = red.measure_sig(c)
+    plain = {"id": 2, "kind": "phone", "t0": 0.0, "t1": 7.5, "box": CARD_AREA, "reason": "r"}
+    face = {"id": 3, "kind": "other", "t0": 0.0, "t1": 7.5, "box": CARD_AREA, "reason": "r"}
+    assert vs.unchecked([c, face]) == []
+    got = vs.unchecked([{**c, "text": "Max Beispielname"}, plain])
+    assert [(d["id"], d["flags"]) for d in got] == [(1, ["redaction_unchecked"]),
+                                                    (2, ["redaction_unchecked"])]  # fmt: skip
+
+
+@ocr
+def test_screenshot_box_off_the_text_is_a_leak(capsys, material, tmp_path, videocut_home):
+    from videocut.tools import _verify_screen as vs
+
+    card = tmp_path / "card.png"
+    clips._card_png(tmp_path, card, [k for k, *_ in clips.CARD_FIELDS])
+    code, s, out = run_tool(capsys, "job", "new", str(material[0]), "--asset", str(card),
+                            "--id", "shot-leak")  # fmt: skip
+    assert code == 0, out
+    job = Path(s["job"])
+    asset = json.loads((job / "job.json").read_text())["assets"][0]
+    cand = {"id": 1, "kind": "name", "asset": asset, "box": [0.0, 0.0, 1.0, 1.0],
+            "text": NAME, "reason": "name on the card"}  # fmt: skip
+    (job / red.FILE).write_text(json.dumps({"candidates": [cand]}))
+    assert run_tool(capsys, "redact", "measure", "--job", str(job))[0] == 0
+    c = red.load(job)[0]
+    item = {"scene": "screenshot_frame", "t0": 1, "t1": 3, "props": {"file": asset}}
+    docs = vs.asset_coverage(job, {"overlays": [item]}, [c])
+    assert docs and not [d for d in docs if d["flags"]], docs
+    line = 80 / clips.CARD_SIZE[1]
+    for p in c["track"]:  # one line too high, as estimated by eye
+        p["box"] = [p["box"][0], p["box"][1] - line, p["box"][2], p["box"][3] - line]
+    docs = vs.asset_coverage(job, {"overlays": [item]}, [c])
+    assert any(d["flags"] == ["redaction_leak"] and d["overlay"] == 0 for d in docs), docs

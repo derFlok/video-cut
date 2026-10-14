@@ -384,8 +384,9 @@ language correction) called through the Objective-C runtime with ctypes: part of
 no download; frames are passed in memory, nothing is written or sent. Up to 4 frames are
 read at once (Vision runs outside the GIL; ~0.4 s per 4K frame on an M-series Mac, more
 threads do not help). A frame of the screen recording is the one the reel shows at that
-time: the last frame with pts ≤ t (+ half a 30 fps frame), found from the packet
-timestamps (macOS writes frames only on change; a plain seek returns the next change).
+time: the last frame with pts ≤ t (+ half an output frame), found from the packet
+timestamps (macOS writes frames only on change; a plain seek returns the next change),
+grabbed with `-seek_timestamp 1` (the pts itself, not an offset from the file start).
 `redact text` (also in the demo prep) reads the screen every 2 s and 0.2 s after every
 scene change → `work/screen_text.json` [{t, camera_t, box, text, conf}] and the summary:
 distinct texts with times and `suggest` (e-mail, phone, IBAN-like by pattern), plus the
@@ -394,12 +395,17 @@ email/phone/name; `plan check` fails otherwise) and `box` = the whole panel it i
 `redact measure` finds the text (approximate match: case, spacing, punctuation and a few
 OCR errors tolerated; the matched part of a line via Vision's `boundingBoxForRange`,
 tightened to its ink) on a 1 s grid over the candidate's range and outward from every
-sighting until it is gone, halving every interval where it appears, disappears or moves
-by more than a quarter of its height, down to 1/15 s. Consecutive sightings become
+sighting until it is gone (two empty grid samples: one recognition miss does not end it),
+halving every interval where it appears, disappears or moves by more than a quarter of
+its height, down to 1/15 s. A frame that cannot be decoded (except at the very end) stops
+the tool instead of counting as "not shown". Consecutive sightings become
 `track` pieces {t0, t1, box (union of both ends + 0.3 × text height, ≥ 6 px), text_box,
 source "ocr"}; a gap under 1 s between two matching sightings is bridged. Where the text
-is not found inside the plan's range the piece covers the whole `box` + 0.03 (source
-"area", `measured` "partial"/"failed", `note`): fail closed. `t0`/`t1` grow to every time
+is not found inside the plan's range, or only outside the named area (the same text
+elsewhere on the screen), the piece covers the whole `box` + 0.03 (source "area",
+`measured` "partial"/"failed", `note`): fail closed. `measure_sig` fingerprints text,
+box and range: a candidate edited after measuring no longer counts as measured
+(`redaction.is_measured`; `plan check` fails, verify flags `redaction_unchecked`). `t0`/`t1` grow to every time
 the text is shown; `range` keeps the plan's times. `sheet plan` draws the blocks of the
 track at the middle of the first measured piece (`still_t`, `still_boxes`), the app shows
 those boxes and the note.
@@ -407,13 +413,17 @@ those boxes and the note.
 **Coverage check** (verify, `coverage`): for every enforced candidate with `text`, up to 5
 output frames of every screen segment overlapping its time plus one frame per second of
 every screen segment (for all of them). On each, the text is searched on the screen frame
-that the reel shows there; every place found (else the track's text box of that time, else
-its area) is mapped through the layout and the zoom window to output px, and ≥ 98 % of the
-visible part (not under a pip bubble) must be the block colour (`colors.bg`, ±28 per
+that the reel shows there; every place found, and the track's text box of that time (or
+its area), is mapped through the layout and the zoom window to output px, and ≥ 98 % of
+the visible part (not under a pip bubble) must be the block colour (`colors.bg`, ±28 per
 channel). The reel frame's screen view is read as well: the text found there is readable.
-Either flags `redaction_leak` (verify not ok) with output time, segment and candidate id;
-without text recognition every text candidate is `redaction_unchecked` (not ok either).
-Screenshot overlays keep the measured boxes but are not read back from the reel.
+Either flags `redaction_leak` (verify not ok) with output time, segment and candidate id.
+`redaction_unchecked` (not ok either): no text recognition, a reel or screen frame that
+cannot be read, an e-mail/phone/name candidate shown without `text`, or a text candidate
+not measured for its current text and area. The reel is decoded once and streamed (32
+frames at a time). Screenshots: the text found on the image must lie inside a redact box
+of every `screenshot_frame` item that shows it (`props.redact` plus the measured boxes
+overlays adds); the overlay itself is not read back from the reel.
 
 **Screenshots only.** `job new --asset FILE...` takes many images; `sheet assets` puts them
 on one numbered contact sheet (≤ 1080×1920, with sizes and orientation in the summary), so

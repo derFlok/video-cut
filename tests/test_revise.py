@@ -399,9 +399,10 @@ def test_plan_feedback_revises_the_plan_and_needs_a_new_approval(fake_agent, vid
 
 
 def test_plan_check_accepts_a_valid_plan_and_names_problems(capsys, videocut_home):
-    job = make_job(videocut_home, [{"in": 0, "out": 2}], cands=[CAND], sync=SYNC)
+    cand = {**CAND, "kind": "customer"}  # an e-mail needs a measured text (test_redact_measure)
+    job = make_job(videocut_home, [{"in": 0, "out": 2}], cands=[cand], sync=SYNC)
     (job / "work" / "probe.json").write_text(json.dumps({"duration": 10.0}))
-    plan = {**PLAN, "personal_data": [CAND]}
+    plan = {**PLAN, "personal_data": [cand]}
     (job / "work" / "plan.json").write_text(json.dumps(plan))
     code, s, _ = run_tool(capsys, "plan", "check", "--job", str(job))
     assert code == 0 and s["keep"] == 3 and s["personal_data"] == 1
@@ -411,7 +412,7 @@ def test_plan_check_accepts_a_valid_plan_and_names_problems(capsys, videocut_hom
         "keep_list": [{"n": 1, "src": [3, 12], "text": "x", "why": "y"}],
         "views": [{"n": 1, "src": [0, 2], "layout": "screen", "zoom_box": [0.5, 0, 0.4, 1]}],
         "overlays": [{"n": 1, "src": [0, 1], "scene": "fireworks", "text": "x", "why": "y"}],
-        "personal_data": [{**CAND, "box": [0.1, 0.1, 0.5, 0.5]}],
+        "personal_data": [{**cand, "box": [0.1, 0.1, 0.5, 0.5]}],
     }
     (job / "work" / "plan.json").write_text(json.dumps(bad))
     code, s, out = run_tool(capsys, "plan", "check", "--job", str(job))
@@ -435,8 +436,8 @@ def test_sheet_plan_draws_stills_for_views_and_personal_data(capsys, videocut_ho
     meta = json.loads((job / "job.json").read_text())
     meta.update(screen="input/screen.mp4", assets=["input/shot.png"])
     (job / "job.json").write_text(json.dumps(meta))
-    shot = {"id": 2, "kind": "name", "asset": "input/shot.png", "box": [0.1, 0.1, 0.5, 0.2]}
-    cands = [{**CAND, "t1": 2.0}, shot]
+    shot = {"id": 2, "kind": "customer", "asset": "input/shot.png", "box": [0.1, 0.1, 0.5, 0.2]}
+    cands = [{**CAND, "kind": "customer", "t1": 2.0}, shot]
     (job / "work" / "redaction.json").write_text(json.dumps({"candidates": cands}))
     plan = {
         **PLAN,

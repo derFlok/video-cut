@@ -18,7 +18,8 @@
                             "ocr": box = the measured text (text_box) plus a margin, the
                             union over the piece; "area": the text was not found there,
                             box = the whole named area plus AREA_PAD (fail closed)
-        "measured": "ok" | "partial" | "failed", "note": what the human should know
+        "measured": "ok" | "partial" | "failed", "note": what the human should know,
+        "measure_sig": fingerprint of text, box and range (measure_sig(); is_measured())
     "box" stays the area the plan named (the panel the item is in). Blocks are drawn from
     the track when there is one, from the box otherwise (pieces()). A screenshot candidate
     with "text" gets "track": [{"box", "text_box", "source"}] (no times).
@@ -111,6 +112,8 @@ def _measure_errors(c: dict, p: str) -> list[str]:
         errs.append(f"{p}.measured: must be one of {', '.join(MEASURED)}")
     if "note" in c and not isinstance(c["note"], str):
         errs.append(f"{p}.note: must be a string")
+    if "measure_sig" in c and not isinstance(c["measure_sig"], str):
+        errs.append(f"{p}.measure_sig: must be a string")
     r = c.get("range")
     if "range" in c and not (
         isinstance(r, list) and len(r) == 2 and _num(r[0]) and _num(r[1]) and r[0] < r[1]
@@ -134,6 +137,23 @@ def _measure_errors(c: dict, p: str) -> list[str]:
         if timed and not (_num(k.get("t0")) and _num(k.get("t1")) and k["t0"] < k["t1"]):
             errs.append(f"{q}: needs camera seconds t0 < t1")
     return errs
+
+
+def measure_sig(c: dict) -> str:
+    """Fingerprint of what a measurement was made for (text, the plan's area and times or
+    asset): a candidate edited after `redact measure` no longer matches its track."""
+    where = c.get("asset") if "asset" in c else c.get("range") or [c.get("t0"), c.get("t1")]
+    blob = json.dumps([c.get("text"), c.get("box"), where], ensure_ascii=False)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def is_measured(c: dict) -> bool:
+    """Whether candidate `c` with "text" carries a measurement made for exactly it."""
+    return (
+        bool(c.get("track"))
+        and c.get("measured") in MEASURED
+        and c.get("measure_sig") == measure_sig(c)
+    )
 
 
 def pieces(c: dict) -> list[dict]:

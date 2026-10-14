@@ -140,7 +140,7 @@ def _observations(rgb: np.ndarray, needles: list[str]):
     pool = _send(_send(_cls(b"NSAutoreleasePool"), b"alloc"), b"init")
     space = cg.CGColorSpaceCreateDeviceRGB()
     provider = cg.CGDataProviderCreateWithData(None, buf.ctypes.data, buf.nbytes, None)
-    image = None
+    image = handler = req = None
     out = []
     try:
         # 8 bits per component, 32 per pixel, kCGImageAlphaNoneSkipLast (5)
@@ -165,8 +165,6 @@ def _observations(rgb: np.ndarray, needles: list[str]):
         ok = _send(handler, b"performRequests:error:", reqs, None, restype=ctypes.c_bool,
                    argtypes=(ctypes.c_void_p, ctypes.c_void_p))  # fmt: skip
         if not ok:
-            _send(req, b"release", restype=None)
-            _send(handler, b"release", restype=None)
             raise OcrError("Vision could not read the frame")
         res = _send(req, b"results")
         n = _send(res, b"count", restype=ctypes.c_ulong) if res else 0
@@ -192,9 +190,10 @@ def _observations(rgb: np.ndarray, needles: list[str]):
                     sb = _norm_box(_send(sub, b"boundingBox", restype=_Rect)) if sub else None
                     found.append(sb if sb and sb[2] > sb[0] and sb[3] > sb[1] else box)
             out.append((text, box, conf, subs))
-        _send(req, b"release", restype=None)
-        _send(handler, b"release", restype=None)
     finally:
+        for obj in (req, handler):
+            if obj:
+                _send(obj, b"release", restype=None)
         if image:
             cf.CFRelease(image)
         cf.CFRelease(provider)

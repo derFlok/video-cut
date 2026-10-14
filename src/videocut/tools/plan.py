@@ -181,9 +181,9 @@ def _unmeasured(candidates: list[dict]) -> list[str]:
                 f'{redaction.FILE} candidate {cid}: needs "text" (the exact text on the '
                 "screen, see `videocut tool redact text`) so its position can be measured"
             )
-        elif "text" in c and "measured" not in c:
+        elif "text" in c and not redaction.is_measured(c):
             errs.append(
-                f"{redaction.FILE} candidate {cid}: not measured; run "
+                f"{redaction.FILE} candidate {cid}: not measured (or changed since); run "
                 "`videocut tool redact measure`, then copy the candidates into personal_data"
             )
     return errs

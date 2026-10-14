@@ -18,10 +18,12 @@ text recognition (macOS Vision, _ocr.py). Nothing leaves the machine.
               appears/disappears down to MIN_DT) and writes the measured "track" back into
               the candidate (redaction.py), plus work/redaction_measure.json with every
               sample {"<id>": [{"t", "camera_t", "boxes"}]}.
-              Fail closed: where the text is not found inside the plan's range, the track
-              covers the whole named area ("box", plus AREA_PAD) and says so ("measured":
-              "partial" or "failed", "note"). A screenshot candidate with "text" is
-              measured on its image.
+              Fail closed: where the text is not found inside the plan's range (or only
+              outside the named area), the track covers the whole named area ("box",
+              plus AREA_PAD) and says so ("measured": "partial" or "failed", "note"); a
+              frame that cannot be read stops the tool. "measure_sig" ties the result to
+              the text, box and range it was made for. A screenshot candidate with
+              "text" is measured on its image.
 
 Run measure after writing work/redaction.json and before plan.json (it can move t0/t1).
 """
@@ -63,8 +65,8 @@ MARGIN_PX = 6  # ... at least this many source px
 AREA_PAD = 0.03  # normalised padding of a named area that could not be measured
 MAX_SAMPLES = 900  # per candidate, at least; 4 per MEASURE_STEP of the recording
 SUMMARY_TEXTS = 200
-HOLD_ROUND = 1 / 60  # s: a frame this little after t is shown at t (half a 30 fps frame)
 SEEK_EPS = 5e-4  # s: seek this far before a frame's pts (accurate seek keeps frames >= it)
+END_SLACK = 0.1  # s: the very end of a recording may not decode; earlier frames must
 FILE = "work/screen_text.json"
 SAMPLES_FILE = "work/redaction_measure.json"
 
@@ -100,7 +102,7 @@ def frame_times(src: Path) -> np.ndarray:
         return _TIMES[key]
 
 
-def shown_pts(src: Path, info: dict, t: float) -> float:
+def shown_pts(src: Path, info: dict, t: float, fps: float = 30.0) -> float:
     """The pts of the frame shown at screen time t: the last frame at or before it (half
     an output frame of rounding), as the sample-and-hold grid of render and the proxy has
     it. A screen recording writes frames only when something changes, so seeking to t
@@ -109,18 +111,19 @@ def shown_pts(src: Path, info: dict, t: float) -> float:
     times = frame_times(src)
     if not len(times):
         return t + start
-    i = int(np.searchsorted(times, t + start + HOLD_ROUND, side="right")) - 1
+    i = int(np.searchsorted(times, t + start + 0.5 / fps, side="right")) - 1
     return float(times[max(i, 0)])
 
 
-def grab_screen(src: Path, info: dict, t: float) -> np.ndarray | None:
-    """The screen frame shown at screen time t (full size, rgb), None outside it."""
+def grab_screen(src: Path, info: dict, t: float, fps: float = 30.0) -> np.ndarray | None:
+    """The screen frame shown at screen time t on an `fps` grid (full size, rgb); None
+    outside the recording or when it cannot be decoded."""
     if t < 0 or t > info["duration"]:
         return None
     w, h = info["size"]
-    pts = shown_pts(src, info, t)
-    out = run_bytes(
-        ["-ss", f"{max(pts - SEEK_EPS, 0.0):.6f}", "-i", str(src),
+    pts = shown_pts(src, info, t, fps)
+    out = run_bytes(  # -seek_timestamp: -ss is this pts, not an offset from the file start
+        ["-seek_timestamp", "1", "-ss", f"{max(pts - SEEK_EPS, 0.0):.6f}", "-i", str(src),
          "-frames:v", "1", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     )  # fmt: skip
     if len(out) != w * h * 3:
@@ -260,7 +263,12 @@ def asset_texts(job: Path) -> list[dict]:
         f = red_mod.asset_file(job, rel)
         if f is None or not f.is_relative_to(job) or not f.is_file():
             continue
-        out += [{"asset": rel, **ln} for ln in _ocr.recognize(image_rgb(f))]
+        try:
+            rgb = image_rgb(f)
+        except ToolError as e:
+            print(f"warning: {rel}: {e}")
+            continue
+        out += [{"asset": rel, **ln} for ln in _ocr.recognize(rgb)]
     return out
 
 
@@ -343,6 +351,10 @@ def _moved(pairs, size) -> bool:
     return False
 
 
+def _overlaps(a, b) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
 def _pad(box, size) -> list[float]:
     w, h = size
     m = max(MARGIN_K * (box[3] - box[1]) * h, MARGIN_PX)
@@ -399,8 +411,8 @@ class Tracker:
             if k in done or k < 0 or k > last:
                 continue
             done.add(k)
-            if self.at(k * step):
-                todo += [k - 1, k + 1]
+            if self.at(k * step):  # also two steps on: one recognition miss does not end it
+                todo += [k - 2, k - 1, k + 1, k + 2]
         if self.duration - last * step > MIN_DT:
             self.at(self.duration)
         self.refine()
@@ -425,7 +437,9 @@ class Tracker:
                 self.at(t)
 
     def pieces(self, rng: tuple[float, float], area: list[float]) -> list[dict]:
-        """[{"t0", "t1", "box", "text_box", "source"}] in screen time, consecutive."""
+        """[{"t0", "t1", "box", "text_box", "source"}] in screen time, consecutive. Every
+        sighting is covered; inside `rng`, a time without a sighting in the named `area`
+        (the text may be shown elsewhere too) gets the whole area (fail closed)."""
         ts = sorted(self.seen)
         out = []
         found = [t for t in ts if self.seen[t]]
@@ -450,7 +464,10 @@ class Tracker:
                     continue
         if found and found[-1] == ts[-1] and ts[-1] < self.duration:
             out.append(("ocr", ts[-1], self.duration, self.seen[ts[-1]]))
-        covered = sorted((t0, t1) for _, t0, t1, _ in out)
+        near = _pad_area(area)
+        covered = sorted(
+            (t0, t1) for _, t0, t1, boxes in out if any(_overlaps(b, near) for b in boxes)
+        )
         lo = rng[0]
         for t0, t1 in covered + [(rng[1], rng[1])]:  # any part of the range left: the area
             if t0 > lo + 1e-6 and min(t0, rng[1]) > lo:
@@ -563,6 +580,8 @@ def measure(job: Path) -> dict:
 
         def read(t):
             rgb = grab_screen(src, info, t)
+            if rgb is None and t < info["duration"] - END_SLACK:
+                raise ToolError(f"cannot read the screen recording at {t:.2f} s")
             found = _ocr.find_many(rgb, needles) if rgb is not None else {}
             with lock:
                 cache[t] = found
@@ -601,6 +620,7 @@ def measure(job: Path) -> dict:
             c["t0"] = round(min([rng[0]] + [p["t0"] for p in track]), 4)
             c["t1"] = round(max([rng[1]] + [p["t1"] for p in track]), 4)
             c["measured"], c["note"] = status, note
+            c["measure_sig"] = red_mod.measure_sig(c)
             samples[str(c["id"])] = [
                 {"t": t, "camera_t": round(t - off, 4), "boxes": [_r(b) for b in bs]}
                 for t, bs in sorted(tr.seen.items())
@@ -618,10 +638,15 @@ def measure(job: Path) -> dict:
             c["track"] = [{"box": _r(_pad(b, size)), "text_box": _r(b), "source": "ocr"}
                           for b in found]  # fmt: skip
             c["measured"], c["note"] = "ok", "position measured on the screenshot"
+            if not any(_overlaps(b, _pad_area(c["box"])) for b in found):
+                c["track"].append({"box": _r(_pad_area(c["box"])), "source": "area"})
+                c["measured"] = "partial"
+                c["note"] = "text not found in the marked area; the whole area is covered too"
         else:
             c["track"] = [{"box": _r(_pad_area(c["box"])), "source": "area"}]
             c["measured"] = "failed"
             c["note"] = "text not found; the whole marked area is covered"
+        c["measure_sig"] = red_mod.measure_sig(c)
         samples[str(c["id"])] = [{"boxes": [_r(b) for b in found]}]
         report.append({"id": c["id"], "measured": c["measured"], "pieces": len(c["track"]),
                        "note": c["note"]})  # fmt: skip

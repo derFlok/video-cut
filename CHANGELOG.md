@@ -495,6 +495,15 @@
   layout and zoom into output px, and must be ≥ 98 % block colour; the reel frame itself
   is read too (the text readable there is a leak). Either is `redaction_leak`, a hard
   failure with output time and candidate id.
+- `redaction_unchecked` (verify not ok): an e-mail/phone/name candidate shown without
+  `text`, a text candidate edited after it was measured (`measure_sig`), a frame that
+  cannot be read, or no text recognition. A text found only outside the named area counts
+  as not found there (the whole area is covered). Screenshot candidates: the text found
+  on the image must lie inside the redact boxes of every `screenshot_frame` showing it.
 - Frames of a screen recording are taken as the reel shows them: the last frame at or
   before the time (macOS records a frame only when the screen changes; a plain seek gave
-  the next change, up to 2 s later on a real recording).
+  the next change, up to 2 s later on a real recording), seeking to the pts itself
+  (`-seek_timestamp 1`; also in the screen-time check of verify).
+- Jobs planned before this change: their e-mail/phone/name candidates have no measured
+  text, so verify of a revision reports `redaction_unchecked` until the plan is made
+  again.
