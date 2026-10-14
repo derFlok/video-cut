@@ -740,9 +740,9 @@ def verify(args) -> dict:
     flagged = [{"cut": c["cut"], "t": c["t"], "flags": c["flags"]} for c in cut_docs if c["flags"]]
     info = [{"cut": c["cut"], "t": c["t"], "info": c["info"]} for c in cut_docs if c["info"]]
     screen_flagged = [
-        {"check": kind, **{k: d[k] for k in ("segment", "t0", "t1", "t") if k in d},
+        {"check": kind, **{k: d[k] for k in ("id", "where", "segment", "t0", "t1", "t") if k in d},
          "flags": d["flags"]}
-        for kind in ("redaction", "screen_time")
+        for kind in ("coverage", "redaction", "screen_time")
         for d in demo.get(kind, [])
         if d["flags"]
     ] + demo.get("decision", [])  # fmt: skip
@@ -760,7 +760,9 @@ def verify(args) -> dict:
         "overlays": overlay_docs,
         "overlay_flagged": overlay_flagged,
         "screen": {
-            k: demo[k] for k in ("redaction", "screen_time", "clamped", "readability") if k in demo
+            k: demo[k]
+            for k in ("coverage", "redaction", "screen_time", "clamped", "readability")
+            if k in demo
         },
         "screen_flagged": screen_flagged,
         "screen_zoom_clamped": demo.get("clamped", []),

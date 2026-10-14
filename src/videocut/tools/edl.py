@@ -77,7 +77,7 @@ def check(args) -> dict:
         if gaps:
             errs = [
                 f"{g['where']}: redaction_missing: candidate {g['id']} of work/redaction.json "
-                "is not covered (a redact block over its box for its whole time)"
+                f"is not covered; add {json.dumps(g['need'])}"
                 for g in gaps
             ]
             for err in errs:

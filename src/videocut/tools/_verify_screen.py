@@ -19,6 +19,19 @@
                     information for the cut agent, never a failure
     overlap         every non-face segment must lie inside work/sync.json "overlap" (the
                     rule of `edl check`); a check that fails otherwise
+    coverage        the personal data itself, independent of the boxes render drew: for
+                    every enforced candidate with "text", on up to LEAK_SAMPLES output
+                    frames of every screen segment that shows its time (and every
+                    REEL_OCR_STEP s of every screen segment for all of them), the text is
+                    found again on the screen recording frame that segment shows (local
+                    OCR, _ocr.py); each place it is shown, mapped through the drawn zoom
+                    window into output px, must be solid brand background
+                    (>= LEAK_MIN_SHARE of its px). Where OCR does not find it, the
+                    candidate's measured text box of that time (or its whole area) is
+                    checked instead. The reel frame itself is read too: the text readable
+                    in the screen view is a leak. Flag `redaction_leak` (a failure) with
+                    the time and the candidate id; without text recognition (not macOS)
+                    `redaction_unchecked` (a failure as well)
     decision        every personal-data candidate to redact (the human decision of `job
                     redaction`; without one: all) must be covered by the EDL (redact blocks
                     of the screen segments, props.redact of its screenshot_frame items):
@@ -39,7 +52,7 @@ import numpy as np
 from .. import edl as edl_mod
 from .. import redaction as red_mod
 from ..paths import tool_env
-from . import _layouts
+from . import _layouts, _ocr
 from . import _render_plan as plan_mod
 from ._geometry import framed, sized
 from .common import ToolError, binary
@@ -50,6 +63,9 @@ REDACT_SAMPLES = 5
 REDACT_MIN_SHARE = 0.9
 REDACT_TOL = 28  # max per-channel difference to the background colour (yuv420 + H.264)
 REDACT_INSET = 3  # px left out at each edge (chroma bleeding)
+LEAK_SAMPLES = 5
+LEAK_MIN_SHARE = 0.98  # of the text region's px that must be the block colour
+REEL_OCR_STEP = 1.0  # seconds between reel frames read for every candidate text
 MAP_OFFSETS = (-1.0, -0.5, 0.5, 1.0)  # alternative screen times, seconds
 MAP_W = 96  # compared at this width (grey)
 MAP_MARGIN = 3.0  # grey levels another time must beat the mapped one by
@@ -162,6 +178,116 @@ def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
                                "bg_share": round(share, 3)})  # fmt: skip
         if share < REDACT_MIN_SHARE and "redaction_missing" not in doc["flags"]:
             doc["flags"].append("redaction_missing")
+    return docs
+
+
+def _grab_screen(src: Path, info: dict, t: float) -> np.ndarray | None:
+    """Full-size rgb frame of the screen recording at screen time t."""
+    if t < 0 or t > info["duration"]:
+        return None
+    w, h = info["size"]
+    out = _raw(
+        ["-ss", f"{t + (info.get('video_start') or 0.0):.4f}", "-i", str(src), "-frames:v", "1"]
+        + ["-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    )
+    if len(out) != w * h * 3:
+        return None
+    return np.frombuffer(out, np.uint8).reshape(h, w, 3)
+
+
+def _src_rect(box, size) -> tuple[int, int, int, int]:
+    """Normalised box -> source px (x, y, w, h), outward."""
+    sw, sh = size
+    x0, y0 = math.floor(box[0] * sw), math.floor(box[1] * sh)
+    x1, y1 = math.ceil(box[2] * sw), math.ceil(box[3] * sh)
+    return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
+
+
+def _fallback(c: dict, cam_t: float) -> tuple[list[list[float]], str]:
+    """Where candidate `c` is at camera time cam_t by its own data: the measured text boxes
+    of the pieces covering it ("track"), else the drawn area ("area"); ([], "") when its
+    track says it is not shown then."""
+    hits = [p for p in red_mod.pieces(c) if p["t0"] - 1e-3 <= cam_t <= p["t1"] + 1e-3]
+    if not hits:
+        return [], ""
+    boxes = [p.get("text_box") or p["box"] for p in hits]
+    src = "track" if any(p.get("text_box") for p in hits) else "area"
+    return boxes, src
+
+
+def coverage(reel: Path, ctx: dict, size: tuple[int, int], cands: list[dict]) -> list[dict]:
+    """The personal data itself must be hidden: [{"id", "segment", "t", "source", "share"
+    | "text", "flags"}] per checked place (see the module doc, "coverage")."""
+    texts = [c for c in cands if "asset" not in c and isinstance(c.get("text"), str)]
+    if not texts:
+        return []
+    if not _ocr.available():
+        return [{"id": c["id"], "segment": None, "t": None, "source": "none",
+                 "where": "text recognition not available",
+                 "flags": ["redaction_unchecked"]} for c in texts]  # fmt: skip
+    plan, info, src = ctx["plan"], ctx["info"], ctx["screen"]
+    fps = float(plan.fps)
+    picks: dict[tuple[int, int], set[int]] = {}  # (range index, local n) -> candidate ids
+    all_ids = {c["id"] for c in texts}
+    for i, seg in ctx["segs"].items():
+        start = plan.ranges[i]
+        cam0 = ctx["edl"].segments[start.seg].start
+        cam1 = cam0 + seg.frames / fps
+        for c in texts:
+            a, b = max(c["t0"], cam0), min(c["t1"], cam1)
+            if b <= a:
+                continue
+            n0, n1 = round((a - cam0) * fps), min(round((b - cam0) * fps), seg.frames - 1)
+            k = min(LEAK_SAMPLES, n1 - n0 + 1)
+            for j in range(k):
+                n = round(n0 + (n1 - n0) * j / max(k - 1, 1))
+                picks.setdefault((i, n), set()).add(c["id"])
+        step = max(1, round(REEL_OCR_STEP * fps))
+        for n in range(step // 2, seg.frames, step):
+            picks.setdefault((i, n), set()).update(all_ids)
+    reel_frames = _frames(reel, [ctx["starts"][i] + n for i, n in picks], size)
+    bg = _rgb(ctx["bg"])
+    by_id = {c["id"]: c for c in texts}
+    docs = []
+    for (i, n), ids in sorted(picks.items()):
+        seg = ctx["segs"][i]
+        img = reel_frames.get(ctx["starts"][i] + n)
+        if img is None:
+            continue
+        t_out = round((ctx["starts"][i] + n) / fps, 3)
+        seg_no = plan.ranges[i].seg
+        cam_t = ctx["edl"].segments[seg_no].start + n / fps
+        frame = _grab_screen(src, info, (seg.screen_frame + n) / fps)
+        found = _ocr.find_many(frame, [by_id[k]["text"] for k in ids]) if frame is not None else {}
+        v = seg.view
+        shown = _ocr.find_many(np.ascontiguousarray(img[v.y : v.y + v.h, v.x : v.x + v.w]),
+                               [by_id[k]["text"] for k in ids])  # fmt: skip
+        for k in sorted(ids):
+            c = by_id[k]
+            boxes = [o["box"] for o in found.get(c["text"], [])]
+            source = "screen_ocr"
+            if not boxes:
+                boxes, source = _fallback(c, cam_t)
+            for box in boxes:
+                rect = _out_rect(seg, n, *_src_rect(box, info["size"]))
+                if rect is None:
+                    continue  # zoomed out of the view
+                seen = _uncovered(rect, seg.inset)
+                if not seen.any():
+                    continue  # under the speaker bubble
+                x0, y0, x1, y1 = rect
+                patch = img[y0:y1, x0:x1].astype(int)
+                share = float((np.abs(patch - bg).max(axis=2) <= REDACT_TOL)[seen].mean())
+                doc = {"id": k, "segment": seg_no, "t": t_out, "source": source,
+                       "box": rect, "share": round(share, 3), "flags": []}  # fmt: skip
+                if share < LEAK_MIN_SHARE:
+                    doc["flags"].append("redaction_leak")
+                    doc["where"] = f"at {t_out} s ({source}, {share:.0%} covered)"
+                docs.append(doc)
+            for o in shown.get(c["text"], []):
+                docs.append({"id": k, "segment": seg_no, "t": t_out, "source": "reel_ocr",
+                             "text": o["text"], "flags": ["redaction_leak"],
+                             "where": f"at {t_out} s (readable in the reel)"})  # fmt: skip
     return docs
 
 
@@ -341,7 +467,7 @@ def readability(ctx: dict) -> list[dict]:
 
 
 def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]) -> dict:
-    """All product-demo checks: {"redaction", "screen_time", "clamped", "readability",
+    """All product-demo checks: {"coverage", "redaction", "screen_time", "clamped", "readability",
     "overlap", "spans", "decision"}; only "decision" for a face-only EDL."""
     try:
         gaps = decision_gaps(job, data)
@@ -352,10 +478,12 @@ def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]
         return {"decision": gaps} if gaps else {}
     try:
         red_docs, time_docs = redaction(reel, ctx, size), screen_time(reel, ctx, size)
-    except (ToolError, ValueError) as e:  # fail closed: an unchecked redaction is not ok
+        cover = coverage(reel, ctx, size, redaction_enforced(job)[0])
+    except (ToolError, ValueError, _ocr.OcrError) as e:  # fail closed: unchecked is not ok
         return {"error": f"screen checks failed: {e}"}
     return {
         "decision": gaps,
+        "coverage": cover,
         "redaction": red_docs,
         "screen_time": time_docs,
         "clamped": clamped_info(render),

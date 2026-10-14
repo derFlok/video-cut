@@ -104,8 +104,9 @@ def test_missing_checks_screen_segments_and_screenshots(tmp_path):
                       "props": {"file": "input/shot.png", "redact": [[0.1, 0.1, 0.3, 0.2]]}}],
     }  # fmt: skip
     got = red.missing([SCREEN, SHOT], data, tmp_path)
-    assert got == [{"id": 1, "where": "$.segments[2].redact"},
-                   {"id": 2, "where": "$.overlays[0].props.redact"}]  # fmt: skip
+    assert got == [{"id": 1, "where": "$.segments[2].redact",
+                    "need": {"t0": 5.0, "t1": 6.0, "box": SCREEN["box"]}},
+                   {"id": 2, "where": "$.overlays[0].props.redact", "need": SHOT["box"]}]  # fmt: skip
     assert red.screen_blocks([SCREEN, SHOT], 5.0, 8.0) == [
         {"t0": 5.0, "t1": 6.0, "box": SCREEN["box"]}
     ]
@@ -159,7 +160,7 @@ def test_any_spelling_or_copy_of_a_screenshot_is_redacted(tmp_path, ref):
     item = {"scene": "screenshot_frame", "t0": 1, "t1": 3, "props": {"file": ref}}
     assert _redacted(tmp_path, item, [SHOT])["props"]["redact"] == [SHOT["box"]]
     assert red.missing([SHOT], {"overlays": [item]}, tmp_path) == [
-        {"id": 2, "where": "$.overlays[0].props.redact"}
+        {"id": 2, "where": "$.overlays[0].props.redact", "need": SHOT["box"]}
     ]
     other = {**item, "props": {"file": "./input/other.png"}}
     assert _redacted(tmp_path, other, [SHOT]) is other

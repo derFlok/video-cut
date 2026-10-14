@@ -24,6 +24,7 @@ MODULES = [
     "sync",
     "screen",
     "plan",
+    "redact",
 ]
 
 
