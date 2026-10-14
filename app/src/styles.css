@@ -1208,3 +1208,11 @@ progress {
 .cutstyle select {
   max-width: 420px;
 }
+.target select,
+.target-pick select,
+.target-pick input {
+  max-width: 420px;
+}
+.hint-error {
+  color: var(--error);
+}

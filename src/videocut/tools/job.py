@@ -1,7 +1,7 @@
-"""`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style`: create a
-job folder, inspect it, approve its plan, decide which personal-data candidates are demo data
-(human only, src/videocut/redaction.py), set its brand, its screen recording, its output
-format or its cut style.
+"""`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style|target`: create
+a job folder, inspect it, approve its plan, decide which personal-data candidates are demo
+data (human only, src/videocut/redaction.py), set its brand, its screen recording, its output
+format, its cut style or its target length.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -12,16 +12,23 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                cut_style (optional, _style.STYLES: "calm" | "standard" | "tight"; absent:
                calm with a screen recording or screenshot assets, else standard, resolved
                when read),
+               target_s (optional target length in seconds, _length.py; absent: by type
+               for a talking head, no fixed length for a demo; resolved when read),
+               plan_target {target_s}: the target the current plan was made for (written
+               by `run` after every plan run; another target makes the plan stale),
                lang (optional language of the plan's and reports' human-facing text:
                "de" | "en"; absent: "de"),
-               approval {at, project_sha256}: a display copy only, never trusted
+               approval {at, project_sha256, target_s}: a display copy only, never trusted
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
     out/       finished renders
 
 The approval itself lives outside the job folder, which agent runs may write to:
-$VIDEOCUT_HOME/approvals/<id>.json = {job, at, project_sha256}. Only that record, matched
-against the current work/project.md, counts as approved.
+$VIDEOCUT_HOME/approvals/<id>.json = {job, at, project_sha256, target_s}. Only that record,
+matched against the current work/project.md and the job's current target length, counts as
+approved. A changed target length changes what the plan must contain (unlike the format or
+the cut style): `job target` revokes the approval, the plan stays stale until a plan run
+made for the new target (job.json "plan_target"), and a stale plan cannot be approved.
 """
 
 import hashlib
@@ -34,7 +41,7 @@ from pathlib import Path
 
 from .. import brand
 from .. import redaction as red
-from . import _format, _style
+from . import _format, _length, _style
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -77,6 +84,11 @@ FORMAT_HELP = (
 CUT_STYLE_HELP = (
     f"cut style: {', '.join(_style.STYLES)} (default: calm with a screen recording or "
     "screenshots, else standard)"
+)
+TARGET_HELP = (
+    "target length: seconds or 90s, 5m, 2:30, or auto (default: 30-45 s for thought, "
+    "30-60 s for other types; with a screen recording or screenshots as long as the "
+    "content needs)"
 )
 LANGS = ("de", "en")
 DEFAULT_LANG = "de"
@@ -122,19 +134,62 @@ def read_approval(job: Path) -> dict | None:
     return record
 
 
+def _raw_target(job: Path):
+    """job.json "target_s" as stored (None when absent or unreadable)."""
+    try:
+        return read_job(job).get("target_s")
+    except ToolError:
+        return None
+
+
 def is_approved(job: Path) -> bool:
-    """True when a human approved work/project.md and it is unchanged since.
+    """True when a human approved work/project.md, it is unchanged since, and the job's
+    target length is the one it was approved for (a record from before target lengths:
+    auto).
 
     Reads only the record under approvals/; status/approval in job.json are not trusted."""
     sha = project_sha(job)
     record = read_approval(job)
-    return sha is not None and record is not None and record.get("project_sha256") == sha
+    return (
+        sha is not None
+        and record is not None
+        and record.get("project_sha256") == sha
+        and record.get("target_s") == _raw_target(job)
+    )
+
+
+def plan_target_stale(job: Path, data: dict | None = None) -> bool:
+    """The plan (work/project.md) was made for another target length than the job's now.
+    A plan without a record (made before target lengths) was made for auto."""
+    if not (job / PROJECT).is_file():
+        return False
+    data = read_job(job) if data is None else data
+    return plan_made_for(data) != data.get("target_s")
+
+
+def plan_made_for(data: dict):
+    """The target length the current plan was made for (None: auto)."""
+    rec = data.get("plan_target")
+    return rec.get("target_s") if isinstance(rec, dict) else None
+
+
+def stamp_plan_target(job: Path) -> None:
+    """Record that the current plan was made for the job's current target length (`run`
+    calls it after every plan run)."""
+    update_job(job, plan_target={"target_s": read_job(job).get("target_s")})
 
 
 def approve_job(job: Path) -> dict:
     sha = project_sha(job)
     if sha is None:
         raise ToolError(f"{PROJECT} is missing; run the plan step first")
+    data = read_job(job)
+    if plan_target_stale(job, data):
+        raise ToolError(
+            f"the plan was made for the target length {_length.label(plan_made_for(data))}, "
+            f"the job now asks for {_length.label(data.get('target_s'))}: plan again "
+            f"(`videocut run {job.name} --replan`)"
+        )
     try:
         cands = red.load(job) or []  # what the human saw; stays redacted (redaction.enforced)
     except red.RedactionError as e:
@@ -142,6 +197,7 @@ def approve_job(job: Path) -> dict:
     approval = {"at": datetime.now().astimezone().isoformat(timespec="seconds")}
     approval["project_sha256"] = sha
     approval["plan_json_sha256"] = plan_json_sha(job)
+    approval["target_s"] = data.get("target_s")
     approvals_root().mkdir(parents=True, exist_ok=True)
     write_json(
         approval_path(job),
@@ -249,6 +305,34 @@ def resolved_style(data: dict) -> str:
         raise ToolError(f"job.json: {e}") from None
 
 
+def target_arg(value) -> float | int | None:
+    """Seconds, or None for "auto" (the default rule)."""
+    try:
+        return _length.parse_target(value)
+    except _length.LengthError as e:
+        raise ToolError(str(e)) from None
+
+
+def resolved_range(data: dict) -> tuple[int, int] | None:
+    """The job's target range (min_s, max_s), None without a fixed one; ToolError for an
+    invalid job.json "target_s"."""
+    try:
+        return _length.target_range(data)
+    except _length.LengthError as e:
+        raise ToolError(f"job.json: {e}") from None
+
+
+def target_view(data: dict) -> dict:
+    """target_s, whether it is the default, the resolved range and one line about it."""
+    rng = resolved_range(data)
+    return {
+        "target_s": data.get("target_s"),
+        "target_default": data.get("target_s") is None,
+        "target_range": None if rng is None else {"min_s": rng[0], "max_s": rng[1]},
+        "target_note": _length.describe(data),
+    }
+
+
 def lang_arg(value: str) -> str:
     v = str(value).strip().lower()
     if v not in LANGS:
@@ -268,6 +352,7 @@ def new(args) -> dict:
         raise ToolError(f"video not found: {args.video}")
     fmt = format_arg(args.format) if args.format else None
     cut_style = style_arg(args.cut_style) if args.cut_style else None
+    target = target_arg(args.target) if args.target else None
     lang = lang_arg(args.lang) if args.lang else None
     brand_ref = brand_id(args.brand) if args.brand else None
     assets = [Path(a).expanduser() for a in (args.asset or [])]
@@ -321,6 +406,8 @@ def new(args) -> dict:
         data["format"] = fmt
     if cut_style:
         data["cut_style"] = cut_style
+    if target is not None:
+        data["target_s"] = target
     if lang:
         data["lang"] = lang
     write_json(job / JOB_FILE, data)
@@ -337,6 +424,7 @@ def new(args) -> dict:
         "format_default": fmt is None,
         "cut_style": resolved_style(data),
         "cut_style_default": cut_style is None,
+        **target_view(data),
         "lang": job_lang(data),
     }
 
@@ -460,6 +548,56 @@ def cut_style_cmd(args) -> dict:
     return set_cut_style(resolve_job(args.job_ref or args.job), args.cut_style)
 
 
+def set_target(job: Path, value, say=print) -> dict:
+    """Set the target length ("auto": back to the default rule). Unlike the format or the
+    cut style it changes what the plan contains: once a plan exists that was made for
+    another target, the plan is stale (plan_target_stale), an approval is revoked (the
+    approval record also names the target, is_approved), and the next `run` plans again.
+    A finished reel stays on disk until the new plan is approved and cut."""
+    target = target_arg(value)
+    data = read_job(job)
+    old = data.get("target_s")
+    if target is None:
+        data.pop("target_s", None)
+    else:
+        data["target_s"] = target
+    has_plan = (job / PROJECT).is_file()
+    if has_plan and not isinstance(data.get("plan_target"), dict):
+        # the plan was made before target lengths were recorded: for the old target
+        data["plan_target"] = {"target_s": old}
+    write_json(job / JOB_FILE, data)
+    view = target_view(data)
+    how = "default" if target is None else "set"
+    say(f"{job.name}: target length {_length.label(target)} ({how}; {view['target_note']})")
+    stale = plan_target_stale(job, data)
+    revoked = False
+    if stale and read_approval(job):
+        revoke_approval(job)  # the approved plan was made for another length
+        revoked = True
+    reel = (job / "out" / "reel.mp4").is_file()
+    if stale:
+        say(
+            f"The plan of this job was made for the target length "
+            f"{_length.label(plan_made_for(data))}. Plan again for "
+            f"{_length.label(target)} and approve the new plan: `videocut run {job.name}`"
+            + (" (the earlier approval no longer counts)" if revoked else "")
+        )
+    if reel and target != old:
+        say(
+            "The existing reel (out/reel.mp4) was made for another target length; it is "
+            "cut again once the new plan is approved."
+        )
+    return {"job": str(job), "id": job.name, **view, "previous": old,
+            "plan_stale": stale, "approval_revoked": revoked,
+            "reel_stale": reel and target != old}  # fmt: skip
+
+
+def target_cmd(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human sets the target length (not available inside an agent run)")
+    return set_target(resolve_job(args.job_ref or args.job), args.target)
+
+
 def show(args) -> dict:
     job = resolve_job(args.job_ref or args.job)
     data = read_job(job)
@@ -479,6 +617,14 @@ def show(args) -> dict:
         f"segments >= {params['min_segment_s']} s, "
         f"{'may' if params['splice_in_sentence'] else 'never'} splice inside a sentence)"
     )
+    target = target_view(data)
+    print(f"target length: {target['target_note']}")
+    plan_stale = plan_target_stale(job, data)
+    if plan_stale:
+        print(
+            f"plan: made for the target length {_length.label(plan_made_for(data))}, "
+            "stale until it is planned again"
+        )
     lang = job_lang(data)
     print(f"language of plan and reports: {lang}")
     out = {
@@ -490,6 +636,8 @@ def show(args) -> dict:
         "cut_style": cut_style,
         "cut_style_default": "cut_style" not in data,
         "cut_style_params": _style.style(data),
+        **target,
+        "plan_target_stale": plan_stale,
         "lang": lang,
         "approved": is_approved(job),
         "artefacts": present,
@@ -558,6 +706,7 @@ def register(subparsers) -> None:
     )
     n.add_argument("--format", help=FORMAT_HELP)
     n.add_argument("--cut-style", help=CUT_STYLE_HELP)
+    n.add_argument("--target", metavar="LENGTH", help=TARGET_HELP)
     n.add_argument("--lang", help="language of the plan and reports: de (default) or en")
     n.set_defaults(handler=run_tool("job new", new))
     s = sub.add_parser(
@@ -609,3 +758,12 @@ def register(subparsers) -> None:
     cs.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     cs.add_argument("cut_style", help=CUT_STYLE_HELP + "; auto: the default")
     cs.set_defaults(handler=run_tool("job cut-style", cut_style_cmd))
+    tg = sub.add_parser(
+        "target",
+        help="set the target length of a job; a plan made for another length goes stale "
+        "and needs a new approval (human only)",
+        parents=[job_parent()],
+    )
+    tg.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    tg.add_argument("target", metavar="LENGTH", help=TARGET_HELP)
+    tg.set_defaults(handler=run_tool("job target", target_cmd))

@@ -5,7 +5,8 @@ work/project.md that the plan run writes for the app.
      "hook": {"text": "...", "src": [t0, t1]},
      "core_message": "...",                               # optional
      "change_note": "...",                 # optional: after plan feedback, what changed
-     "target_s": 45,                                      # optional
+     "target_s": 45,                 # optional: the job's target length (none: no fixed one)
+     "estimated_s": 52,              # optional: estimated length of the keep list
      "keep_list": [{"n": 1, "src": [t0, t1], "text": "...", "why": "..."}],
      "views": [{"n": 1, "src": [t0, t1], "layout": "screen",
                 "zoom_box": [x0, y0, x1, y1], "zoom_t": t,  # optional, box 0..1 of the screen
@@ -96,8 +97,9 @@ def validate(
     for key in ("core_message", "change_note", "why"):
         if key in data and not isinstance(data[key], str):
             errs.append(f"$.{key}: must be a string")
-    if "target_s" in data and not (_num(data["target_s"]) and data["target_s"] > 0):
-        errs.append("$.target_s: must be a positive number")
+    for key in ("target_s", "estimated_s"):
+        if key in data and not (_num(data[key]) and data[key] > 0):
+            errs.append(f"$.{key}: must be a positive number")
 
     keep, e = _items(data, "keep_list", required=True)
     errs += e + _numbered(keep, "keep_list")

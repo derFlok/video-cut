@@ -4,6 +4,7 @@ import type { PdCandidate, Plan, PlanJson, PlanKeep, RedactionDecision } from ".
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog } from "../components/LiveLog";
 import { Markdown } from "../components/Markdown";
+import { TargetPanel } from "../components/TargetLength";
 import { clockFine, useI18n } from "../i18n";
 import type { Live } from "./JobPage";
 import { PersonalDataDialog } from "./PersonalData";
@@ -67,11 +68,16 @@ export function PlanReview({ live }: { live: Live }) {
   }, [job.id, live.tick]);
 
   const revising = asking || job.stage === "plan_revise";
-  const approvable = !job.approved && !live.running && !revising && plan !== null && job.status !== "running";
+  const approvable =
+    !job.approved && !live.running && !revising && plan !== null && job.status !== "running" && !job.plan_target_stale;
 
   const sendAsk = async (e: FormEvent) => {
     e.preventDefault();
-    const text = ask.trim();
+    await askClaude(ask.trim());
+  };
+
+  /** Plan feedback: Claude revises the plan (also "make the plan again" for a new target). */
+  const askClaude = async (text: string) => {
     if (!text) return;
     setErr(null);
     setPrev(planRef.current?.plan ?? null);
@@ -146,6 +152,8 @@ export function PlanReview({ live }: { live: Live }) {
           {t("common.retry")}
         </button>
       )}
+
+      {plan && <TargetPanel live={live} plan={plan.plan} onReplan={(text) => void askClaude(text)} />}
 
       {!plan && !revising && <p className="muted">{t("plan.none")}</p>}
 

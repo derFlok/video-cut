@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, agent, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format, _style
+from ..tools import _format, _length, _style
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
@@ -33,6 +33,7 @@ from ..tools.job import (
     read_approval,
     revoke_approval,
     set_cut_style,
+    set_target,
 )
 from . import brands, state
 from .runs import Busy, Runs
@@ -204,6 +205,12 @@ class CutStyleBody(BaseModel):
     cut_style: str = Field(pattern="^(" + "|".join(CUT_STYLES) + ")$")
 
 
+class TargetBody(BaseModel):
+    """Seconds, "auto" or null (the default rule); strings like "5m" or "2:30" too."""
+
+    target_s: float | str | None = Field(default=None)
+
+
 class ApproveBody(BaseModel):
     plan_sha: str
     redaction: Redaction | None = None
@@ -297,7 +304,7 @@ def create_app(
             form = await read_form(
                 request,
                 {"camera": VIDEO_EXT, "screen": VIDEO_EXT, "assets": ASSET_EXT},
-                {"type", "brand", "format", "brief", "cut_style", "lang"},
+                {"type", "brand", "format", "brief", "cut_style", "lang", "target_s"},
             )
         except UploadError as e:
             raise HTTPException(e.status, str(e)) from None
@@ -503,6 +510,32 @@ def create_app(
             "cut_stale": state.cut_stale(job),
         }
 
+    # -------------------------------------------------------------- target length
+
+    @app.put("/api/jobs/{job_id}/target")
+    @decision
+    def put_target(job_id: str, body: TargetBody) -> dict:
+        """Store the target length. A plan made for another length goes stale and an
+        approval is revoked (the plan's content depends on it, unlike the cut style): the
+        app then offers to plan again (POST plan/feedback, or /start for a fresh plan)."""
+        job = job_or_404(job_id)
+        not_running(job)
+        value = _length.AUTO if body.target_s is None else body.target_s
+        try:
+            res = set_target(job, value, say=lambda _: None)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        return {
+            "id": job.name,
+            "target_s": res["target_s"],
+            "target_resolved": res["target_range"],
+            "previous": res["previous"],
+            "plan_stale": res["plan_stale"],
+            "approval_revoked": res["approval_revoked"],
+            "reel_stale": res["reel_stale"],
+            "approved": is_approved(job),
+        }
+
     @app.post("/api/jobs/{job_id}/recut")
     @decision
     def recut(job_id: str) -> dict:
@@ -597,6 +630,10 @@ def _new_job(form) -> dict:
     cut_style = (f.get("cut_style") or _style.AUTO).strip().lower()
     if cut_style not in CUT_STYLES:
         raise HTTPException(400, f"cut_style must be one of {', '.join(CUT_STYLES)}")
+    try:
+        target = _length.parse_target(f.get("target_s"))
+    except _length.LengthError as e:
+        raise HTTPException(400, f"target_s: {e}") from None
     ui_lang = str(settings.load().get("lang") or "").lower()
     lang = (f.get("lang") or (ui_lang if ui_lang in LANGS else "de")).strip().lower()
     if lang not in LANGS:
@@ -627,6 +664,7 @@ def _new_job(form) -> dict:
             format_=None if fmt == "auto" else fmt,
             cut_style=None if cut_style == _style.AUTO else cut_style,
             lang=lang,
+            target=None if target is None else str(target),
         )
     except pipeline.RunError as e:
         raise HTTPException(400, str(e)) from None

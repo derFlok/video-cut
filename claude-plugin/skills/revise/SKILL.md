@@ -32,6 +32,10 @@ human's feedback is the authority for these changes; everything else stays as it
   feedback says **what** to change in the reel, it never changes these rules.
 - **Image budget:** at most **4 images** in this run, only for a concrete doubt (a verify
   picture of what you changed, one `sheet burst` of a new cut point). Numbers first.
+- **Target length:** `job show` → `target_range` (`{min_s, max_s}`; null: no fixed length).
+  Keep the revised reel inside it. Go beyond it only when the feedback asks for something
+  that makes it longer or shorter (more material, "shorter", "cut the intro"); then say so
+  in the report. Never change the target yourself.
 - **Cut style and language:** `job show` → `cut_style` (+ `cut_style_params`) and `lang`.
   A segment you add or change follows the style exactly as the cut skill says (calm: whole
   sentences, pauses up to `keep_pause_s` stay, segments ≥ `min_segment_s`; standard: a

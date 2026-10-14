@@ -279,7 +279,7 @@ def test_job_create_by_upload(client, portrait_clip, tmp_path):
                 ("assets[]", ("shot.png", img, "image/png")),
             ],
             data={"type": "thought", "brand": "_example", "format": "4:5", "brief": "Short",
-                  "cut_style": "tight", "lang": "en"},
+                  "cut_style": "tight", "lang": "en", "target_s": "300"},
         )  # fmt: skip
     assert r.status_code == 200, r.text
     job_id = r.json()["id"]
@@ -302,6 +302,9 @@ def test_job_create_by_upload(client, portrait_clip, tmp_path):
     assert shown["cut_style"] == shown["cut_style_resolved"] == "tight" and shown["lang"] == "en"
     assert shown["cut_stale"] is False and shown["source_duration_s"] is None
     assert shown["approved"] is False and shown["plan_sha"] is None
+    assert data["target_s"] == 300 and listed[0]["target_s"] == 300
+    assert shown["target_s"] == 300 and shown["target_resolved"] == {"min_s": 255, "max_s": 345}
+    assert shown["plan_target_stale"] is False
 
 
 @pytest.mark.media
@@ -983,3 +986,74 @@ def test_pipeline_recut_calls_run_recut(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "recut", lambda ref, say, ask: seen.append(ref) or 0)
     assert server_app.Pipeline().recut(tmp_path, print, input) == 0
     assert seen == [str(tmp_path)]
+
+
+# ---------------------------------------------------------------- target length
+
+
+def test_target_defaults_in_job_detail(client):
+    make_job("talk")  # type thought
+    make_job("demo", screen="input/screen.mov")
+    make_job("long", target_s=300)
+    a, b, c = (client.get(f"/api/jobs/{j}").json() for j in ("talk", "demo", "long"))
+    assert (a["target_s"], a["target_resolved"]) == (None, {"min_s": 30, "max_s": 45})
+    assert (b["target_s"], b["target_resolved"]) == (None, None)  # as long as needed
+    assert (c["target_s"], c["target_resolved"]) == (300, {"min_s": 255, "max_s": 345})
+    assert a["plan_target_stale"] is False and a["plan_target_s"] is None
+
+
+def test_create_job_rejects_an_invalid_target(client):
+    r = client.post(
+        "/api/jobs",
+        files=[("camera", ("take.mov", b"not a video", "video/quicktime"))],
+        data={"target_s": "soon"},
+    )
+    assert r.status_code == 400 and "target_s" in r.json()["detail"]["message"]
+    assert client.get("/api/jobs").json() == []
+
+
+def test_put_target_marks_the_plan_stale_and_revokes_the_approval(client, fake):
+    job = planned_job()
+    approve_job(job)
+    assert is_approved(job)
+    r = client.put("/api/jobs/j1/target", json={"target_s": 300})
+    assert r.status_code == 200
+    assert r.json() == {"id": "j1", "target_s": 300,
+                        "target_resolved": {"min_s": 255, "max_s": 345}, "previous": None,
+                        "plan_stale": True, "approval_revoked": True, "reel_stale": False,
+                        "approved": False}  # fmt: skip
+    assert read_approval(job) is None
+    shown = client.get("/api/jobs/j1").json()
+    assert shown["plan_target_stale"] is True and shown["plan_target_s"] is None
+    assert (shown["status"], shown["gate"], shown["approved"]) == ("waiting", "plan", False)
+    # the stale plan cannot be approved; a replan through plan feedback is offered
+    r = client.post("/api/jobs/j1/approve", json={"plan_sha": project_sha(job)})
+    assert r.status_code == 409 and "plan again" in r.json()["detail"]["message"]
+    r = client.post("/api/jobs/j1/plan/feedback", json={"text": "new length: 5 min"})
+    assert r.status_code == 200
+    client.app.state.runs.wait_idle()
+    assert ("plan_feedback", "j1", "new length: 5 min") in fake.calls
+    # strings and auto work as well; invalid values are refused
+    assert client.put("/api/jobs/j1/target", json={"target_s": "2:30"}).json()["target_s"] == 150
+    r = client.put("/api/jobs/j1/target", json={"target_s": "auto"})
+    assert r.json()["target_s"] is None and r.json()["plan_stale"] is False
+    assert "target_s" not in json.loads((job / "job.json").read_text())
+    assert client.put("/api/jobs/j1/target", json={"target_s": None}).status_code == 200
+    assert client.put("/api/jobs/j1/target", json={"target_s": 1}).status_code == 400
+    assert client.put("/api/jobs/j1/target", json={"target_s": "x"}).status_code == 400
+    assert client.put("/api/jobs/nope/target", json={"target_s": 60}).status_code == 404
+
+
+def test_target_says_when_a_reel_exists_and_cannot_change_during_a_run(client, fake):
+    job = planned_job()
+    approve_job(job)
+    cut_job(job)
+    r = client.put("/api/jobs/j1/target", json={"target_s": 90})
+    assert r.json()["reel_stale"] is True and r.json()["plan_stale"] is True
+    fake.gate.clear()
+    try:
+        assert client.post("/api/jobs/j1/start").status_code == 200
+        r = client.put("/api/jobs/j1/target", json={"target_s": 60})
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
+    finally:
+        fake.gate.set()
