@@ -50,6 +50,7 @@ from .paths import state_dir
 
 FILE = "work/redaction.json"
 KINDS = ("email", "phone", "name", "customer", "other")
+TEXT_KINDS = ("email", "phone", "name")  # always text: placed by measurement (plan check)
 EPS = 1e-3  # seconds
 BOX_TOL = 0.005  # a redact box may be this much smaller than the candidate on each side
 MEASURED = ("ok", "partial", "failed")

@@ -104,9 +104,11 @@ def test_missing_checks_screen_segments_and_screenshots(tmp_path):
                       "props": {"file": "input/shot.png", "redact": [[0.1, 0.1, 0.3, 0.2]]}}],
     }  # fmt: skip
     got = red.missing([SCREEN, SHOT], data, tmp_path)
-    assert got == [{"id": 1, "where": "$.segments[2].redact",
-                    "need": {"t0": 5.0, "t1": 6.0, "box": SCREEN["box"]}},
-                   {"id": 2, "where": "$.overlays[0].props.redact", "need": SHOT["box"]}]  # fmt: skip
+    assert got == [
+        {"id": 1, "where": "$.segments[2].redact",
+         "need": {"t0": 5.0, "t1": 6.0, "box": SCREEN["box"]}},
+        {"id": 2, "where": "$.overlays[0].props.redact", "need": SHOT["box"]},
+    ]  # fmt: skip
     assert red.screen_blocks([SCREEN, SHOT], 5.0, 8.0) == [
         {"t0": 5.0, "t1": 6.0, "box": SCREEN["box"]}
     ]

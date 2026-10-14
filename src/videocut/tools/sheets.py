@@ -12,9 +12,11 @@ screen:    contact strip of the screen recording over screen time [t0, t1] with 
            overview of up to 10 tiles)
 plan:      one still per view row and per personal-data candidate of work/plan.json (the
            screen or camera frame at the view's start, or at its zoom_t, with the zoom box
-           drawn green; a candidate's screen frame or screenshot with its box drawn red),
-           at most PLAN_STILL_MAX px on the long side -> work/plan_stills/view_NN.jpg and
-           pd_NN.jpg; their paths go back into plan.json ("still")
+           drawn green; a candidate's screen frame or screenshot with the blocks render
+           will draw red: its measured track at the middle of its first measured piece,
+           else its box), at most PLAN_STILL_MAX px on the long side ->
+           work/plan_stills/view_NN.jpg and pd_NN.jpg; their paths go back into plan.json
+           ("still", and "still_t" / "still_boxes" for a candidate)
 assets:    the job's images (job.json "assets", e.g. screenshots of a demo) as numbered
            thumbnails, ASSETS_PER_SHEET per sheet -> work/sheets/assets_NN.jpg; the summary
            maps each number to its file and size
@@ -27,6 +29,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from .. import redaction
 from . import _image as im
 from .common import (
     ToolError,
@@ -538,15 +541,37 @@ def _fit(w: int, h: int, limit: int = PLAN_STILL_MAX) -> tuple[int, int]:
     return max(2, round(w * k / 2) * 2), max(2, round(h * k / 2) * 2)
 
 
-def _still(job: Path, inputs: list[str], size: tuple[int, int], box, color: str, name: str):
+def _still(job: Path, inputs: list[str], size: tuple[int, int], boxes, color: str, name: str):
     w, h = _fit(*size)
     graph = f"[0:v]scale={w}:{h}"
-    if box:
+    for box in boxes:
         x0, y0 = int(box[0] * w), int(box[1] * h)
         bw, bh = max(2, int(box[2] * w) - x0), max(2, int(box[3] * h) - y0)
         graph += f",drawbox=x={x0}:y={y0}:w={bw}:h={bh}:color={color}:t=4"
     (f,) = im.render_jpegs([inputs], graph + "[out]", job / "work" / "plan_stills", [name])
     return str(f.relative_to(job))
+
+
+def _pd_view(c: dict) -> tuple[float | None, list[list[float]]]:
+    """(camera time, boxes) of a personal-data still: what render will cover. A screen
+    candidate is shown at the middle of its first measured piece inside the plan's range
+    (else of its range) with every block drawn then; a screenshot with all its boxes."""
+    if "asset" in c:
+        return None, redaction.asset_boxes(c)
+    lo, hi = c.get("range") or [c["t0"], c["t1"]]
+    pieces = redaction.pieces(c)
+    inside = [p for p in pieces if min(p["t1"], hi) > max(p["t0"], lo)]
+    first = next((p for p in inside if not _is_area(c, p)), inside[0] if inside else None)
+    if first is None:
+        t = (lo + hi) / 2
+    else:
+        t = (max(first["t0"], lo) + min(first["t1"], hi)) / 2
+    boxes = [list(p["box"]) for p in pieces if p["t0"] <= t <= p["t1"]] or [list(c["box"])]
+    return t, boxes
+
+
+def _is_area(c: dict, p: dict) -> bool:
+    return any(k.get("source") == "area" and k["box"] == p["box"] for k in c.get("track") or [])
 
 
 def plan_stills(args) -> dict:
@@ -591,10 +616,13 @@ def plan_stills(args) -> dict:
             warnings.append(f"view {v['n']}: no valid work/sync.json, no screen still")
             v["still"] = None
             continue
-        v["still"] = _still(job, got[0], got[1], v.get("zoom_box"), TARGET_COLOR, name)
+        zoom = [v["zoom_box"]] if v.get("zoom_box") else []
+        v["still"] = _still(job, got[0], got[1], zoom, TARGET_COLOR, name)
         made.append(v["still"])
+    measured = {c["id"]: c for c in redaction.load(job) or []}
     for c in data.get("personal_data") or []:
         name = f"pd_{c['id']:02d}.jpg"
+        t, boxes = _pd_view(measured.get(c["id"], c))
         if "asset" in c:
             f = asset_file(job, c["asset"])
             if f is None or not f.is_relative_to(job) or not f.is_file():
@@ -603,12 +631,14 @@ def plan_stills(args) -> dict:
                 continue
             got = (["-i", str(f)], _image_size(f))
         else:
-            got = screen_frame((c["t0"] + c["t1"]) / 2)
+            got = screen_frame(t)
             if got is None:
                 warnings.append(f"personal data {c['id']}: no valid work/sync.json, no still")
                 c["still"] = None
                 continue
-        c["still"] = _still(job, got[0], got[1], c["box"], PD_COLOR, name)
+            c["still_t"] = round(t, 3)
+        c["still"] = _still(job, got[0], got[1], boxes, PD_COLOR, name)
+        c["still_boxes"] = boxes
         made.append(c["still"])
     write_json(job / FILE, data)
     for w in warnings:

@@ -76,6 +76,13 @@ export interface PdCandidate {
   box: [number, number, number, number];
   reason: string;
   still?: string;
+  /** The exact text shown; its position is measured, not estimated. */
+  text?: string;
+  /** "ok": the text is covered where it is; otherwise (some of) the whole area is. */
+  measured?: "ok" | "partial" | "failed";
+  note?: string;
+  /** The boxes drawn on `still` (what will be covered at that moment). */
+  still_boxes?: [number, number, number, number][];
 }
 
 export interface RedactionDecision {

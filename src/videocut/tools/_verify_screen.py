@@ -58,6 +58,7 @@ from ._geometry import framed, sized
 from .common import ToolError, binary
 from .ingest import probe
 from .job import redaction_enforced
+from .redact import grab_screen
 
 REDACT_SAMPLES = 5
 REDACT_MIN_SHARE = 0.9
@@ -181,20 +182,6 @@ def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
     return docs
 
 
-def _grab_screen(src: Path, info: dict, t: float) -> np.ndarray | None:
-    """Full-size rgb frame of the screen recording at screen time t."""
-    if t < 0 or t > info["duration"]:
-        return None
-    w, h = info["size"]
-    out = _raw(
-        ["-ss", f"{t + (info.get('video_start') or 0.0):.4f}", "-i", str(src), "-frames:v", "1"]
-        + ["-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
-    )
-    if len(out) != w * h * 3:
-        return None
-    return np.frombuffer(out, np.uint8).reshape(h, w, 3)
-
-
 def _src_rect(box, size) -> tuple[int, int, int, int]:
     """Normalised box -> source px (x, y, w, h), outward."""
     sw, sh = size
@@ -248,20 +235,23 @@ def coverage(reel: Path, ctx: dict, size: tuple[int, int], cands: list[dict]) ->
     reel_frames = _frames(reel, [ctx["starts"][i] + n for i, n in picks], size)
     bg = _rgb(ctx["bg"])
     by_id = {c["id"]: c for c in texts}
-    docs = []
-    for (i, n), ids in sorted(picks.items()):
+
+    def one(pick) -> list[dict]:
+        (i, n), ids = pick
         seg = ctx["segs"][i]
         img = reel_frames.get(ctx["starts"][i] + n)
         if img is None:
-            continue
+            return []
         t_out = round((ctx["starts"][i] + n) / fps, 3)
         seg_no = plan.ranges[i].seg
         cam_t = ctx["edl"].segments[seg_no].start + n / fps
-        frame = _grab_screen(src, info, (seg.screen_frame + n) / fps)
-        found = _ocr.find_many(frame, [by_id[k]["text"] for k in ids]) if frame is not None else {}
+        needles = [by_id[k]["text"] for k in sorted(ids)]
+        frame = grab_screen(src, info, (seg.screen_frame + n) / fps)
+        found = _ocr.find_many(frame, needles) if frame is not None else {}
         v = seg.view
         shown = _ocr.find_many(np.ascontiguousarray(img[v.y : v.y + v.h, v.x : v.x + v.w]),
-                               [by_id[k]["text"] for k in ids])  # fmt: skip
+                               needles)  # fmt: skip
+        docs = []
         for k in sorted(ids):
             c = by_id[k]
             boxes = [o["box"] for o in found.get(c["text"], [])]
@@ -288,7 +278,9 @@ def coverage(reel: Path, ctx: dict, size: tuple[int, int], cands: list[dict]) ->
                 docs.append({"id": k, "segment": seg_no, "t": t_out, "source": "reel_ocr",
                              "text": o["text"], "flags": ["redaction_leak"],
                              "where": f"at {t_out} s (readable in the reel)"})  # fmt: skip
-    return docs
+        return docs
+
+    return [d for docs in _ocr.pmap(one, sorted(picks.items())) for d in docs]
 
 
 def _uncovered(rect: list[int], inset) -> np.ndarray:

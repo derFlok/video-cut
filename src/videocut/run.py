@@ -3,9 +3,10 @@
     prep     job new (when a file is given), then the deterministic tools: ingest --denoise,
              face (face track + blinks), transcribe (also writes candidates +
              takes_packed.md), sheet contact. A product demo (`--screen <recording>`, or
-             job.json "screen") runs ingest (camera + screen) -> sync -> screen -> face ->
-             transcribe -> sheet contact + sheet screen, and stops with a hint for
-             `tool sync --offset` when the recordings cannot be synced reliably
+             job.json "screen") runs ingest (camera + screen) -> sync -> screen -> redact
+             text (local OCR) -> face -> transcribe -> sheet contact + sheet screen, and
+             stops with a hint for `tool sync --offset` when the recordings cannot be
+             synced reliably
     plan     Claude run with the `plan` skill -> work/project.md, nothing is cut
     approve  the human reads work/project.md and approves it (prompt; `--approve` skips it)
     cut      Claude run with the `cut` skill (resumes the plan session when the plan is
@@ -75,12 +76,15 @@ from .tools.job import (
 TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
 PREP = [["ingest", "--denoise"], ["face"], ["transcribe"], ["sheet", "contact"]]
 # Product demo (job.json "screen"): ingest also prepares the screen recording, sync aligns it
-# with the camera, screen finds activity, clicks and zoom targets, and one overview sheet of
-# the screen joins the contact sheets.
+# with the camera, screen finds activity, clicks and zoom targets, redact text reads the
+# text on the screen (local OCR, for the personal-data candidates; skipped without it), and
+# one overview sheet of the screen joins the contact sheets.
+OCR_STEP = ["redact", "text"]
 DEMO_PREP = [
     ["ingest", "--denoise"],
     ["sync"],
     ["screen"],
+    OCR_STEP,
     ["face"],
     ["transcribe"],
     ["sheet", "contact"],
@@ -264,11 +268,20 @@ def sync_stop(job: Path, why: str) -> RunError:
     )
 
 
+def ocr_available() -> bool:
+    from .tools._ocr import available
+
+    return available()
+
+
 def prep(job: Path, steps: list[list[str]] | None = None, say=print) -> None:
     if steps is None:
         steps = DEMO_PREP if read_job(job).get("screen") else PREP
     for argv in steps:
         t0 = time.monotonic()
+        if argv == OCR_STEP and not ocr_available():
+            say(f"  {' '.join(argv):<16} skipped: no local text recognition (needs macOS)")
+            continue
         try:
             s = tool(job, *argv)
         except RunError as e:
@@ -291,6 +304,8 @@ def prep(job: Path, steps: list[list[str]] | None = None, say=print) -> None:
         }  # fmt: skip
         if argv == ["screen"]:
             extra = {"clicks": s.get("clicks"), "zoom_targets": len(s.get("zoom_targets", []))}
+        if argv == OCR_STEP:
+            extra = {"texts": len(s.get("texts", [])), "suggest": len(s.get("suggest", []))}
         say(f"  {' '.join(argv):<16} {time.monotonic() - t0:5.1f}s  {extra or ''}".rstrip())
     # Claude may only read inside the job folder, so the reel contract is copied in.
     type_, dst = read_job(job).get("type") or "", job / "work" / "contract.md"

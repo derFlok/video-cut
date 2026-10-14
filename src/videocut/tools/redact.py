@@ -10,6 +10,8 @@ text recognition (macOS Vision, _ocr.py). Nothing leaves the machine.
               (t screen seconds, camera_t with a valid work/sync.json, box normalised to
               the screen). The summary lists every distinct text with the time it is seen
               and `suggest` (e-mail addresses, phone numbers and IBANs found by pattern).
+              With screenshots (job.json "assets"), also `asset_texts` [{"asset", "text",
+              "box", "conf"}] and their pattern hits.
     measure   for every candidate of work/redaction.json with "text": finds the text on
               the screen (inside the plan's time "range", and wherever else it is shown),
               follows it over time (samples every MEASURE_STEP s, halved where it moves or
@@ -27,6 +29,7 @@ Run measure after writing work/redaction.json and before plan.json (it can move 
 import json
 import math
 import re
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -35,21 +38,33 @@ from .. import redaction as red_mod
 from ..edl import read_sync
 from . import _ocr
 from ._layouts import probe_screen, screen_source
-from .common import ToolError, binary, is_fresh, job_parent, resolve_job, run, run_tool, write_json
+from .common import (
+    ToolError,
+    binary,
+    is_fresh,
+    job_parent,
+    read_job,
+    resolve_job,
+    run,
+    run_tool,
+    write_json,
+)
 
 VERSION = 1
 TEXT_STEP = 2.0  # seconds between `redact text` samples
 SCENE_LAG = 0.2  # seconds after a scene change
-MEASURE_STEP = 0.5  # seconds between measure samples
+MEASURE_STEP = 1.0  # seconds between measure samples (finer where the text moves)
 MIN_DT = 1 / 15  # finest sample spacing (2 frames at 30 fps)
 MOVE_TOL = 0.25  # of the text height: a larger move between two samples is sampled finer
 GAP_FILL = 1.0  # seconds: a shorter gap between two sightings close together is covered
 PAIR_DIST = 0.15  # normalised: sightings further apart are different places
 MARGIN_K = 0.3  # margin around the measured text, of its height ...
 MARGIN_PX = 6  # ... at least this many source px
-AREA_PAD = 0.02  # normalised padding of a named area that could not be measured
-MAX_SAMPLES = 900  # per candidate
+AREA_PAD = 0.03  # normalised padding of a named area that could not be measured
+MAX_SAMPLES = 900  # per candidate, at least; 4 per MEASURE_STEP of the recording
 SUMMARY_TEXTS = 200
+HOLD_ROUND = 1 / 60  # s: a frame this little after t is shown at t (half a 30 fps frame)
+SEEK_EPS = 5e-4  # s: seek this far before a frame's pts (accurate seek keeps frames >= it)
 FILE = "work/screen_text.json"
 SAMPLES_FILE = "work/redaction_measure.json"
 
@@ -60,13 +75,52 @@ PATTERNS = {
 }
 
 
-def _grab(src: Path, info: dict, t: float) -> np.ndarray | None:
+_TIMES: dict[tuple, np.ndarray] = {}
+_TIMES_LOCK = threading.Lock()
+
+
+def frame_times(src: Path) -> np.ndarray:
+    """Sorted pts (seconds, as stored) of every video frame of `src`, from the packets (no
+    decoding); cached per file."""
+    st = src.stat()
+    key = (str(src), st.st_mtime_ns, st.st_size)
+    with _TIMES_LOCK:
+        if key not in _TIMES:
+            out = run(
+                [binary("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "packet=pts_time", "-of", "csv=p=0", str(src)]
+            )  # fmt: skip
+            vals = []
+            for line in out.stdout.split():
+                try:
+                    vals.append(float(line.strip(",")))
+                except ValueError:
+                    continue
+            _TIMES[key] = np.unique(np.array(vals, dtype=float))
+        return _TIMES[key]
+
+
+def shown_pts(src: Path, info: dict, t: float) -> float:
+    """The pts of the frame shown at screen time t: the last frame at or before it (half
+    an output frame of rounding), as the sample-and-hold grid of render and the proxy has
+    it. A screen recording writes frames only when something changes, so seeking to t
+    itself would give the NEXT change instead."""
+    start = info.get("video_start") or 0.0
+    times = frame_times(src)
+    if not len(times):
+        return t + start
+    i = int(np.searchsorted(times, t + start + HOLD_ROUND, side="right")) - 1
+    return float(times[max(i, 0)])
+
+
+def grab_screen(src: Path, info: dict, t: float) -> np.ndarray | None:
     """The screen frame shown at screen time t (full size, rgb), None outside it."""
     if t < 0 or t > info["duration"]:
         return None
     w, h = info["size"]
+    pts = shown_pts(src, info, t)
     out = run_bytes(
-        ["-ss", f"{t + (info.get('video_start') or 0.0):.4f}", "-i", str(src),
+        ["-ss", f"{max(pts - SEEK_EPS, 0.0):.6f}", "-i", str(src),
          "-frames:v", "1", "-an", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     )  # fmt: skip
     if len(out) != w * h * 3:
@@ -138,12 +192,15 @@ def screen_text(job: Path, force: bool = False) -> dict:
             return doc
     info = probe_screen(src)
     sync = read_sync(job / "work" / "sync.json")
-    lines, times = [], _sample_times(job, info["duration"])
-    for t in times:
-        rgb = _grab(src, info, t)
-        if rgb is None:
-            continue
-        for ln in _ocr.recognize(rgb):
+    times = _sample_times(job, info["duration"])
+
+    def read(t):
+        rgb = grab_screen(src, info, t)
+        return [] if rgb is None else _ocr.recognize(rgb)
+
+    lines = []
+    for t, found in zip(times, _ocr.pmap(read, times), strict=True):
+        for ln in found:
             item = {"t": t}
             if sync:
                 item["camera_t"] = round(t - sync["offset_s"], 3)
@@ -195,22 +252,51 @@ def suggest(texts: list[dict]) -> list[dict]:
     return out
 
 
+def asset_texts(job: Path) -> list[dict]:
+    """Text lines of the job's screenshots (job.json "assets"): [{"asset", "text", "box",
+    "conf"}], box normalised to the image."""
+    out = []
+    for rel in read_job(job).get("assets") or []:
+        f = red_mod.asset_file(job, rel)
+        if f is None or not f.is_relative_to(job) or not f.is_file():
+            continue
+        out += [{"asset": rel, **ln} for ln in _ocr.recognize(image_rgb(f))]
+    return out
+
+
 def text_tool(args) -> dict:
     job = resolve_job(args.job).resolve()
-    doc = screen_text(job, force=args.force)
-    texts = _distinct(doc)
-    hits = suggest(texts)
-    print(f"{FILE}: {len(doc['lines'])} text lines at {len(doc['times'])} times, "
-          f"{len(texts)} distinct, {len(hits)} pattern hit(s)")  # fmt: skip
-    for h in hits:
-        print(f"  {h['kind']}: {h['text']!r} ({h['t0']:.1f}-{h['t1']:.1f} s screen)")
-    return {
-        "file": FILE,
-        "times": len(doc["times"]),
-        "texts": texts[:SUMMARY_TEXTS],
-        "more_texts": max(0, len(texts) - SUMMARY_TEXTS),
-        "suggest": hits,
-    }
+    _need_ocr()
+    meta = read_job(job)
+    if not meta.get("screen") and not meta.get("assets"):
+        raise ToolError("the job has no screen recording and no screenshots")
+    out: dict = {}
+    if meta.get("screen"):
+        doc = screen_text(job, force=args.force)
+        texts = _distinct(doc)
+        hits = suggest(texts)
+        print(f"{FILE}: {len(doc['lines'])} text lines at {len(doc['times'])} times, "
+              f"{len(texts)} distinct, {len(hits)} pattern hit(s)")  # fmt: skip
+        for h in hits:
+            print(f"  {h['kind']}: {h['text']!r} ({h['t0']:.1f}-{h['t1']:.1f} s screen)")
+        out = {
+            "file": FILE,
+            "times": len(doc["times"]),
+            "texts": texts[:SUMMARY_TEXTS],
+            "more_texts": max(0, len(texts) - SUMMARY_TEXTS),
+            "suggest": hits,
+        }
+    if meta.get("assets"):
+        lines = asset_texts(job)
+        hits = [
+            {**h, "asset": ln["asset"]}
+            for ln in lines
+            for h in suggest([{"text": ln["text"], "box": ln["box"]}])
+        ]
+        print(f"screenshots: {len(lines)} text lines, {len(hits)} pattern hit(s)")
+        out["asset_texts"] = lines[:SUMMARY_TEXTS]
+        out["suggest"] = out.get("suggest", []) + hits
+    return out
 
 
 # ---------------------------------------------------------------- measure
@@ -241,7 +327,11 @@ def _pairs(a: list, b: list) -> tuple[list[tuple], list, list]:
         ua.add(i)
         ub.add(j)
         pairs.append((a[i], b[j]))
-    return pairs, [x for i, x in enumerate(a) if i not in ua], [y for j, y in enumerate(b) if j not in ub]
+    return (
+        pairs,
+        [x for i, x in enumerate(a) if i not in ua],
+        [y for j, y in enumerate(b) if j not in ub],
+    )
 
 
 def _moved(pairs, size) -> bool:
@@ -267,19 +357,30 @@ def _pad_area(box) -> list[float]:
 
 class Tracker:
     """Samples one text over screen time. `look(t)` -> list of boxes (normalised) where it
-    is seen at screen time t (cached)."""
+    is seen at screen time t; `prefetch(ts)` (optional) reads many times at once before
+    they are looked at."""
 
-    def __init__(self, look, duration: float, size: tuple[int, int]):
+    def __init__(self, look, duration: float, size: tuple[int, int], prefetch=None):
         self.look, self.duration, self.size = look, duration, size
+        self.prefetch = prefetch
         self.seen: dict[float, list] = {}
+        self.limit = max(MAX_SAMPLES, math.ceil(4 * duration / MEASURE_STEP))
+
+    def _t(self, t: float) -> float:
+        return round(min(max(t, 0.0), self.duration), 4)
 
     def at(self, t: float) -> list:
-        t = round(min(max(t, 0.0), self.duration), 4)
+        t = self._t(t)
         if t not in self.seen:
-            if len(self.seen) >= MAX_SAMPLES:
-                raise ToolError(f"more than {MAX_SAMPLES} samples for one text")
+            if len(self.seen) >= self.limit:
+                raise ToolError(f"more than {self.limit} samples for one text")
             self.seen[t] = self.look(t)
         return self.seen[t]
+
+    def _fill(self, ts) -> None:
+        todo = sorted({self._t(t) for t in ts} - set(self.seen))
+        if self.prefetch and len(todo) > 1:
+            self.prefetch(todo)
 
     def run(self, rng: tuple[float, float], seeds: list[float]) -> None:
         """Sample the range on the MEASURE_STEP grid, every seed, outward from every
@@ -288,6 +389,7 @@ class Tracker:
         last = math.floor(self.duration / step)
         k0, k1 = max(0, math.floor(rng[0] / step)), min(last, math.ceil(rng[1] / step))
         todo = list(range(k0, k1 + 1))
+        self._fill([k * step for k in todo] + list(seeds))
         for s in seeds:
             self.at(s)
             todo += [math.floor(s / step), math.ceil(s / step)]
@@ -304,10 +406,9 @@ class Tracker:
         self.refine()
 
     def refine(self) -> None:
-        changed = True
-        while changed:
-            changed = False
+        while True:
             ts = sorted(self.seen)
+            mids = []
             for a, b in zip(ts, ts[1:], strict=False):
                 if b - a <= MIN_DT * 1.01:
                     continue
@@ -316,8 +417,12 @@ class Tracker:
                     continue
                 pairs, only_a, only_b = _pairs(sa, sb)
                 if only_a or only_b or _moved(pairs, self.size):
-                    self.at((a + b) / 2)
-                    changed = True
+                    mids.append((a + b) / 2)
+            if not mids:
+                return
+            self._fill(mids)
+            for t in mids:
+                self.at(t)
 
     def pieces(self, rng: tuple[float, float], area: list[float]) -> list[dict]:
         """[{"t0", "t1", "box", "text_box", "source"}] in screen time, consecutive."""
@@ -365,7 +470,9 @@ class Tracker:
 def _merge(docs: list[dict]) -> list[dict]:
     """Pieces with the same box and source that touch in time become one."""
     out: list[dict] = []
-    for d in sorted(docs, key=lambda d: (d["source"], tuple(round(v, 4) for v in d["box"]), d["t0"])):
+    for d in sorted(
+        docs, key=lambda d: (d["source"], tuple(round(v, 4) for v in d["box"]), d["t0"])
+    ):
         last = out[-1] if out else None
         if (
             last is not None
@@ -427,8 +534,7 @@ def measure(job: Path) -> dict:
     todo = [c for c in cands if isinstance(c.get("text"), str) and c["text"].strip()]
     report, samples = [], {}
     warn = [
-        f"candidate {c['id']} ({c['kind']}) has no \"text\": its box is drawn as it is "
-        "(not measured)"
+        f'candidate {c["id"]} ({c["kind"]}) has no "text": its box is drawn as it is (not measured)'
         for c in cands
         if c not in todo and c["kind"] in ("email", "phone", "name")
     ]
@@ -448,17 +554,26 @@ def measure(job: Path) -> dict:
         doc = screen_text(job)
         size = tuple(info["size"])
         cache: dict[float, dict] = {}
+        lock = threading.Lock()
         try:
             cam_dur = float(json.loads((job / "work" / "probe.json").read_text())["duration"])
         except (OSError, ValueError, KeyError, TypeError):
             cam_dur = None
         needles = [c["text"] for c in screen]
 
+        def read(t):
+            rgb = grab_screen(src, info, t)
+            found = _ocr.find_many(rgb, needles) if rgb is not None else {}
+            with lock:
+                cache[t] = found
+
+        def prefetch(ts):
+            _ocr.pmap(read, [t for t in ts if t not in cache])
+
         def look_for(needle):
             def look(t):
                 if t not in cache:
-                    rgb = _grab(src, info, t)
-                    cache[t] = _ocr.find_many(rgb, needles) if rgb is not None else {}
+                    read(t)
                 return [o["box"] for o in cache[t].get(needle, [])]
 
             return look
@@ -467,11 +582,15 @@ def measure(job: Path) -> dict:
             rng = c.get("range") or [c["t0"], c["t1"]]
             s_rng = (rng[0] + off, rng[1] + off)
             seeds = sorted({ln["t"] for ln in doc["lines"] if _ocr.matches(ln["text"], c["text"])})
-            tr = Tracker(look_for(c["text"]), info["duration"], size)
+            tr = Tracker(look_for(c["text"]), info["duration"], size, prefetch)
             tr.run(s_rng, seeds)
             track = []
             for p in tr.pieces(s_rng, c["box"]):
-                q = {"t0": round(p["t0"] - off, 4), "t1": round(p["t1"] - off, 4), "box": _r(p["box"])}
+                q = {
+                    "t0": round(p["t0"] - off, 4),
+                    "t1": round(p["t1"] - off, 4),
+                    "box": _r(p["box"]),
+                }
                 if "text_box" in p:
                     q["text_box"] = _r(p["text_box"])
                 track.append({**q, "source": p["source"]})

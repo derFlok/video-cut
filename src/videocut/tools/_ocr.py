@@ -13,6 +13,8 @@ frames are handed over as pixels in memory, nothing is written or sent anywhere.
     matches(line, needle)   the (start, end) character span of `needle` in `line`, tolerant
                             to OCR noise (case, spacing, a few wrong characters)
 
+    pmap(fn, items)         fn over items on WORKERS threads (recognition releases the GIL)
+
 `available()` is False off macOS (Linux CI): callers fail closed (verify) or say so.
 """
 
@@ -21,6 +23,7 @@ import ctypes.util
 import re
 import sys
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 
 import numpy as np
@@ -28,6 +31,7 @@ import numpy as np
 LANGUAGES = ("de-DE", "en-US")
 INK_LEVEL = 40  # grey levels a text pixel differs from its line's background
 MIN_CONF = 0.3
+WORKERS = 4  # frames read at once (pmap): Vision runs outside the GIL; more do not help
 
 
 class OcrError(RuntimeError):
@@ -76,6 +80,14 @@ def _runtime():
     if not objc.objc_getClass(b"VNRecognizeTextRequest"):
         raise OcrError("this macOS has no VNRecognizeTextRequest (needs macOS 10.15 or newer)")
     return objc, cg, cf
+
+
+def pmap(fn, items: list) -> list:
+    """fn over items, WORKERS at a time (frame reads + recognition), results in order."""
+    if len(items) < 2:
+        return [fn(x) for x in items]
+    with ThreadPoolExecutor(WORKERS) as ex:
+        return list(ex.map(fn, items))
 
 
 def available() -> bool:
@@ -284,7 +296,7 @@ def matches(line: str, needle: str) -> list[tuple[int, int]]:
             cs[j] = start[j - 1] if best == sub else start[j] if best == dele else cs[j - 1]
         prev, start = cur, cs
     spans, j = [], n
-    hits = sorted(((prev[j], -j) for j in range(1, n + 1) if prev[j] <= k))
+    hits = sorted((prev[j], -j) for j in range(1, n + 1) if prev[j] <= k)
     used = []
     for _, neg in hits:
         end = -neg

@@ -80,10 +80,13 @@ Write the approved views into the segments (all times **camera seconds**, like `
   render widens such a key so the screen stays sharp and reports `screen_zoom_clamped`.
 - `redact`: `videocut tool job show` → `redaction.redact` lists the candidate ids of
   `work/redaction.json` to redact (the human's decision; without one: all of them).
-  For each of them, every screen segment overlapping its `t0`–`t1` gets a block with its
-  `box` over that overlap (clipped to the segment). Candidates in `redaction.demo` are demo
-  data: no block. Never edit `work/redaction.json`. `edl check` fails with
-  `redaction_missing` when a block is missing.
+  Their blocks are **measured**, never estimated: a candidate with a `track` is drawn
+  piece by piece (each `{t0, t1, box}` of its track); one without a track by its own
+  `t0`–`t1` and `box`. Every screen segment overlapping a piece gets a block with that
+  piece's `box` over the overlap (clipped to the segment). `edl check` fails with
+  `redaction_missing` and prints the exact block to add (`add {"t0": …, "t1": …,
+  "box": […]}`): copy it into that segment's `redact`. Candidates in `redaction.demo` are
+  demo data: no block. Never edit `work/redaction.json` and never move or shrink a block.
 - Screen layouts must lie inside the sync `overlap` (`edl check` says so otherwise; use
   `face` there). `zoom_keys` (camera punch-ins) only apply to `face` segments.
 - **By format.** `9:16` (and `4:5`): the screen is a band in a tall frame; the rules above
@@ -110,7 +113,11 @@ Each round:
    stretches, size). `info` lists normal talking-head jump cuts — **expected, not errors.**
    Product demos also have `screen_flagged`: `redaction_missing` (check `redaction`: a
    redact block is not solid in some frame, check the box and its times; check
-   `decision`: a candidate to redact has no block in the EDL), `screen_time_mismatch` (the screen
+   `decision`: a candidate to redact has no block in the EDL), `redaction_leak` (check
+   `coverage`: the personal text itself is visible at that output time — a hard failure;
+   add the missing block from `edl check`; if every block is there, do not work around it:
+   write it in the report as a blocker for the human), `redaction_unchecked` (no local text
+   recognition here: say so in the report), `screen_time_mismatch` (the screen
    picture does not match the synced time: write it in the report; never change
    `work/sync.json`). `screen_zoom_clamped` is info: the zoom was widened for sharpness.
    A cut into or out of a screen view is a view change (info `reframe`), not a jump.

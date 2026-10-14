@@ -347,7 +347,12 @@ def test_demo_prep_order_and_sync_stop(monkeypatch, tmp_path):
 
     monkeypatch.setattr(run, "tool", tool)
     REAL_PREP(job, say=lambda _: None)
-    assert calls == run.DEMO_PREP
+    ocr = run.ocr_available()
+    assert calls == [s for s in run.DEMO_PREP if ocr or s != run.OCR_STEP]
+    monkeypatch.setattr(run, "ocr_available", lambda: False)
+    calls.clear()
+    REAL_PREP(job, say=lambda _: None)
+    assert run.OCR_STEP not in calls and len(calls) == len(run.DEMO_PREP) - 1
     assert ["sync"] in calls and calls.index(["sync"]) < calls.index(["screen"])
 
     def weak(_job, *argv):

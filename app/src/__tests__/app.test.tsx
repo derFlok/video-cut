@@ -119,6 +119,29 @@ describe("personal-data dialog", () => {
     expect(onConfirm).toHaveBeenLastCalledWith({ mode: "demo", ids: [] });
   });
 
+  it("shows the measured boxes and says when the whole area is covered", () => {
+    installMock({ step: 0 });
+    const measured: PdCandidate[] = [
+      {
+        ...cands[0],
+        still: "work/plan_stills/pd_01.jpg",
+        measured: "ok",
+        still_boxes: [
+          [0.1, 0.2, 0.3, 0.25],
+          [0.1, 0.3, 0.3, 0.35],
+        ],
+      },
+      { ...cands[2], still: "work/plan_stills/pd_03.jpg", measured: "failed" },
+    ];
+    wrap(<PersonalDataDialog jobId="j" candidates={measured} onCancel={() => undefined} onConfirm={() => undefined} />);
+    const drawn = screen.getAllByTestId("pd-box");
+    expect(drawn).toHaveLength(3); // two measured boxes, then the area of the failed one
+    expect(drawn[0]).toHaveStyle({ top: "20%", left: "10%" });
+    expect(drawn[2]).toHaveStyle({ width: "50%" });
+    expect(screen.getByText(t("pd.measured.failed"))).toBeInTheDocument();
+    expect(screen.queryByText(t("pd.measured.partial"))).not.toBeInTheDocument();
+  });
+
   it("approval sends plan_sha and the decision", async () => {
     const mock = installMock({ step: 0 });
     const user = userEvent.setup();

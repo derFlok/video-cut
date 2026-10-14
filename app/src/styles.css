@@ -1006,6 +1006,10 @@ progress {
   gap: 2px;
   min-width: 0;
 }
+.pd-warn {
+  color: var(--redact);
+  font-weight: 600;
+}
 
 /* result */
 .player {

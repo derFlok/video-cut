@@ -40,8 +40,9 @@ approves the plan before anything is cut. Workflow after browser-use/video-use (
    where the speaker looks away or leaves the frame. Do not read all sheets.
 5. **Product demo** (`job show` lists a `screen` recording, or `assets` screenshots): follow
    the section *Product demos* below as well.
-6. Decide, then write `work/project.md` (format below), then `work/plan.json` (section
-   *Structured plan*), run `videocut tool plan check` until it passes, then
+6. Decide. Demos with personal data: write `work/redaction.json` and run
+   `videocut tool redact measure` first (*Personal data* below). Then write
+   `work/project.md` (format below), then `work/plan.json` (section *Structured plan*), run `videocut tool plan check` until it passes, then
    `videocut tool sheet plan` (stills of the views and personal-data candidates; do not
    look at them, they are for the human). Reply with a three-line summary. **Stop there.**
 
@@ -59,7 +60,7 @@ When the prompt says *revise-the-plan mode*, a plan exists and the human gave fe
 - Add one line right under the title of `work/project.md`:
   `Changed after feedback: <what changed, in a few words>` (replace an older such line).
 - Update `work/plan.json` to match, with `"change_note": "<the same few words>"` (and `work/redaction.json` only if the change shows new
-  screen time with personal data), then `videocut tool plan check` and
+  screen time with personal data; then `videocut tool redact measure` again), then `videocut tool plan check` and
   `videocut tool sheet plan` as in step 6. The human approves the changed plan again.
 
 ## Editorial defaults
@@ -149,21 +150,50 @@ keep each ≥ 2.5 s and at least ~1 s apart.
 
 ### Personal data → `work/redaction.json`
 
-Write **every** suspected item (when unsure, list it; boxes generous), numbered from 1:
+**You choose WHICH text is personal; the tool measures WHERE it is.** Never estimate a
+box for a text by eye from a still: downscaled stills put it a line off, and the name stays
+readable. With a screen recording, first read what the screen shows:
+
+- `videocut tool redact text` → every distinct text line on the screen recording (local
+  text recognition, nothing leaves the machine) with its screen time (`t0`–`t1`, camera
+  `camera_t0`–`camera_t1`) and `box`, and `suggest`: e-mail addresses, phone numbers and
+  IBAN-like numbers found by pattern. Names, customer numbers and addresses you pick
+  yourself from `texts`.
+
+Write **every** suspected item (when unsure, list it), numbered from 1:
 
 ```json
 {"candidates": [
-  {"id": 1, "kind": "email", "t0": 0.0, "t1": 24.8, "box": [0.47, 0.0, 0.80, 0.07],
-   "reason": "e-mail address in the top bar"},
-  {"id": 2, "kind": "name", "asset": "input/shot-2.png", "box": [0.05, 0.10, 0.40, 0.16],
-   "reason": "customer name in the header"}
+  {"id": 1, "kind": "email", "t0": 0.0, "t1": 24.8, "box": [0.45, 0.0, 0.85, 0.08],
+   "text": "erika.mustermann@example.com", "reason": "e-mail address in the top bar"},
+  {"id": 2, "kind": "name", "asset": "input/shot-2.png", "box": [0.05, 0.05, 0.60, 0.30],
+   "text": "Erika Mustermann", "reason": "customer name in the header card"},
+  {"id": 3, "kind": "other", "t0": 3.0, "t1": 9.5, "box": [0.70, 0.55, 0.98, 0.95],
+   "reason": "video-call tile with another person's face"}
 ]}
 ```
 
-`kind`: `email`, `phone`, `name`, `customer` or `other`. Screen recording: `t0`/`t1` in
-**camera** seconds (the whole time it is visible), `box` 0..1 of the screen. Screenshot:
-`asset` (the file from `job.json` `assets`) and `box` 0..1 of the image. List the same
-items numbered under **Personal data** in project.md. No candidates: do not write the file.
+- `kind`: `email`, `phone`, `name`, `customer` or `other`.
+- `text`: the exact text as `redact text` lists it (one line or a part of it; one
+  candidate per distinct text). **Required for `email`, `phone` and `name`**, and for any
+  other item that is text. Only something that is not text (a face, a picture) has none.
+- `box`: the whole **area** the item is in (the panel, card, list or bar, generous; 0..1
+  of the screen or image) — not the line. It is the fail-closed cover where the text
+  cannot be measured, and the cover of an item without text.
+- Screen recording: `t0`/`t1` in **camera** seconds (the whole time it is visible).
+  Screenshot: `asset` (the file from `job.json` `assets`).
+
+Then **`videocut tool redact measure`**: it finds each `text` on the screen (within your
+times and wherever else it shows), follows it while the page scrolls, and writes the
+measured `track` (time pieces with boxes), `measured` (`ok`, `partial`, `failed`) and a
+`note` back into `work/redaction.json`; `t0`/`t1` may grow to every time the text is shown.
+Where the text is not found, the whole `box` area is covered (`partial` / `failed`): say
+so in project.md (the note) and check the `text` spelling against `redact text` once;
+measure again after a fix. Do not edit `track`, `measured` or `note` yourself.
+`plan check` fails while a text candidate is not measured.
+
+List the same items numbered under **Personal data** in project.md, each with the
+measurement result. No candidates: do not write the file.
 
 ## `work/project.md` format
 
@@ -203,7 +233,8 @@ Type: <type> · Format: <format> (<w>x<h>) · Target length: <n> s · Estimated 
 |---|---|---|---|---|---|
 
 ## Personal data (demo jobs; the human decides at approval: demo data or redact)
-1. email — 000.0–024.8 s, top bar: e-mail address (box [0.47, 0.00, 0.80, 0.07])
+1. email — 000.0–024.8 s, top bar: "erika.mustermann@example.com" (measured: ok)
+2. other — 003.0–009.5 s, video-call tile (no text: the whole area [0.70, 0.55, 0.98, 0.95])
 
 ## Risks and doubts
 - <cut points that may be hard (word run-ons, breaths, looking away), unclear retakes,
@@ -227,15 +258,17 @@ The same plan as data, for the app (it must say exactly what project.md says):
  "overlays": [{"n": 1, "src": [21.30, 23.10], "scene": "keyword", "text": "<words>",
                "why": "the thesis"}],
  "personal_data": [{"id": 1, "kind": "email", "t0": 0.0, "t1": 24.8,
-                    "box": [0.47, 0.0, 0.80, 0.07], "reason": "e-mail in the top bar"}],
+                    "box": [0.45, 0.0, 0.85, 0.08], "text": "erika.mustermann@example.com",
+                    "reason": "e-mail in the top bar", "measured": "ok", "note": "...",
+                    "range": [0.0, 24.8], "track": [...]}],
  "risks": ["<one per line>"]}
 ```
 
 - Only **keep** rows go into `keep_list`, in output order; all times are source (camera)
   seconds. `views` only for product demos (else `[]`); `zoom_box`/`zoom_t` only where the
   plan zooms (`zoom_t` inside `src`). `scene` is one of the overlay scenes above.
-- `personal_data` repeats `work/redaction.json` exactly (same ids, kinds, times or
-  `asset`, boxes); none → `[]`.
+- `personal_data` repeats `work/redaction.json` exactly **after** `redact measure` (copy
+  each candidate as it is now, with its measured times); none → `[]`.
 - Leave out `still`: `videocut tool sheet plan` fills it in.
 - `change_note` only in revise-the-plan mode (what the feedback changed, in a few words);
   a fresh plan has none.

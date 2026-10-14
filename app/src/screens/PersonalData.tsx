@@ -77,15 +77,19 @@ export function PersonalDataDialog({
                 {c.still ? (
                   <>
                     <img src={api.stillUrl(jobId, c.still)} alt="" />
-                    <span
-                      className={`pd-box${picked.has(c.id) ? " pd-box-on" : ""}`}
-                      style={{
-                        left: `${c.box[0] * 100}%`,
-                        top: `${c.box[1] * 100}%`,
-                        width: `${(c.box[2] - c.box[0]) * 100}%`,
-                        height: `${(c.box[3] - c.box[1]) * 100}%`,
-                      }}
-                    />
+                    {(c.still_boxes?.length ? c.still_boxes : [c.box]).map((b, i) => (
+                      <span
+                        key={i}
+                        data-testid="pd-box"
+                        className={`pd-box${picked.has(c.id) ? " pd-box-on" : ""}`}
+                        style={{
+                          left: `${b[0] * 100}%`,
+                          top: `${b[1] * 100}%`,
+                          width: `${(b[2] - b[0]) * 100}%`,
+                          height: `${(b[3] - b[1]) * 100}%`,
+                        }}
+                      />
+                    ))}
                   </>
                 ) : (
                   <span className="thumb-empty" />
@@ -101,6 +105,12 @@ export function PersonalDataDialog({
                       : ""}
                 </span>
                 <span>{c.reason}</span>
+                {c.measured && c.measured !== "ok" && (
+                  <span className="pd-warn">{t(`pd.measured.${c.measured}`)}</span>
+                )}
+                {!c.measured && !c.asset && c.t0 !== undefined && (
+                  <span className="muted">{t("pd.measured.none")}</span>
+                )}
               </div>
               <label className="check">
                 <input type="checkbox" checked={picked.has(c.id)} onChange={() => toggle(c.id)} />

@@ -19,10 +19,15 @@ export function changedKeeps(prev: PlanJson | null, next: PlanJson | null): Set<
   return out;
 }
 
-/** Personal-data candidates with the still from plan.json when the job list has none. */
+/** Personal-data candidates with the still (and the boxes drawn on it) from plan.json
+ *  when the job list has none. */
 function withStills(cands: PdCandidate[], plan: PlanJson | null): PdCandidate[] {
   const byId = new Map((plan?.personal_data ?? []).map((p) => [p.id, p]));
-  return cands.map((c) => (c.still ? c : { ...c, still: byId.get(c.id)?.still ?? undefined }));
+  return cands.map((c) => {
+    if (c.still) return c;
+    const p = byId.get(c.id);
+    return { ...c, still: p?.still ?? undefined, still_boxes: p?.still_boxes ?? c.still_boxes };
+  });
 }
 
 export function PlanReview({ live }: { live: Live }) {
