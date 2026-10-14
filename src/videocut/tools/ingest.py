@@ -3,22 +3,32 @@
 Writes into work/:
     probe.json      duration, fps, display size (after rotation), rotation, colour (HDR?),
                     the video and audio stream used, audio rate
-    audio_raw.wav   48 kHz mono PCM straight from the source
+    audio_raw.wav   48 kHz mono PCM straight from the source, in video time
     audio.wav       48 kHz mono PCM the rest of the pipeline uses; with --denoise
                     cleaned by DeepFilterNet (delay-compensated), else equal to the raw track
-    audio.json      how audio.wav was made (so a changed --denoise redoes it)
+    audio.json      how audio.wav was made (so a changed --denoise redoes it):
+                    {"denoised", "rate", "channels", "time_base": "video", "audio_offset_s"}
     proxy.mp4       short side 360 px, source fps, SDR BT.709 (HDR tonemapped), for
                     contact sheets and bursts
 
 With a screen recording in job.json ("screen", product demos) also:
     screen_probe.json   like probe.json (audio fields null when it has no audio) plus
                         "file" (the job-relative path it describes) and "vfr"
-    screen_audio.wav    48 kHz mono PCM of its microphone track (missing without audio);
-                        `tool sync` aligns it with the camera audio
+    screen_audio.wav    48 kHz mono PCM of its microphone track (missing without audio),
+                        in screen time; `tool sync` aligns it with the camera audio
+    screen_audio.json   {"time_base": "video", "audio_offset_s"} for screen_audio.wav
     screen_proxy.mp4    long side 960 px, constant 30 fps, no audio, SDR; time 0 is the
                         first video frame ("screen time"). Screen recordings are often VFR
                         (frames only when something changes); the proxy is CFR so frame n
                         is screen time n/30. The original stays the render input.
+
+Time base: every time in a job is video time (0 = the first frame of the video stream).
+An audio stream often starts a little later (or earlier) than its video; the wavs are
+padded with silence (or trimmed) by audio_offset_s = audio_start - video_start, so a time
+in audio.wav or words.json is a time in the video. A job ingested before this rule
+(audio.json without "time_base") is upgraded in place: the wavs are shifted, and
+words.json (with alignment and candidates) is shifted along instead of transcribed again,
+so the words under an approved plan stay the same.
 
 Audio comes from one deliberately chosen stream: the first AAC/PCM one, else the first
 other decodable one (phones add extra tracks such as spatial audio that ffmpeg's default
@@ -145,9 +155,59 @@ def probe(src: Path, need_audio: bool = True) -> dict:
     return info
 
 
-def _extract_audio(src: Path, dst: Path, index: int | None = None) -> None:
+def audio_offset(info: dict) -> float:
+    """Where the audio's first sample lies in video time (audio_start - video_start)."""
+    if info.get("audio_start") is None:
+        return 0.0
+    return round(info["audio_start"] - (info.get("video_start") or 0.0), 6)
+
+
+def _shift(offset: float) -> list[str]:
+    """ffmpeg audio filter that moves the first sample to `offset` (pad or trim)."""
+    n = round(offset * RATE)
+    if n > 0:
+        return ["-af", f"asetpts=PTS-STARTPTS,adelay=delays={n}S:all=1"]
+    if n < 0:
+        return ["-af", f"asetpts=PTS-STARTPTS,atrim=start_sample={-n},asetpts=PTS-STARTPTS"]
+    return []
+
+
+def _extract_audio(src: Path, dst: Path, index: int | None = None, offset: float = 0.0) -> None:
     pick = ["-map", f"0:{index}"] if index is not None else ["-vn"]
-    ffmpeg_to(dst, "-i", str(src), *pick, "-ac", "1", "-ar", str(RATE), "-c:a", "pcm_s16le")
+    ffmpeg_to(
+        dst,
+        "-i",
+        str(src),
+        *pick,
+        *_shift(offset),
+        "-ac",
+        "1",
+        "-ar",
+        str(RATE),
+        "-c:a",
+        "pcm_s16le",
+    )
+
+
+def _shift_in_place(wav: Path, offset: float) -> None:
+    """Move an existing wav into video time (upgrade of a job ingested before)."""
+    if round(offset * RATE):
+        _extract_audio(wav, wav.with_name(wav.stem + ".shift.wav"), offset=offset)
+        wav.with_name(wav.stem + ".shift.wav").replace(wav)
+
+
+SHIFTING = "shifting"  # time_base while an old job's wavs are being moved
+
+
+def _read(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _time_record(offset: float) -> dict:
+    return {"time_base": "video", "audio_offset_s": offset}
 
 
 def _denoise(raw: Path, dst: Path) -> None:
@@ -234,7 +294,7 @@ def _screen_proxy(src: Path, dst: Path, info: dict) -> None:
     )
 
 
-def _ingest_screen(job: Path, step) -> dict | None:
+def _ingest_screen(job: Path, step, upgraded: list[str]) -> dict | None:
     """The screen recording's outputs (see the module docstring); None without one."""
     src = screen_path(job)
     if src is None:
@@ -243,6 +303,7 @@ def _ingest_screen(job: Path, step) -> dict | None:
     rel = read_job(job)["screen"]
     probe_file = work / "screen_probe.json"
     audio, proxy = work / "screen_audio.wav", work / "screen_proxy.mp4"
+    audio_meta = work / "screen_audio.json"
     try:
         prev = json.loads(probe_file.read_text())
         if prev.get("version") != PROBE_VERSION or prev.get("file") != rel:
@@ -257,12 +318,28 @@ def _ingest_screen(job: Path, step) -> dict | None:
 
     step("screen_probe", [probe_file], [src], make_probe)
     info = json.loads(probe_file.read_text())
+    offset = audio_offset(info)
     if info["audio_index"] is not None:
-        step(
-            "screen_audio", [audio], [src], lambda: _extract_audio(src, audio, info["audio_index"])
-        )
+        state = _read(audio_meta).get("time_base")
+        if not audio_meta.is_file() and is_fresh([audio], [src]):
+            # Ingested before the video time base: shift the wav instead of extracting.
+            # "shifting" marks the step, so a crash inside it never shifts twice.
+            write_json(audio_meta, {"time_base": SHIFTING})
+            _shift_in_place(audio, offset)
+            write_json(audio_meta, _time_record(offset))
+            upgraded.append("screen_audio")
+        elif state != "video":
+            audio.unlink(missing_ok=True)
+
+        def make_screen_audio() -> None:
+            audio_meta.unlink(missing_ok=True)
+            _extract_audio(src, audio, info["audio_index"], offset)
+            write_json(audio_meta, _time_record(offset))
+
+        step("screen_audio", [audio, audio_meta], [src], make_screen_audio)
     else:
         audio.unlink(missing_ok=True)
+        audio_meta.unlink(missing_ok=True)
     step("screen_proxy", [proxy], [src], lambda: _screen_proxy(src, proxy, info))
     return {
         "file": rel,
@@ -271,6 +348,7 @@ def _ingest_screen(job: Path, step) -> dict | None:
         "vfr": info["vfr"],
         "size": info["size"],
         "audio": info["audio_index"] is not None,
+        "audio_offset_s": offset,
     }
 
 
@@ -300,13 +378,39 @@ def ingest(args) -> dict:
     if "probe" in done:  # stream choice or colour handling may differ: redo what uses them
         raw.unlink(missing_ok=True)
         proxy.unlink(missing_ok=True)
-    step("audio_raw", [raw], [src], lambda: _extract_audio(src, raw, info["audio_index"]))
-
+    offset = audio_offset(info)
     audio, meta = work / "audio.wav", work / "audio.json"
-    try:
-        prev = json.loads(meta.read_text())
-    except (OSError, ValueError):
-        prev = {}
+    prev = _read(meta)
+    upgraded: list[str] = []
+    if prev and prev.get("time_base") != "video":
+        legacy = "time_base" not in prev and prev.get("denoised") == args.denoise
+        if legacy and "probe" not in done and is_fresh([raw], [src]):
+            legacy = is_fresh([audio, meta], [raw])
+        else:
+            legacy = False
+        if legacy:
+            # Ingested before the video time base: shift what exists (words included).
+            # A changed --denoise or an interrupted shift ("shifting") rebuilds instead.
+            from .transcribe import shift_to_video_time
+
+            words_fresh = is_fresh([work / "words.json", work / "transcribe.json"], [audio])
+            write_json(meta, {**prev, "time_base": SHIFTING})
+            _shift_in_place(raw, offset)
+            _shift_in_place(audio, offset)
+            prev = {**prev, **_time_record(offset)}
+            write_json(meta, prev)
+            upgraded.append("audio")
+            if words_fresh:
+                shift_to_video_time(work, offset)
+                upgraded.append("words")
+        else:
+            raw.unlink(missing_ok=True)
+    step(
+        "audio_raw",
+        [raw],
+        [src],
+        lambda: _extract_audio(src, raw, info["audio_index"], offset),
+    )
     if prev.get("denoised") != args.denoise:
         audio.unlink(missing_ok=True)
 
@@ -316,21 +420,26 @@ def ingest(args) -> dict:
             _denoise(raw, audio)
         else:
             shutil.copyfile(raw, audio)
-        write_json(meta, {"denoised": args.denoise, "rate": RATE, "channels": 1})
+        record = {"denoised": args.denoise, "rate": RATE, "channels": 1}
+        write_json(meta, {**record, **_time_record(offset)})
 
     step("audio", [audio, meta], [raw], make_audio)
     step("proxy", [proxy], [src], lambda: _proxy(src, proxy, info))
-    screen = _ingest_screen(job, step)
+    screen = _ingest_screen(job, step, upgraded)
 
     if read_job(job).get("status") == "new":
         update_job(job, status="ingested")
     for name in done:
         print(f"made {name}")
+    for name in upgraded:
+        print(f"moved {name} into video time")
     return {
         "job": str(job),
         "done": done,
         "skipped": skipped,
         "denoised": args.denoise,
+        "audio_offset_s": offset,
+        "upgraded": upgraded,
         "duration": info["duration"],
         "fps": info["fps"],
         "size": info["size"],

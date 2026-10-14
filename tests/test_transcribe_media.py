@@ -91,10 +91,16 @@ def test_transcribe_turbo_end_to_end(capsys, ingested, videocut_home):
     assert words["duration"] == pytest.approx(layout[-1]["t1"], abs=0.05)
     starts = [w["t0"] for w in words["words"]]
     assert starts == sorted(starts)
-    assert all(w["t1"] >= w["t0"] and set(w) == {"w", "t0", "t1", "conf"} for w in words["words"])
+    keys = {"w", "t0", "t1", "conf", "t0_asr", "t1_asr"}  # aligned, model times kept
+    assert all(w["t1"] >= w["t0"] and set(w) == keys for w in words["words"])
+    assert s["aligned"] and s["align_shift_ms"] is not None
     c = json.loads((job / "work" / "candidates.json").read_text())
     assert len(_hits(c["fillers"], layout)) >= 2, c["fillers"]
     assert (job / "work" / "takes_packed.md").is_file()
     # Second run keeps the transcript and only redoes candidates.
     code, s, _ = run_tool(capsys, "transcribe", "--job", "fill")
     assert code == 0 and s["transcribed"] is False
+    code, s, _ = run_tool(capsys, "transcribe", "--job", "fill", "--no-align")
+    assert code == 0 and s["transcribed"] is False and not s["aligned"]
+    plain = json.loads((job / "work" / "words.json").read_text())["words"]
+    assert all(set(w) == {"w", "t0", "t1", "conf"} for w in plain)
