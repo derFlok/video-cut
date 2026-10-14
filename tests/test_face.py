@@ -243,7 +243,7 @@ def test_render_and_verify_use_face_json(capsys, landscape_clip):
     w = crop_window((1920, 1080), tuple(s["size"]), 0.3, 0.5, 1.0)
     assert f"crop={w.w}:{w.h}:{w.x}:{w.y}" in (job / "work" / "render_filter.txt").read_text()
     code, s, _ = run_tool(capsys, "verify", "--job", str(job))
-    assert code == 0 and s["flagged"][0]["flags"][-1] == "blink_at_cut", s
+    assert code == 0 and "blink_at_cut" in s["flagged"][0]["flags"], s
 
 
 @pytest.mark.parametrize(

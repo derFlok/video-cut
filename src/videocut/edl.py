@@ -19,7 +19,8 @@ from pathlib import Path, PurePosixPath
 
 ZOOM_MIN, ZOOM_MAX = 1.0, 2.0
 FADE_MAX_MS = 200
-DEFAULT_FADE_MS = 30
+DEFAULT_FADE_MS = 30  # legacy: render crossfades every cut (xfade_ms), fade_ms is ignored
+XFADE_MAX_MS = 300
 BLINK_SEARCH_MS = 150  # how far a blink-free cut point may be suggested from the original
 LAYOUTS = ("face", "screen", "pip", "split")
 DEFAULT_LAYOUT = "face"
@@ -46,6 +47,8 @@ class Segment:
     end: float  # "out" in JSON (source seconds)
     fade_ms: int = DEFAULT_FADE_MS
     crop: Crop | None = None
+    xfade_ms: float | None = None  # crossfade at this segment's cuts (None: the cut style's)
+    speech_cut_ok: str | None = None  # why a cut into speech is intended (edl check, verify)
     zoom_keys: list[tuple[float, float]] = field(default_factory=list)
     layout: str = DEFAULT_LAYOUT
     screen_zoom: list[dict] = field(default_factory=list)  # [{"t": camera_s, "box": [..]}]
@@ -95,6 +98,10 @@ class Edl:
                 d["screen_zoom"] = s.screen_zoom
             if s.redact:
                 d["redact"] = s.redact
+            if s.xfade_ms is not None:
+                d["xfade_ms"] = s.xfade_ms
+            if s.speech_cut_ok:
+                d["speech_cut_ok"] = s.speech_cut_ok
             segs.append(d)
         data: dict = {
             "fps": self.fps,
@@ -299,6 +306,15 @@ def validate(
         fade = s.get("fade_ms", DEFAULT_FADE_MS)
         if not (_num(fade) and 0 <= fade <= FADE_MAX_MS):
             errs.append(f"{p}.fade_ms: must be a number in 0..{FADE_MAX_MS}")
+        xf = s.get("xfade_ms")
+        if xf is not None and not (_num(xf) and 0 <= xf <= XFADE_MAX_MS):
+            errs.append(f"{p}.xfade_ms: must be a number in 0..{XFADE_MAX_MS}")
+        for k in ("in_src", "out_src"):
+            if k in s and not (_num(s[k]) and s[k] >= 0):
+                errs.append(f"{p}.{k}: must be a number >= 0 (the cut point before `edl snap`)")
+        ok = s.get("speech_cut_ok")
+        if ok is not None and not (isinstance(ok, str) and ok.strip()):
+            errs.append(f"{p}.speech_cut_ok: must be a reason (text)")
         crop = s.get("crop")
         if crop is not None:
             if not isinstance(crop, dict):
@@ -378,6 +394,8 @@ def from_dict(
                 if crop is not None
                 else None,
                 zoom_keys=[(float(t), float(z)) for t, z in s.get("zoom_keys", [])],
+                xfade_ms=s.get("xfade_ms"),
+                speech_cut_ok=s.get("speech_cut_ok"),
                 layout=s.get("layout", DEFAULT_LAYOUT),
                 screen_zoom=s.get("screen_zoom", []),
                 redact=s.get("redact", []),
@@ -493,4 +511,57 @@ def blink_warnings(
                     "suggest": suggest,
                 }
             )
+    return out
+
+
+def remap_output_times(data: dict, before: list[dict], after: list[dict]) -> dict:
+    """`data` (a raw EDL dict) with every output time (captions and their words, overlays,
+    broll, cover) moved from the segments `before` to `after` (the same segments with other
+    in/out, e.g. after `edl snap`): a time keeps its source time within its segment, clamped
+    to the segment. Start times (t0, cover) belong to the segment they fall in, end times
+    (t1) to the one they end."""
+
+    def spans(segs):
+        out, t = [], 0.0
+        for s in segs:
+            out.append((t, t + s["out"] - s["in"]))
+            t = out[-1][1]
+        return out
+
+    old, new = spans(before), spans(after)
+    if not old:
+        return data
+
+    def move(t, end: bool):
+        if not _num(t):
+            return t
+        k = next(
+            (i for i, (a, b) in enumerate(old) if (a < t <= b if end else a <= t < b)),
+            0 if t <= 0 else len(old) - 1,
+        )
+        src = before[k]["in"] + (t - old[k][0])
+        a, b = new[k]
+        v = a + (src - after[k]["in"])
+        if t >= old[-1][1]:  # at or after the end (a held tail): shift with the end
+            v = new[-1][1] + (t - old[-1][1])
+        return round(min(max(v, a), b) if t < old[-1][1] else v, 3)
+
+    def item(it):
+        if not isinstance(it, dict):
+            return it
+        it = {**it}
+        if "t0" in it:
+            it["t0"] = move(it["t0"], False)
+        if "t1" in it:
+            it["t1"] = move(it["t1"], True)
+        if isinstance(it.get("words"), list):
+            it["words"] = [item(w) for w in it["words"]]
+        return it
+
+    out = {**data}
+    for key in ("captions", "overlays", "broll"):
+        if isinstance(data.get(key), list):
+            out[key] = [item(it) for it in data[key]]
+    if _num(data.get("cover")):
+        out["cover"] = move(data["cover"], False)
     return out

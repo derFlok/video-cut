@@ -29,8 +29,12 @@ def _plan(spec, screen=(2880, 1800), layout="screen", start=10.0, end=14.0, out=
     )  # fmt: skip
 
 
+VIDEO_SHA = "8002561d31a3011a5e163717717ce3abe896047df461feb05d67c44e086d3e06"
+
+
 def test_face_only_graph_is_unchanged():
-    # sha256 of the graph origin/main produced for this EDL before layouts existed.
+    # sha256 of the video lines origin/main produced for this EDL before layouts existed
+    # (the audio lines changed with the crossfades at every cut).
     segs = [
         {"in": 0.3, "out": 1.0},
         {"in": 1.9, "out": 2.6, "crop": {"cx": 0.4, "cy": 0.5, "zoom": 1.0},
@@ -40,9 +44,8 @@ def test_face_only_graph_is_unchanged():
     for layouts in (None, ["face", "face"]):
         plan = rp.with_tail(rp.build(edl, (1920, 1080), OUT, layouts), 5)
         g = rp.graph(plan, "silent", "0:0", "1:a", "zscale=x")
-        assert hashlib.sha256(g.encode()).hexdigest() == (
-            "62a3b8b94b067545a261b7aad8a422244c0a668520d4c805834e88447da44af1"
-        )
+        video = g[: g.index("[1:a]")]
+        assert hashlib.sha256(video.encode()).hexdigest() == VIDEO_SHA
 
 
 def test_non_face_segment_is_one_range_without_camera_zoom():

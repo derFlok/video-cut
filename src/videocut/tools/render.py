@@ -1,7 +1,13 @@
 """`videocut tool render [--preview]`: work/edl.json -> out/ (pipeline steps 6, 7 and 9).
 
-    cut      every segment [in, out] in source time, frame accurate (decode-side trim),
-             audio faded by fade_ms at every boundary
+    snap     first `edl snap` (tools/edl.py, _snap.py): every cut point that is not in a
+             quiet place moves to the nearest one within the cut style's snap_window_s;
+             work/edl.json is rewritten when one moved (render.json "snap": moved,
+             max_shift_ms, unresolved, style)
+    cut      every segment [in, out] in source time, frame accurate (decode-side trim);
+             the audio crossfades at every cut (equal power, the cut style's xfade_ms or
+             the segment's "xfade_ms", centred, duration unchanged, shortened to the quiet
+             room around the cut points; _render_plan), the video is a hard cut
     reframe  crop window of the output aspect around crop.cx/cy, `zoom`× tighter, scaled
              to the job's output size (job.json "format", _format.py; an EDL "size" of
              another format is overridden with a warning) at the EDL fps; zoom_keys are
@@ -49,8 +55,8 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
-from ..edl import EdlError, load, read_sync
-from . import _layouts, _plates
+from ..edl import EdlError, load, read_sync, validate
+from . import _audio_env, _layouts, _plates, _snap
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed, sized
@@ -66,6 +72,7 @@ from .common import (
     run_tool,
     write_json,
 )
+from .edl import snap_job
 from .ingest import probe
 from .job import PROJECT, is_approved, redaction_enforced
 
@@ -218,13 +225,17 @@ def render(args) -> dict:
     edl_path = work / "edl.json"
     if not edl_path.is_file():
         raise ToolError(f"EDL not found: {edl_path}")
-    raw = edl_path.read_bytes()
     try:
-        data = json.loads(raw)
+        data = json.loads(edl_path.read_bytes())
     except json.JSONDecodeError:
         data = {}
     src = _source(job, data)
     info = probe(src) if src else None
+    snapped = None
+    if info and not validate(data, info["duration"]):  # an invalid EDL: load reports it
+        snapped = snap_job(job)
+    raw = edl_path.read_bytes()
+    data = json.loads(raw) if snapped and snapped["written"] else data
     try:
         edl = load(
             edl_path,
@@ -253,7 +264,13 @@ def render(args) -> dict:
     ow, oh = edl.size
     if preview:
         ow, oh = max(2, ow // 4 * 2), max(2, oh // 4 * 2)
-    plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh), layouts if use_layouts else None)
+    style = _snap.cut_style(read_job(job))
+    env = _audio_env.job_envelope(job) if snapped and not snapped.get("skipped") else None
+    caps = _snap.xfade_caps(data, env, style["xfade_ms"] / 2000) if env else None
+    plan = plan_mod.build(
+        edl, tuple(info["size"]), (ow, oh), layouts if use_layouts else None,
+        style["xfade_ms"] / 1000, info["duration"], caps,
+    )  # fmt: skip
     overlay = work / "overlay.mov"
     ov_json = work / "overlays.json"
     # words.json too: the end card's tail is computed from it (_plates), like overlays did.
@@ -287,6 +304,11 @@ def render(args) -> dict:
     warnings, v_out, video, clamped, screen_rel, speaker = [], "[v]", None, [], None, []
     if size_note:
         warnings.append(size_note)
+    if snapped and snapped["unresolved"]:
+        warnings.append(
+            f"{len(snapped['unresolved'])} cut point(s) stay in speech after snapping "
+            "(`videocut tool edl snap` lists them)"
+        )
     if use_layouts:
         video, drawn = _layout_video(job, plan, edl, info, face, video_in, inputs)
         clamped, speaker = drawn["clamped"], drawn["speaker"]
@@ -386,6 +408,13 @@ def render(args) -> dict:
         "loudness": loud,
         "preview": preview,
     }
+    if snapped is not None:
+        report["snap"] = {
+            k: snapped.get(k)
+            for k in ("style", "moved", "max_shift_ms", "unresolved", "written", "skipped")
+            if k in snapped
+        }
+    report["xfade_ms"] = style["xfade_ms"]
     if use_overlay:
         report["overlay"] = True
     if use_layouts:
@@ -428,6 +457,7 @@ def render(args) -> dict:
         "screen_zoom_clamped": clamped,
         "speaker": speaker,
         "redaction": report.get("redaction"),
+        "snap": report.get("snap"),
         "warnings": warnings,
     }
 

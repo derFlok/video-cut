@@ -144,19 +144,25 @@ def _audible(samples: bytes, rate: int) -> tuple[float, float]:
 def filler_clip(folder: Path) -> tuple[Path, list[dict]]:
     """Portrait clip of FILLER_SCRIPT and its layout: one entry per phrase/filler/silence
     with "kind", "text", segment "t0"/"t1" and audible "a0"/"a1" (source seconds)."""
+    return script_clip(folder, "filler", FILLER_SCRIPT)
+
+
+def script_clip(folder: Path, stem: str, script: list) -> tuple[Path, list[dict]]:
+    """Portrait clip of a script of ("silence", seconds) and (kind, text) entries, each text
+    spoken as its own `say` segment, and its layout (see filler_clip)."""
     import json
     import wave
 
     folder.mkdir(parents=True, exist_ok=True)
-    out, layout_file = folder / "filler-clip.mp4", folder / "filler-clip.json"
+    out, layout_file = folder / f"{stem}-clip.mp4", folder / f"{stem}-clip.json"
     if out.is_file() and layout_file.is_file():
         return out, json.loads(layout_file.read_text())
     rate, pcm, layout = 48000, b"", []
-    for k, (kind, item) in enumerate(FILLER_SCRIPT):
+    for k, (kind, item) in enumerate(script):
         if kind == "silence":
             seg = b"\0\0" * int(round(item * rate))
         else:
-            aiff, wav = folder / f"seg{k}.aiff", folder / f"seg{k}.wav"
+            aiff, wav = folder / f"{stem}-seg{k}.aiff", folder / f"{stem}-seg{k}.wav"
             subprocess.run(["say", "-v", "Anna", "-o", str(aiff), item], check=True)
             _ff("-i", str(aiff), "-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le", str(wav))
             with wave.open(str(wav), "rb") as f:
@@ -167,7 +173,7 @@ def filler_clip(folder: Path) -> tuple[Path, list[dict]]:
         entry.update(t0=t0, t1=t0 + len(seg) / 2 / rate, a0=t0 + a0, a1=t0 + a1)
         layout.append(entry)
         pcm += seg
-    wav = folder / "filler-speech.wav"
+    wav = folder / f"{stem}-speech.wav"
     with wave.open(str(wav), "wb") as f:
         f.setnchannels(1)
         f.setsampwidth(2)
@@ -194,6 +200,23 @@ def filler_clip(folder: Path) -> tuple[Path, list[dict]]:
     )
     layout_file.write_text(json.dumps(layout, ensure_ascii=False, indent=1))
     return out, layout
+
+
+# Snapping clip: words spoken one by one (positions known to the sample). A kept phrase,
+# a short pause, a word the cut drops, a pause, a second kept phrase.
+SNAP_SCRIPT = [
+    ("silence", 0.4),
+    *(("word", w) for w in ("Heute", "zeige", "ich", "Ihnen", "drei", "Dinge")),
+    ("silence", 0.15),
+    ("drop", "also"),
+    ("silence", 0.6),
+    *(("word", w) for w in ("Das", "erste", "ist", "einfach")),
+    ("silence", 0.6),
+]
+
+
+def snap_clip(folder: Path) -> tuple[Path, list[dict]]:
+    return script_clip(folder, "snap", SNAP_SCRIPT)
 
 
 # Product-demo pair: a camera clip and a synthetic screen recording carrying the same voice
