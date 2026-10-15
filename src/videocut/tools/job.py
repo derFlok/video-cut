@@ -652,7 +652,10 @@ def show(args) -> dict:
     personal = red.summary(job)
     if personal is not None:
         out["redaction"] = personal
-    out |= redact_style_view(data)
+    try:
+        out |= redact_style_view(data)
+    except ToolError as e:  # show stays usable; render and verify refuse the job
+        out |= {"redact_style": "invalid", "redact_style_error": str(e)}
     print(f"personal data shown as: {out['redact_style']}")
     return out
 
@@ -800,6 +803,11 @@ def set_redact_style(job: Path, value: str, say=print) -> dict:
     except ToolError:  # an invalid value is what this command repairs
         old = None
     rec = data.get("cut")
+    try:
+        hides = bool(redaction_enforced(job)[0])
+    except ToolError:
+        hides = True
+    old_blocks = "block" if hides and data.get("redact_style") in (None, "block") else None
     if isinstance(rec, dict) and "redact_style" not in rec:
         # a cut from before redaction styles drew solid blocks (when it redacted anything)
         data["cut"] = {**rec, "redact_style": "block" if rec.get("redaction_sha256") else None}
@@ -807,7 +815,8 @@ def set_redact_style(job: Path, value: str, say=print) -> dict:
     write_json(job / JOB_FILE, data)
     say(f"{job.name}: personal data shown as {new_style}")
     rec = data.get("cut")
-    drawn = rec.get("redact_style") if isinstance(rec, dict) else None
+    # no cut record: a reel approved before records existed drew solid blocks (run.cut_done)
+    drawn = rec.get("redact_style") if isinstance(rec, dict) else old_blocks
     stale = drawn is not None and drawn != new_style and (job / "out" / "reel.mp4").is_file()
     if stale:
         say(

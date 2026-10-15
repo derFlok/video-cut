@@ -496,6 +496,8 @@ def cut_done(job: Path) -> bool:
         # a cut from before cut styles was cut the way "tight" cuts now: a style the
         # human set since makes it stale (absent: it stays, like an old record)
         data.get("cut_style") in (None, "tight")
+        # ... and drew personal data as solid blocks: likewise for a redaction style
+        and (data.get("redact_style") in (None, "block") or _redact_style_used(job) is None)
         and verify.get("reel") == "out/reel.mp4"
         and not verify.get("preview")
         and edl_t is not None

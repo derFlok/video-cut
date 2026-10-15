@@ -326,3 +326,69 @@ def test_screenshot_items_get_the_style(tmp_path):
     assert _redacted(tmp_path, item, [], "block")["props"]["redact_style"] == "block"
     bare = {"scene": "screenshot_frame", "t0": 0, "t1": 2, "props": {"file": "input/shot.png"}}
     assert _redacted(tmp_path, bare, [], "blur") is bare
+
+
+@pytest.mark.media
+@pytest.mark.parametrize(("w", "h", "cell"), [(70, 30, 20), (200, 120, 32)])
+def test_the_reference_pixelation_matches_the_render_chain(w, h, cell):
+    """calibrate judges what the reel shows: blur_chain makes ceil(side / cell) cells, so a
+    box between one and two cells high gets cells smaller than `cell`."""
+    import subprocess
+
+    import clips
+
+    rng = np.random.default_rng(1)
+    img = (rng.random((h, w, 3)) * 255).astype(np.uint8)
+    img[h // 3 : h // 2] = 255
+    out = subprocess.run(
+        [clips.ffmpeg(), "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
+         "-i", "-", "-vf", lay.blur_chain(w, h, cell), "-f", "rawvideo", "-pix_fmt", "rgb24",
+         "-"],
+        input=img.tobytes(), capture_output=True, check=True,
+    ).stdout  # fmt: skip
+    ref = np.frombuffer(out, np.uint8).reshape(h, w, 3).astype(float)
+    diff = np.abs(ref - _redact_blur.pixelate(img, cell).astype(float))
+    assert diff.mean() < 4 and diff.max() <= 12, (diff.mean(), diff.max())
+
+
+def test_a_reel_from_before_cut_records_goes_stale_when_the_style_changes(client):  # noqa: F811
+    job = planned_job("p3", candidates=[CAND])
+    approve_job(job)
+    cut_job(job)
+    data = json.loads((job / "job.json").read_text())
+    data.pop("cut")
+    (job / "job.json").write_text(json.dumps(data))
+    assert pipeline.cut_done(job)  # an old reel without a record: it drew blocks
+    said = []
+    assert set_redact_style(job, "blur", said.append)["stale"]
+    assert any("as block" in x for x in said) and not pipeline.cut_done(job)
+    assert set_redact_style(job, "block", said.append)["stale"] is False
+    assert pipeline.cut_done(job)
+
+
+def test_show_reports_an_invalid_style_instead_of_failing(capsys, tmp_path):
+    v = tmp_path / "take.mov"
+    v.write_bytes(b"x")
+    run_tool(capsys, "job", "new", str(v), "--id", "r2")
+    job = jobs_root() / "r2"
+    data = json.loads((job / "job.json").read_text())
+    (job / "job.json").write_text(json.dumps({**data, "redact_style": "smudge"}))
+    code, s, _ = run_tool(capsys, "job", "show", "r2")
+    assert code == 0 and s["redact_style"] == "invalid" and "smudge" in s["redact_style_error"]
+
+
+@pytest.mark.media
+def test_the_new_job_form_stores_a_style_auto_means_the_brand(client, portrait_clip):  # noqa: F811
+    def post(i, value):
+        with portrait_clip.open("rb") as cam:
+            cam_file = (f"take{i}.mp4", cam, "video/quicktime")
+            return client.post("/api/jobs", data={"redact_style": value},
+                               files=[("camera", cam_file)])  # fmt: skip
+
+    for i, (value, stored) in enumerate((("auto", None), ("crop", "crop"), ("", None))):
+        r = post(i, value)
+        assert r.status_code == 200, r.text
+        data = json.loads((jobs_root() / r.json()["id"] / "job.json").read_text())
+        assert data.get("redact_style") == stored
+    r = post(9, "smear")
+    assert r.status_code == 400 and "redact" in r.text

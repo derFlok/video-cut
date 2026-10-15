@@ -3,8 +3,8 @@ test, and render's calibration that makes a blur stronger until text recognition
 nothing in it.
 
     pixelate(rgb, cell)   what render's blur_chain (_layouts) does to a box, in numpy:
-                          area-average into cells, nearest back up, then a gaussian of half
-                          a cell (three box passes)
+                          area-average into ceil(side / cell) cells, nearest back up, then
+                          a gaussian of half a cell (three box passes)
     readable(rgb)         the text lines local recognition (_ocr) still reads in an image:
                           lines with at least MIN_CHARS letters or digits
     calibrate(drawn)      per blurred box of render's plan (_layouts.plan_all): the screen
@@ -40,14 +40,27 @@ def _box_pass(a: np.ndarray, r: int, axis: int) -> np.ndarray:
     return (hi - lo) / (2 * r + 1)
 
 
+def _area(n: int, k: int) -> np.ndarray:
+    """[k, n] weights that average n px into k cells of n / k px (FFmpeg scale flags=area:
+    a px on a cell border counts in both, by its share)."""
+    edges = np.arange(k + 1) * n / k
+    lo, hi = edges[:-1, None], edges[1:, None]
+    px = np.arange(n)[None, :]
+    w = np.clip(np.minimum(hi, px + 1) - np.maximum(lo, px), 0, None)
+    return w / w.sum(axis=1, keepdims=True)
+
+
 def pixelate(rgb: np.ndarray, cell: int) -> np.ndarray:
-    """`rgb` [h, w, 3] pixelated into cells of `cell` px and blurred (sigma cell / 2)."""
+    """`rgb` [h, w, 3] pixelated and blurred like _layouts.blur_chain draws it: averaged
+    into ceil(w / cell) x ceil(h / cell) cells (so a cell may be smaller than `cell`),
+    nearest back up, a gaussian of sigma cell / 2."""
     h, w = rgb.shape[:2]
+    cw, ch = max(1, -(-w // cell)), max(1, -(-h // cell))
     a = rgb.astype(float)
-    ch, cw = -(-h // cell), -(-w // cell)
-    padded = np.pad(a, ((0, ch * cell - h), (0, cw * cell - w), (0, 0)), mode="edge")
-    cells = padded.reshape(ch, cell, cw, cell, -1).mean(axis=(1, 3))
-    up = np.repeat(np.repeat(cells, cell, axis=0), cell, axis=1)[:h, :w]
+    cells = np.einsum("yh,hwc,xw->yxc", _area(h, ch), a, _area(w, cw))
+    rows = np.minimum((np.arange(h) + 0.5) * ch / h, ch - 1).astype(int)
+    cols = np.minimum((np.arange(w) + 0.5) * cw / w, cw - 1).astype(int)
+    up = cells[rows][:, cols]
     # three box passes of width ~ sigma * sqrt(12 / 3) approximate a gaussian
     r = max(1, round(cell / 2))
     for _ in range(3):
