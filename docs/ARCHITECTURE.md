@@ -49,6 +49,7 @@
 | `align [--no-candidates]` | `align.py` |
 | `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets`, `sheet slides` | `sheets.py` |
 | `edl check [file]`, `edl snap [--dry-run]`, `edl locate <t> [--source]` | `edl.py` |
+| `slides check [job]`, `slides stills [job] [--id]`, `slides render [job] [--force]` | `slides.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
 
@@ -56,10 +57,11 @@ Helpers: `_transcribe_energy.py` (pauses, voiced gaps), `_transcribe_pack.py`
 (`takes_packed.md`), `_image.py` (ffmpeg-drawn pictures, peak-normalised waveforms),
 `_render_plan.py` (frame grid, filter graph), `_geometry.py` (crop windows, face-centred
 framing, face track in output px, safe zones; shared by render, overlays and verify),
-`_color.py` (HDR → SDR), `_layouts.py` (screen/pip/split geometry, zoom windows and their
-filter graph; shared by render, overlays and verify), `_verify_screen.py` (the product-demo
-checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes),
-`_pdf.py` (PDF pages → PNG, macOS CoreGraphics in a child process), `_slide_spec.py` (slide templates and text limits for plan check), `_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
+`_color.py` (HDR → SDR), `_layouts.py` (screen/pip/split and slide geometry, zoom windows and
+their filter graph; shared by render, overlays and verify), `_verify_screen.py` (the
+product-demo checks of verify), `_verify_slides.py` (the slide checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes),
+`_pdf.py` (PDF pages → PNG, macOS CoreGraphics in a child process), `_job_slides.py` (job slide settings, page import), `_slide_spec.py` (slide templates and text limits for plan check),
+`_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
 snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
 (`speech_clipped`), `_style.py` (cut styles).
 
@@ -96,8 +98,12 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            revision_request.json, revision.json, revision_report.md,
            revisions.jsonl (one line per feedback run)                           revise run
            redact_grown.json (redact boxes grown over the text they cut)        render
+           slides.json (the slides as data)                                     plan run
+           slides/stills/<id>.jpg, <id>_sm.jpg (≤ 960 px), <id>.layout.json    slides stills
+           slides/<id>.mov, <id>.json (layout report), <id>.spec.json           slides render
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
-           verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg      verify
+           verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg,
+           slides_NN.jpg                                                         verify
            history/reel-<k>.mp4 (the reel before a revision; the last five)       revise run
 ```
 
@@ -391,7 +397,10 @@ box at any face sample while visible) and `overlay_overlap` (an overlay and a ca
 screen together share > 10 % of the smaller box); the full-frame `cta_end` plate is exempt
 from these and from the frozen check. Pictures: `captions_NN.jpg` (one tile per caption
 group change) and `overlays_NN.jpg` (one tile per overlay, at its middle). Global checks: duration,
-loudness, true peak, size, black/frozen stretches. After `render --preview`, verify checks
+loudness, true peak, size, black/frozen stretches. Slides (`_verify_slides.py`, see Slides):
+`slide_text_overflow`, `slide_reading_time`, `slide_bubble_over_text`, `slide_missing` /
+`slide_untrusted` / `slide_stale` / `slide_unchecked`; `slides_NN.jpg` (one tile per slide, near
+the end of its stretch). After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
 
 ## Output format (`tools/_format.py`)
@@ -632,10 +641,40 @@ on one numbered contact sheet (≤ 1080×1920, with sizes and orientation in the
 the plan can match each screenshot to its sentence with one image and propose
 `screenshot_frame` overlays with focus and redaction boxes.
 
-## Slides
+## Slides (`tools/slides.py`, `renderer/slides/`, `renderer/lib/slide.js`)
 
-A job may show slides: data-driven templates in the brand's tokens, drawn by the canvas
-renderer (no agent-written code), or the human's own pages.
+work/slides.json `{"slides": [{id, template, content, source: auto|upload, why}]}`; ten
+templates with text limits (`slides.LIMITS`): title, bullets, big_number, compare, steps,
+timeline, bar_chart, quote, cta, image (an uploaded page `input/slides/page_NN.png`,
+letterboxed with a 5 % push-in). The renderer draws every template from the brand tokens
+only (colours, fonts, spring; `muted`/accent text only where its contrast holds) and lays it
+out at the largest of the scales 1.3 … 0.6 that fits its content box; text is never shrunk
+below 60 % and never clipped (the layout report says `fits: false` instead). Build steps
+(bullets, compare, steps, timeline, bar_chart) appear at the segment's `reveal` times, else
+0.5 s + 0.7 s per step. `slides check` validates slides.json, its assets and the EDL's slide
+fields (ids, reveal counts over all segments of a slide) and warns on reading time.
+`slides stills` renders the final state per slide (layout and moment from the EDL, else
+plan.json, else `slide`; the speaker from the camera frame). `slides render` (also called by
+`render`) writes per slide id one opaque ProRes 422 HQ clip at output size and fps, as long
+as all its segments together: a slide that spans a cut keeps its clock (`_layouts.slide_runs`
+trims each segment's part from the running total). A clip is reused while its spec (content,
+layout, size, fps, length, reveal times, brand tokens, language, renderer code) matches; its
+SHA-256 sits outside the job folder (`state/<job>/slides_render.json`), so verify believes
+only clips it wrote.
+
+Geometry (`_layouts.slide_geometry`, all four formats): `slide_full` fills the frame (content
+inside the safe zones, no camera); `slide` shows the speaker as a round bubble (size and corner
+from the optional brand token `pip {corner: left|right, size: share of the width}`, default
+the pip inset) above the bottom safe zone, with two candidate content boxes (above / beside
+the bubble; the renderer takes the one with the larger scale); `slide_split` puts the slide
+beside (16:9) or above (portrait, square) the speaker part from the split geometry, face
+tracked like `split`. Captions: overlays.json `views` carry `hide: true` for slide and
+slide_full stretches (the renderer draws no captions or overlays there); in slide_split the
+slide part is a block, so captions and keywords stay in the speaker part. Slides never
+replace a personal-data redaction: redaction applies to screen layouts only and a slide
+segment shows no screen.
+
+### Slides in the job flow
 
 **Settings (`tools/_job_slides.py`).** job.json `slides` = `{mode, wish}`: `none` (absent),
 `upload` (the human's pages only), `auto` (Claude proposes 0–N template slides for what is
@@ -694,8 +733,11 @@ output time. `validate()` returns every problem with a JSON path (`$.segments[2]
 zoom 1.0..2.0, `fade_ms` 0..200 and that all file paths stay inside the job folder. Product
 demos: `layout` (face|screen|pip|split), `screen_zoom` [{t, box}] (increasing t inside the
 segment, boxes 0..1 of the screen) and `redact` [{t0, t1, box}] inside the segment, both
-only on non-face segments; with a job, every non-face segment must lie inside the sync
-overlap (`overlap_errors`). edl.py is the only reader of these fields (render, overlays and
+only on screen layouts (`SCREEN_LAYOUTS`); with a job, every screen-layout segment must lie
+inside the sync overlap (`overlap_errors`). Slides: `layout` slide|slide_split|slide_full
+(`SLIDE_LAYOUTS`, any job type) needs `slide` (an id of work/slides.json) and may carry
+`reveal` [s] (increasing, counted from the segment's `in_src`, within the segment); one slide
+keeps one layout in the whole EDL (`slide_layout_errors`). edl.py is the only reader of these fields (render, overlays and
 verify get them from `edl.Segment`). Captions,
 overlays, b-roll and music are validated loosely until their phase. `output_duration()` and
 `cut_points()` (output time of every segment boundary, including 0 and the end) serve render

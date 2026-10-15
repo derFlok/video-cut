@@ -26,6 +26,10 @@
              after the last spoken word), the reel gets a held tail: the last frame
              repeats under the card, the audio is padded with silence after loudnorm
              (render.json "tail_s"; output_duration includes it)
+    slides   segments with "layout" slide/slide_split/slide_full show the slide's opaque clip
+             (work/slides/<id>.mov from `videocut tool slides render`, run here when a clip
+             is missing or stale) with the speaker as a round bubble / beside it
+             (_layouts.slide_geometry); a slide on consecutive segments runs on
     layouts  segments with "layout" screen/pip/split are drawn from the original screen
              recording (job.json "screen") at camera time + work/sync.json offset_s, with
              eased screen_zoom, redact blocks and brand background (_layouts.py); render.json
@@ -55,9 +59,10 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
-from ..edl import EdlError, load, read_sync, validate
+from ..edl import EdlError, is_screen, is_slide, load, read_sync, validate
 from . import _audio_env, _layouts, _plates, _redact_blur, _redact_style, _snap
 from . import _render_plan as plan_mod
+from . import slides as slides_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed, sized
 from .common import (
@@ -219,17 +224,41 @@ def _style_doc(b: dict) -> dict:
 
 
 def _layout_video(job, plan, edl, info, face, video_in, inputs):
-    """Video lines of a render with screen layouts (the screen is the next input after
-    `inputs`) and the _layouts.plan_all doc (screen, clamped, speaker, warnings)."""
-    drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
-    # a blur text recognition still reads is made stronger (or a solid block) first
-    drawn["blur_raised"] = _redact_blur.calibrate(drawn, plan.fps)
+    """Video lines of a render with screen or slide layouts, the _layouts.plan_all doc
+    (screen, clamped, speaker, warnings; empty without screen layouts) plus "slides" (the
+    slide summary of slides.ensure_clips), and the extra ffmpeg inputs (the screen
+    recording, then one slide clip per slide range) to append after `inputs`."""
+    extra: list[str] = []
+    screen_in = None
+    if any(is_screen(s.layout) for s in edl.segments):
+        drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
+        # a blur text recognition still reads is made stronger (or a solid block) first
+        drawn["blur_raised"] = _redact_blur.calibrate(drawn, plan.fps)
+        screen_in = f"{len(inputs) // 2}:v:0"
+        extra += ["-i", str(drawn["screen"])]
+    else:
+        drawn = {"segs": {}, "clamped": [], "speaker": [], "warnings": [], "redaction": [],
+                 "screen": None, "info": None}  # fmt: skip
+    slide_segs, slide_in = {}, {}
+    if any(is_slide(s.layout) for s in edl.segments):
+        made = slides_mod.ensure_clips(job, edl)
+        sl = _layouts.plan_slides(
+            edl, plan, tuple(info["size"]), face, edl.size, slides_mod.brand_tokens(job)
+        )
+        for i, seg in sorted(sl["segs"].items()):
+            slide_in[i] = f"{(len(inputs) + len(extra)) // 2}:v:0"
+            extra += ["-i", str(made["clips"][seg.slide])]
+        slide_segs = sl["segs"]
+        drawn["speaker"] = drawn["speaker"] + sl["speaker"]
+        drawn["warnings"] = drawn["warnings"] + sl["warnings"]
+        drawn["slides"] = made["slides"]
     video = _layouts.video_chain(
-        plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in,
-        f"{len(inputs) // 2}:v:0", bg=_layouts.background(job), matrix=overlay_matrix(info),
-        cam_sdr=to_sdr(info), screen_sdr=to_sdr(drawn["info"]),
+        plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in, screen_in,
+        bg=_layouts.background(job), matrix=overlay_matrix(info), cam_sdr=to_sdr(info),
+        screen_sdr=to_sdr(drawn["info"]) if drawn["info"] else "",
+        slides=slide_segs, slide_in=slide_in,
     )  # fmt: skip
-    return video, drawn
+    return video, drawn, extra
 
 
 def render(args) -> dict:
@@ -333,16 +362,23 @@ def render(args) -> dict:
             f"{len(snapped['unresolved'])} cut point(s) stay in speech after snapping "
             "(`videocut tool edl snap` lists them)"
         )
+    slide_docs = None
     if use_layouts:
-        video, drawn = _layout_video(job, plan, edl, info, face, video_in, inputs)
+        video, drawn, extra = _layout_video(job, plan, edl, info, face, video_in, inputs)
         clamped, speaker = drawn["clamped"], drawn["speaker"]
         warnings += drawn["warnings"]
         styles = [_style_doc(b) for b in drawn["redaction"]]
         warnings += [
             f"segment {b['segment']}: redaction {b['note']}" for b in styles if "note" in b
         ]
-        screen_rel = str(drawn["screen"].relative_to(job))
-        inputs += ["-i", str(drawn["screen"])]
+        screen_rel = str(drawn["screen"].relative_to(job)) if drawn["screen"] else None
+        slide_docs = drawn.get("slides")
+        warnings += [
+            f"slide {d['id']}: the text does not fit even at 60 %"
+            for d in slide_docs or []
+            if not d["fits"]
+        ]
+        inputs += extra
         for c in clamped:
             warnings.append(
                 f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
@@ -448,6 +484,8 @@ def render(args) -> dict:
     if use_layouts:
         report["layouts"] = {k: layouts.count(k) for k in _layouts.LAYOUTS if k in layouts}
         report["screen_zoom_clamped"] = clamped
+    if slide_docs:
+        report["slides"] = slide_docs
     if red_source != "none" or styles:
         report["redaction"] = {
             "source": red_source, "candidates": [c["id"] for c in cands],
@@ -486,6 +524,7 @@ def render(args) -> dict:
         "layouts": report.get("layouts"),
         "screen": screen_rel,
         "screen_zoom_clamped": clamped,
+        "slides": slide_docs,
         "speaker": speaker,
         "redaction": report.get("redaction"),
         "snap": report.get("snap"),
