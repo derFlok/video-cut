@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, agent, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format, _length, _style
+from ..tools import _format, _length, _style, vocab
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
@@ -149,6 +149,11 @@ class Pipeline:
         """`videocut run <job> --recut`: cut + overlays again with the approved plan."""
         return pipeline.recut(str(job), say=say, ask=ask)
 
+    def overlays(self, job: Path, say, ask) -> int:
+        """`videocut run <job>` after the overlays went stale (a vocabulary applied to the
+        captions): the cut is kept, the overlay stage runs again."""
+        return pipeline.run(str(job), say=say, ask=ask)
+
 
 # ------------------------------------------------------------------ errors
 # Every error body is {"detail": {"message": str, "code"?: str, "errors"?: [str]}}.
@@ -209,6 +214,12 @@ class TargetBody(BaseModel):
     """Seconds, "auto" or null (the default rule); strings like "5m" or "2:30" too."""
 
     target_s: float | str | None = Field(default=None)
+
+
+class VocabularyBody(BaseModel):
+    """The job's own vocabulary (tools/vocab.py), validated by vocab.check."""
+
+    vocabulary: list = Field(default_factory=list, max_length=vocab.MAX_ENTRIES)
 
 
 class ApproveBody(BaseModel):
@@ -304,7 +315,16 @@ def create_app(
             form = await read_form(
                 request,
                 {"camera": VIDEO_EXT, "screen": VIDEO_EXT, "assets": ASSET_EXT},
-                {"type", "brand", "format", "brief", "cut_style", "lang", "target_s"},
+                {
+                    "type",
+                    "brand",
+                    "format",
+                    "brief",
+                    "cut_style",
+                    "lang",
+                    "target_s",
+                    "vocabulary",
+                },  # fmt: skip
             )
         except UploadError as e:
             raise HTTPException(e.status, str(e)) from None
@@ -547,6 +567,64 @@ def create_app(
             raise conflict("state", "there is no cut yet; start the job")
         return submit(job, "recut", lambda say, ask: run_with.recut(job, say, ask))
 
+    # -------------------------------------------------------------- vocabulary
+
+    def vocabulary_view(job: Path) -> dict:
+        src = vocab.sources(job)
+        meta = state.transcribe_meta(job)
+        words = state.words(job)
+        return {
+            "id": job.name,
+            "vocabulary": src["job"],
+            "brand": src["brand_id"],
+            "brand_vocabulary": src["brand"],
+            "effective": src["effective"],
+            "applied": meta.get("vocabulary"),
+            "has_transcript": words is not None,
+            "suggestions": vocab.suggestions(words, src["effective"]) if words else [],
+            "overlays_stale": state.overlays_stale(job),
+        }
+
+    @app.get("/api/jobs/{job_id}/vocabulary")
+    def get_vocabulary(job_id: str) -> dict:
+        return vocabulary_view(job_or_404(job_id))
+
+    @app.put("/api/jobs/{job_id}/vocabulary")
+    @decision
+    def put_vocabulary(job_id: str, body: VocabularyBody) -> dict:
+        """Store the job's own vocabulary; it takes effect on the next transcription or
+        /vocabulary/apply."""
+        job = job_or_404(job_id)
+        not_running(job)
+        entries, errors = vocab.check(body.vocabulary)
+        if errors:
+            raise HTTPException(422, {"message": "the vocabulary has problems", "errors": errors})
+        update_job(job, vocabulary=entries)
+        return vocabulary_view(job)
+
+    @app.post("/api/jobs/{job_id}/vocabulary/apply")
+    @decision
+    def apply_vocabulary(job_id: str) -> dict:
+        """Apply the effective vocabulary to the existing transcript (and captions); when
+        the captions changed the overlays are stale and the app offers /overlays."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = vocab.apply_job(job)
+        except ToolError as e:
+            raise conflict("state", str(e)) from None
+        return {**vocabulary_view(job), "result": res}
+
+    @app.post("/api/jobs/{job_id}/overlays")
+    @decision
+    def redo_overlays(job_id: str) -> dict:
+        """Set the captions and overlays again on the kept cut (after a vocabulary was
+        applied to the captions); no new plan approval, no new cut."""
+        job = job_or_404(job_id)
+        if not state.overlays_stale(job):
+            raise conflict("state", "the overlays of this job are not stale")
+        return submit(job, "overlays", lambda say, ask: run_with.overlays(job, say, ask))
+
     # -------------------------------------------------------------- files
 
     @app.get("/api/jobs/{job_id}/stills/{name:path}")
@@ -639,6 +717,13 @@ def _new_job(form) -> dict:
     if lang not in LANGS:
         raise HTTPException(400, f"lang must be one of {', '.join(LANGS)}")
     brief = " ".join((f.get("brief") or "").split())[:2000] or None
+    try:
+        raw = json.loads(f.get("vocabulary") or "[]")
+    except ValueError:
+        raise HTTPException(400, "vocabulary: expected a JSON list of {term, variants}") from None
+    words, errors = vocab.check(raw)
+    if errors:
+        raise HTTPException(422, {"message": "the vocabulary has problems", "errors": errors})
     brand_ref = (f.get("brand") or "").strip() or None
     try:
         brand_ref = brand_id(brand_ref) if brand_ref else None
@@ -668,6 +753,11 @@ def _new_job(form) -> dict:
         )
     except pipeline.RunError as e:
         raise HTTPException(400, str(e)) from None
+    fields = {}
     if brand_ref:
-        update_job(job, brand=brand_ref)
+        fields["brand"] = brand_ref
+    if words:
+        fields["vocabulary"] = words
+    if fields:
+        update_job(job, **fields)
     return {"id": job.name}

@@ -311,6 +311,11 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
         isinstance(words, list) and all(isinstance(w, str) for w in words)
     ):
         errors.append("$.voice.forbidden_words: expected a list of words")
+    if "vocabulary" in data:
+        from .tools import vocab
+
+        tokens["vocabulary"], vocab_errors = vocab.check(data["vocabulary"])
+        errors += vocab_errors
 
     # resolved enums go into canonical places; the raw text stays under "<key>_text"
     for dotted, word in resolved_enums.items():

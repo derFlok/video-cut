@@ -43,6 +43,8 @@ for "cut again with the approved plan" (the app's /recut: cut + overlays, no new
 the plan contains: a plan made for another length is stale, its approval is revoked, and the
 run plans again (with `--plan-feedback`, the revise-the-plan run is told the new length);
 every plan run records the length it was made for (job.json "plan_target").
+`--vocab "Term=variant,..."` gives a new job its transcript vocabulary (job.json
+"vocabulary", tools/vocab.py); transcribe applies it together with the brand's.
 The overlay stage runs when `--brand` is given or when the brand's overlays are not done for
 the current cut. Every Claude run appends one line to work/runs.jsonl (wall time, turns,
 cost, tokens), and its raw event stream goes to work/claude-<phase>.jsonl.
@@ -239,6 +241,7 @@ def new_job(
     cut_style: str | None = None,
     lang: str | None = None,
     target: str | None = None,
+    vocab: list[str] | None = None,
 ) -> Path:
     from .cli import main
 
@@ -250,6 +253,8 @@ def new_job(
     argv += ["--cut-style", cut_style] if cut_style else []
     argv += ["--target", str(target)] if target is not None else []
     argv += ["--lang", lang] if lang else []
+    for v in vocab or []:
+        argv += ["--vocab", v]
     if assets:
         argv += ["--asset", *assets]
     with capture_stdout() as buf:
@@ -271,14 +276,23 @@ def open_job(
     say=print,
     cut_style: str | None = None,
     target: str | None = None,
+    vocab: list[str] | None = None,
 ) -> Path:
     p = Path(ref).expanduser()
     if p.is_file():
-        return new_job(p, type_, brief, assets, screen, format_, cut_style, target=target)
+        return new_job(
+            p, type_, brief, assets, screen, format_, cut_style, target=target, vocab=vocab
+        )
     if assets or screen:
         raise RunError(
             "--asset/--screen only work when a new job is made from a recording "
             "(for an existing job: `videocut tool job screen <file>`)"
+        )
+    if vocab:
+        raise RunError(
+            "--vocab only works when a new job is made from a recording (for an existing "
+            f"job: `videocut tool job vocab {ref} add <term> <variant>...`, then "
+            f"`videocut tool vocab apply {ref}`)"
         )
     try:
         job = resolve_job(ref)
@@ -531,7 +545,8 @@ def _file_sha(path: Path) -> str | None:
 
 def overlays_done(job: Path, brand_id: str) -> bool:
     """The brand's overlays are in the current reel: recorded for this brand and exactly this
-    EDL, verified ok, and the last render composited them."""
+    EDL, verified ok, the last render composited them, and nothing marked them stale (a
+    vocabulary applied to the captions, tools/vocab.py)."""
     rec = read_job(job).get("overlays")
     try:
         composited = json.loads((job / "out" / "render.json").read_text()).get("overlay")
@@ -542,6 +557,7 @@ def overlays_done(job: Path, brand_id: str) -> bool:
         and rec.get("brand") == brand_id
         and rec.get("edl_sha256") == _file_sha(job / "work" / "edl.json")
         and rec.get("verify_ok") is True
+        and not rec.get("stale")
         and bool(composited)
     )
 
@@ -1162,20 +1178,21 @@ def run(
     plan_feedback: str | None = None,
     cut_style: str | None = None,
     target: str | None = None,
+    vocab: list[str] | None = None,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
-              format_, cut_style, target)  # fmt: skip
+              format_, cut_style, target, vocab or None)  # fmt: skip
     if feedback is not None and any(v is not None for v in others):
         raise RunError(
             "--feedback revises the finished reel; it cannot be combined with --plan-feedback, "
             "--replan, --recut, --brand, --type, --brief, --asset, --screen, --format, "
-            "--cut-style or --target"
+            "--cut-style, --target or --vocab"
         )
-    job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target)
+    job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target, vocab)
     say(f"job: {job}")
     if feedback is not None:
         return revise(job, feedback, at_s, max_turns, say)
@@ -1345,6 +1362,7 @@ def main(args) -> int:
             plan_feedback=args.plan_feedback,
             cut_style=args.cut_style,
             target=args.target_length,
+            vocab=args.vocab,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

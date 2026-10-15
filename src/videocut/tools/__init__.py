@@ -26,6 +26,7 @@ MODULES = [
     "screen",
     "plan",
     "redact",
+    "vocab",
 ]
 
 

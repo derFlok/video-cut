@@ -186,6 +186,24 @@ files (start from `brands/_example`).
 .venv/bin/videocut tool brand sheet my-brand   # preview sheet of every scene → brands/my-brand/preview.jpg
 ```
 
+### Vocabulary
+
+If the transcription keeps misspelling a name (your company, a product), add it to the
+brand's **Wörterbuch** in the app (or for one video: "Begriffe für dieses Video"): the
+correct spelling plus the misspellings you have seen. Whisper is told the correct spelling,
+and every misspelling is corrected in the transcript and the captions; Claude writes the
+name that way in titles and cards. For an existing video, "apply" corrects the transcript
+without transcribing again and offers to set the captions again. The job page also shows
+"Did you mean …?" for words close to a term.
+
+```bash
+.venv/bin/videocut tool brand vocab my-brand add Zentrovia Zentrowia "Sentro Via"
+.venv/bin/videocut tool job vocab <job> add "Lumo Cloud" Lumocloud   # this video only
+.venv/bin/videocut tool vocab apply <job>      # correct an existing transcript
+.venv/bin/videocut tool vocab suggest <job>    # possible misspellings (never applied)
+.venv/bin/videocut run take.mov --vocab "Zentrovia=Zentrowia,Sentro Via"
+```
+
 ## Privacy
 
 - Recordings, audio and renders stay on your Mac.

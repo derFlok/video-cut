@@ -15,7 +15,7 @@ from pathlib import Path
 
 from .. import brand
 from ..paths import RENDERER
-from . import _format
+from . import _format, vocab
 from ._geometry import safe_zones
 from .common import ToolError, binary, run_tool, write_json
 from .job import AGENT_ENV
@@ -222,3 +222,4 @@ def register(subparsers) -> None:
         help=f"output format: {', '.join(_format.FORMATS)} (default {SHEET_FORMAT})",
     )
     sh.set_defaults(handler=run_tool("brand sheet", sheet_cmd))
+    vocab.register_brand(sub)

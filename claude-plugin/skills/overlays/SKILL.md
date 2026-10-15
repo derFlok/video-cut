@@ -29,6 +29,12 @@ brand's look, render, check and fix. **You never change the cut.**
 - **Language:** overlay and caption text is what is spoken, in the language spoken (never
   translated). `videocut tool job show` → `lang` (`de` default, `en`) is the language of
   the free text of `work/overlay_report.md` (*Why*, rounds, doubts); headings stay as given.
+- **Vocabulary:** `videocut tool job show` → `vocabulary_effective` (`[{term, variants}]`,
+  the brand's and this video's names; a human sets it, never you). Every text you write
+  uses the canonical `term` exactly as given, never a variant: keywords, cards, lower thirds, titles, the
+  CTA and every caption word you fix by hand (a caption still showing a variant: write the
+  term).
+  The transcript already has them corrected (`w_asr` keeps what the model heard).
 - **Cut style** (`job show` → `cut_style`): it shaped the cut, you keep it. With `calm` the
   reel breathes: prefer fewer overlays (2–3 for 60 s) and let each stay 2.5–4 s; with
   `tight` keep them short (1.5–2.5 s) so they follow the faster pace.

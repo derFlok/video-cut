@@ -66,8 +66,40 @@ export interface Brand {
   logo: { light?: string | null; dark?: string | null; placement?: string; [k: string]: unknown };
   captions: { pace?: string; style?: string; [k: string]: unknown };
   voice: { address?: string; [k: string]: unknown };
+  /** Transcript vocabulary: canonical spellings and their known misspellings. */
+  vocabulary?: VocabEntry[];
   files?: string[];
   [k: string]: unknown;
+}
+
+/** One transcript vocabulary entry (brand.json / job.json "vocabulary"). */
+export interface VocabEntry {
+  term: string;
+  variants: string[];
+  note?: string;
+}
+
+/** A possible misspelling `videocut tool vocab suggest` found (never applied by itself). */
+export interface VocabSuggestion {
+  term: string;
+  heard: string;
+  distance: number;
+  count: number;
+  times: number[];
+  conf: number | null;
+}
+
+/** GET /api/jobs/{id}/vocabulary. */
+export interface JobVocabulary {
+  id: string;
+  vocabulary: VocabEntry[];
+  brand: string | null;
+  brand_vocabulary: VocabEntry[];
+  effective: VocabEntry[];
+  applied: { applied: number; terms: Record<string, number> } | null;
+  has_transcript: boolean;
+  suggestions: VocabSuggestion[];
+  overlays_stale: boolean;
 }
 
 export interface JobSummary {
@@ -179,6 +211,8 @@ export interface JobDetail {
   cut_style_resolved?: CutStyle | null;
   /** The current reel was cut with another style or format than the resolved one. */
   cut_stale?: boolean;
+  /** A vocabulary changed the captions of the finished reel: set them again (/overlays). */
+  overlays_stale?: boolean;
   /** The chosen target length (null: automatic) and the range the plan aims for (null: no
    * fixed length, as long as the content needs). */
   target_s?: number | null;

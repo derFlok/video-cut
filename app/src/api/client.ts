@@ -12,13 +12,20 @@ import type {
   JobDetail,
   JobEvent,
   JobSummary,
+  JobVocabulary,
   Plan,
   RedactionDecision,
   Session,
   TargetChoice,
   TargetRange,
   VideoType,
+  VocabEntry,
 } from "./types";
+
+/** POST /api/jobs/{id}/vocabulary/apply. */
+export type VocabularyApplied = JobVocabulary & {
+  result: { applied: number; terms: Record<string, number>; caption_words: number; overlays_stale: boolean };
+};
 
 /** PUT /api/jobs/{id}/target. */
 export interface TargetResult {
@@ -178,6 +185,8 @@ export const api = {
       cut_style?: CutStyleChoice;
       /** Seconds, or null for automatic (sent as "auto"). */
       target_s?: TargetChoice;
+      /** The video's own transcript vocabulary. */
+      vocabulary?: VocabEntry[];
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -189,6 +198,7 @@ export const api = {
     if (fields.brief) form.append("brief", fields.brief);
     if (fields.cut_style) form.append("cut_style", fields.cut_style);
     if (fields.target_s !== undefined) form.append("target_s", fields.target_s === null ? "auto" : String(fields.target_s));
+    if (fields.vocabulary?.length) form.append("vocabulary", JSON.stringify(fields.vocabulary));
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);
@@ -217,6 +227,13 @@ export const api = {
   /** Store the target length; a plan made for another one goes stale (plan again). */
   setTarget: (id: string, target_s: TargetChoice) =>
     call<TargetResult>("PUT", `${J(id)}/target`, { target_s: target_s === null ? "auto" : target_s }),
+  vocabulary: (id: string) => call<JobVocabulary>("GET", `${J(id)}/vocabulary`),
+  saveVocabulary: (id: string, vocabulary: VocabEntry[]) =>
+    call<JobVocabulary>("PUT", `${J(id)}/vocabulary`, { vocabulary }),
+  /** Apply brand + job vocabulary to the existing transcript (and captions). */
+  applyVocabulary: (id: string) => call<VocabularyApplied>("POST", `${J(id)}/vocabulary/apply`),
+  /** Set captions and overlays again on the kept cut (after the vocabulary changed them). */
+  redoOverlays: (id: string) => call<unknown>("POST", `${J(id)}/overlays`),
   feedback: (id: string, text: string, at_s?: number) =>
     call<unknown>("POST", `${J(id)}/feedback`, at_s === undefined ? { text } : { text, at_s }),
 

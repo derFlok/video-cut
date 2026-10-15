@@ -6,6 +6,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog, type LogLine } from "../components/LiveLog";
 import { StatusChip } from "../components/StatusChip";
 import { StatusLine } from "../components/StatusLine";
+import { JobVocabularyPanel, OverlaysStaleBanner } from "../components/Vocabulary";
 import { Stepper } from "../components/Stepper";
 import { clock, money, useI18n } from "../i18n";
 import { kindOf, type RunKind } from "../progress";
@@ -224,6 +225,8 @@ export function JobPage({ id }: { id: string }) {
       </section>
 
       {atGateOrLater && <CutStylePanel live={live} />}
+      <OverlaysStaleBanner live={live} />
+      <JobVocabularyPanel live={live} />
       {showPlan && <PlanReview live={live} />}
       {job.outputs?.reel && job.approved && job.stage !== "plan_revise" && (
         <>

@@ -630,3 +630,44 @@
 - Known: the click check flags low-level sound next to the denoiser's digital silence; a
   follow-up should judge clicks against the source or an audible level, or keep a noise
   floor in the denoised track.
+
+### Added — Transcript vocabulary
+- brand.json and job.json `vocabulary`: `[{term, variants, note?}]`, the canonical spelling
+  of names the transcriber gets wrong and their known misspellings; validated by `brand
+  check`, the brand editor and the job routes (non-empty term, literal variants, no key used
+  twice). The effective vocabulary of a job is brand ∪ job, the job wins conflicts.
+- `videocut tool brand vocab <brand> add|remove|list`, `tool job vocab <job>
+  add|remove|list` (human only), `videocut run <file> --vocab "Term=variant,..."`
+  (repeatable, new jobs), `tool job new --vocab`.
+- Transcription: turbo's prompt names the canonical terms after the filler sample, within
+  Whisper's 223-token prompt budget (job terms first); an unstable decode retries with the
+  filler sample alone, then without a prompt. `transcribe.json` `prompt_terms`.
+- Deterministic correction after transcription and alignment (`tools/vocab.py`): variants
+  and the term in another case or split into words become the term (case and punctuation
+  ignored, spans of up to 4 words, inflection endings, hyphen compounds, never inside a
+  longer word); `w_asr` keeps the model's text, re-applying starts from it.
+  `transcribe.json` `vocabulary` has the counts.
+- `videocut tool vocab apply` (existing job, no new transcription; also the captions in
+  `edl.json`/`overlays.json`, then job.json `overlays.stale` makes the next run redo only the
+  overlay stage), `vocab suggest` (near misses of a term, reported only), `vocab show`.
+- `job show` → `vocabulary_effective`; the plan, cut, overlays and revise skills write
+  every name in its canonical spelling.
+- API: brand GET/PUT carry `vocabulary`; job create takes `vocabulary`; `GET/PUT
+  /api/jobs/{id}/vocabulary`, `POST /api/jobs/{id}/vocabulary/apply`, `POST
+  /api/jobs/{id}/overlays`; job detail `overlays_stale`.
+- App: "Wörterbuch" in the brand editor (correct spelling, misspellings as chips), a
+  collapsible "Begriffe für dieses Video" in Neues Video and on the job page (save and apply,
+  "Meintest du …? Zum Wörterbuch hinzufügen"), "Untertitel neu setzen" when the captions of a
+  finished reel changed. German and English.
+
+### Observed — transcript vocabulary
+- Prompt stability, turbo on two generated clips (the filler clip; a clip with three
+  invented names and three fillers), 12 runs with 3, 10, 20 and 40 terms (37-222 prompt
+  tokens): 3/3 fillers in every run, no fallback to sampling. With the terms in the prompt all
+  three names were spelled right; with the filler sample alone one was misspelled.
+- Real check on a copy of a real job (744 words) and of its brand: the company name was
+  transcribed with one wrong spelling twice, the brand's own name once with two words run together.
+  With the term and that variant in the copy's vocabulary, `vocab apply` changed 3 words and
+  1 caption word (edl.json and overlays.json) and marked the overlays stale; `vocab suggest`
+  with the term alone found the misspelling (2×, lowest conf 0.44) and nothing else. The copies
+  were deleted afterwards.

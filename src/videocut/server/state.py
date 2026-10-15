@@ -200,6 +200,34 @@ def cut_stale(job: Path) -> bool:
         return False
 
 
+def overlays_stale(job: Path) -> bool:
+    """The reel's captions/overlays were made before a vocabulary was applied to the
+    captions (job.json overlays.stale): the app offers to set them again (/overlays)."""
+    try:
+        rec = read_job(job).get("overlays")
+        return (
+            isinstance(rec, dict)
+            and bool(rec.get("stale"))
+            and is_approved(job)
+            and (job / MEDIA["reel"]).is_file()
+            and pipeline.cut_done(job)
+        )
+    except (ToolError, OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def transcribe_meta(job: Path) -> dict:
+    meta = _json(job / "work" / "transcribe.json")
+    return meta if isinstance(meta, dict) else {}
+
+
+def words(job: Path) -> list[dict] | None:
+    """work/words.json words, None before transcription."""
+    doc = _json(job / "work" / "words.json")
+    ws = doc.get("words") if isinstance(doc, dict) else None
+    return ws if isinstance(ws, list) else None
+
+
 def source_duration(job: Path) -> float | None:
     """Duration of the camera recording in seconds (work/probe.json), None before ingest."""
     d = (_json(job / "work" / "probe.json") or {}).get("duration")
@@ -277,6 +305,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "cut_style": cut_style,
         "cut_style_resolved": style_resolved,
         "cut_stale": cut_stale(job),
+        "overlays_stale": overlays_stale(job),
         **_target(job, data),
         "source_duration_s": source_duration(job),
         "lang": job_lang(data),

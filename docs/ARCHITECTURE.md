@@ -35,8 +35,9 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>` | `job.py` |
-| `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]` | `brand.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job vocab <job> add\|remove\|list` | `job.py` |
+| `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]`, `brand vocab <id> add\|remove\|list` | `brand.py` |
+| `vocab show [job]`, `vocab apply [job]`, `vocab suggest [job] [--all]` | `vocab.py` |
 | `captions [--force]` | `captions.py` |
 | `overlays [--no-render]` | `overlays.py` |
 | `ingest [--denoise]` | `ingest.py` |
@@ -68,6 +69,7 @@ snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
 job.json   id, created, source (relative), type, brief, status, approval, brand, assets,
            format (optional output format; absent = the default rule, resolved on read),
            cut_style (optional; absent = the default rule), lang (de|en, default de),
+           vocabulary (optional, the video's own terms; see Transcript vocabulary),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
            format and cut style of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
@@ -166,6 +168,49 @@ ignored.
 **speech_clipped** (`verify`, `_verify_audio.py`): a hard check on the reel's own audio: at
 every cut, speech level and spectral flux right before and after the cut tell a word cut off
 or started mid-syllable from a clean cut; it fails verify like a click.
+
+## Transcript vocabulary (`tools/vocab.py`)
+
+Names the transcriber gets wrong (the company name, a product, a customer in a demo):
+`[{term, variants, note?}]` in brand.json `vocabulary` (every job of the brand) and job.json
+`vocabulary` (this video). `brand check` / the brand PUT validate it: a non-empty term, literal
+variants (no pattern characters), no key used twice (key = case-folded letters and digits).
+The effective vocabulary is brand ∪ job; the job wins every conflict (same term: one entry
+with the job's spelling and both variant lists; a brand term the job lists as a variant is
+dropped; a variant claimed by both belongs to the job's term). `job show` reports it as
+`vocabulary_effective` and prints one line for the skills, which use the canonical spelling
+in every text they write (plan, reports, cards, captions fixes).
+
+- **Prompt:** turbo's initial prompt is the filler sample followed by the canonical terms,
+  as many as fit Whisper's 223 prompt tokens (counted with Whisper's own tokenizer, the job's
+  terms first), so the sample is never cut off. When decoding falls back to sampling, it
+  retries with the filler sample alone, then without a prompt. `transcribe.json`
+  `prompt_terms` lists the terms used. Measured on two generated clips (filler clip, a clip
+  with three invented names), 12 runs from 3 to 40 terms (37-222 tokens): 3/3 fillers every
+  time, no fallback; the names were all spelled right whenever they were in the prompt (one
+  of three was misspelled with the filler sample alone).
+- **Correction:** after transcription and alignment (every `transcribe`, also of a kept
+  transcript, and `vocab apply`), a word matching a variant or the term itself
+  (case-insensitive, punctuation stripped) becomes the term, the punctuation around it kept.
+  A match may span up to 4 consecutive words ("Sentro Via", the term split by the model;
+  only for keys of ≥ 5 characters and never across punctuation inside the span), keeps an
+  inflection ending (`s`, `es`, `'s`) and corrects parts of a hyphen compound; a longer word
+  that only contains a variant never matches. A corrected word keeps `w_asr` (the model's
+  text) and `vocab` (the term); words merged from a span keep the originals in `parts`
+  (fitted into the merged word's current times when restored), so every apply starts from
+  the transcript as the model wrote it and a removed variant goes back.
+  `transcribe.json` `vocabulary` = `{applied, terms: {term: n}, entries}`.
+- **Existing jobs:** `vocab apply` corrects `words.json` without transcribing again,
+  rewrites `candidates.json`/`takes_packed.md`, and corrects caption words in `edl.json` and
+  `overlays.json` (forwards only: captions may carry the agent's text). When captions changed,
+  job.json `overlays.stale = "vocabulary"`: `run.overlays_done` is false, the next run keeps
+  the cut and redoes only the overlay stage (the app: "Untertitel neu setzen", `POST
+  /api/jobs/{id}/overlays`). Nothing is re-rendered by `apply` itself.
+- **Suggestions:** `vocab suggest` reports words (and word pairs) within edit distance 1
+  (keys < 7 characters) or 2 of a term or variant that no variant covers, with conf < 0.9
+  (`--all`: any conf); they are never applied. The app shows them as "Meintest du …?".
+- Editing is human only (`job vocab`/`brand vocab` refuse inside an agent run; job.json and
+  the brands folder are outside what an agent run may write).
 
 ## Cut style and job language
 
@@ -604,7 +649,10 @@ the neutral example, logo/font upload with `role`, cached preview sheet), `jobs`
 create by multipart upload, detail, delete to `$VIDEOCUT_HOME/trash`), `jobs/{id}/start`,
 `events` (server-sent events: `stage` (with `at`, the stage's start, ISO), `log`, `tool`,
 `gate`, `error`, `done`; replayed on connect, so a reloaded page keeps the stage's start),
-`cut-style` (PUT), `target` (PUT), `recut` (POST: cut + overlays again with the approved plan), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
+`cut-style` (PUT), `target` (PUT), `recut` (POST: cut + overlays again with the approved plan),
+`vocabulary` (GET: job/brand/effective terms, applied counts, suggestions; PUT: the job's
+terms, validated), `vocabulary/apply` (POST), `overlays` (POST: the overlay stage again on the
+kept cut, only while `overlays_stale`), job create takes a `vocabulary` field (JSON), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
 `media/{reel|preview|cover|screen_proxy|camera_proxy|history/reel-<k>.mp4}` (HTTP Range),
 `download`. Errors are `{"detail": {"message", "code"?, "errors"?}}`; 409 codes: `busy` (a
 run is queued or active), `stale` (the plan changed since it was read), `state`, `exists`,
@@ -619,7 +667,8 @@ running | waiting | done | error`, stage `prep, plan, approval, cut, overlays, v
 revise, plan_revise, error`, gate `plan | result | null`. The job detail also carries
 `stage_since` (start of the running stage), `failed_stage`, `has_screen`, `cut_style`
 (stored or `auto`), `cut_style_resolved`, `cut_stale`, `source_duration_s`, `lang`,
-`target_s`, `target_resolved`, `plan_target_stale` and `plan_target_s`; the
+`target_s`, `target_resolved`, `plan_target_stale`, `plan_target_s` and `overlays_stale`
+(captions changed by a vocabulary since the overlays were rendered); the
 app's "What is happening" line counts the time in the step from `stage_since`.
 
 Security model:
@@ -659,12 +708,15 @@ Security model:
   folders a killed server left behind are removed at start.
 
 `app/`: screens Home (job list), NewJob (type cards, drag & drop with upload progress, brand,
-format, one-line instruction), JobPage (stepper, live log, time, cost), PlanReview
+format, one-line instruction, collapsible terms for this video), JobPage (stepper, live log, time, cost), PlanReview
 (structured plan with stills or the markdown, editor with stale-sha handling, plan feedback
 with the change highlighted), PersonalData (redact everything by default, per item choice),
 Result (player, verify findings in plain words, feedback at the player position, versions,
 MP4/cover download), Brands (preview sheet per format, token editor with the server's
-validation, logo/font upload, new brand from the neutral example). German default, English
+validation, logo/font upload, new brand from the neutral example, Wörterbuch: terms with
+their misspellings as chips). The job page has a collapsible "Begriffe für dieses Video"
+panel (save and apply, suggestions added to the brand's Wörterbuch when the term is the
+brand's, else to the job) and the "Untertitel neu setzen" banner (`components/Vocabulary.tsx`). German default, English
 switch (`app/src/i18n.tsx`); verify flag and check ids map to plain words, unknown ids show
 as they are. `npm run dev:mock` runs the UI against an in-memory mock of the API.
 

@@ -166,6 +166,24 @@ Logodateien (Vorlage: `brands/_example`).
 .venv/bin/videocut tool brand sheet meine-marke   # Vorschau-Bogen aller Szenen → brands/meine-marke/preview.jpg
 ```
 
+### Wörterbuch
+
+Schreibt die Transkription einen Namen immer wieder falsch (deine Firma, ein Produkt), trag
+ihn im **Wörterbuch** der Marke in der App ein (oder nur für ein Video: „Begriffe für dieses
+Video“): die richtige Schreibweise und die Falschschreibungen, die dir begegnet sind. Whisper
+bekommt die richtige Schreibweise vorgegeben, jede Falschschreibung wird im Transkript und in
+den Untertiteln korrigiert, und Claude schreibt den Namen in Titeln und Karten so. Bei einem
+fertigen Video korrigiert „Auf das Transkript anwenden“ ohne neue Transkription und bietet
+„Untertitel neu setzen“ an. Auf der Videoseite stehen außerdem Vorschläge („Meintest du …?“).
+
+```bash
+.venv/bin/videocut tool brand vocab meine-marke add Zentrovia Zentrowia "Sentro Via"
+.venv/bin/videocut tool job vocab <job> add "Lumo Cloud" Lumocloud   # nur dieses Video
+.venv/bin/videocut tool vocab apply <job>      # bestehendes Transkript korrigieren
+.venv/bin/videocut tool vocab suggest <job>    # mögliche Falschschreibungen (nie automatisch)
+.venv/bin/videocut run aufnahme.mov --vocab "Zentrovia=Zentrowia,Sentro Via"
+```
+
 ## Lizenz
 
 Apache-2.0. Unabhängiges Projekt, nicht mit Anthropic verbunden.

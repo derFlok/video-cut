@@ -18,6 +18,8 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                by `run` after every plan run; another target makes the plan stale),
                lang (optional language of the plan's and reports' human-facing text:
                "de" | "en"; absent: "de"),
+               vocabulary (optional transcript vocabulary of this video, tools/vocab.py:
+               [{term, variants, note?}]; merged with the brand's, the job wins),
                approval {at, project_sha256, target_s}: a display copy only, never trusted
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
@@ -41,7 +43,7 @@ from pathlib import Path
 
 from .. import brand
 from .. import redaction as red
-from . import _format, _length, _style
+from . import _format, _length, _style, vocab
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -89,6 +91,10 @@ TARGET_HELP = (
     "target length: seconds or 90s, 5m, 2:30, or auto (default: 30-45 s for thought, "
     "30-60 s for other types; with a screen recording or screenshots as long as the "
     "content needs)"
+)
+VOCAB_HELP = (
+    "transcript vocabulary of this video: the canonical spelling and the misspellings the "
+    'transcriber writes, e.g. "Zentrovia=Zentrowia,Sentrovia" (repeatable)'
 )
 LANGS = ("de", "en")
 DEFAULT_LANG = "de"
@@ -356,6 +362,7 @@ def new(args) -> dict:
     cut_style = style_arg(args.cut_style) if args.cut_style else None
     target = target_arg(args.target) if args.target else None
     lang = lang_arg(args.lang) if args.lang else None
+    words = vocab.parse_flag(args.vocab)
     brand_ref = brand_id(args.brand) if args.brand else None
     assets = [Path(a).expanduser() for a in (args.asset or [])]
     screen = _screen_file(args.screen) if args.screen else None
@@ -412,6 +419,8 @@ def new(args) -> dict:
         data["target_s"] = target
     if lang:
         data["lang"] = lang
+    if words:
+        data["vocabulary"] = words
     write_json(job / JOB_FILE, data)
     print(job)
     return {
@@ -630,6 +639,9 @@ def show(args) -> dict:
         )
     lang = job_lang(data)
     print(f"language of plan and reports: {lang}")
+    words = vocab.effective(job, data)
+    if words:
+        print(f"vocabulary (write these names exactly so): {vocab.describe(words)}")
     out = {
         "job": str(job),
         **data,
@@ -642,6 +654,7 @@ def show(args) -> dict:
         **target,
         "plan_target_stale": plan_stale,
         "lang": lang,
+        "vocabulary_effective": words,
         "approved": is_approved(job),
         "artefacts": present,
         "out": outputs,
@@ -711,6 +724,7 @@ def register(subparsers) -> None:
     n.add_argument("--cut-style", help=CUT_STYLE_HELP)
     n.add_argument("--target", metavar="LENGTH", help=TARGET_HELP)
     n.add_argument("--lang", help="language of the plan and reports: de (default) or en")
+    n.add_argument("--vocab", action="append", metavar="TERM=VARIANT,...", help=VOCAB_HELP)
     n.set_defaults(handler=run_tool("job new", new))
     s = sub.add_parser(
         "show", help="print job.json and which artefacts exist", parents=[job_parent()]
@@ -770,3 +784,4 @@ def register(subparsers) -> None:
     tg.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     tg.add_argument("target", metavar="LENGTH", help=TARGET_HELP)
     tg.set_defaults(handler=run_tool("job target", target_cmd))
+    vocab.register_job(sub)

@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api/client";
-import { FORMATS, type BrandSummary, type CutStyleChoice, type FormatChoice, type TargetChoice, type VideoType } from "../api/types";
+import { FORMATS, type BrandSummary, type CutStyleChoice, type FormatChoice, type TargetChoice, type VideoType, type VocabEntry } from "../api/types";
 import { AspectIcon } from "../components/AspectIcon";
 import { CutStyleSelect } from "../components/CutStyle";
 import { TargetSelect } from "../components/TargetLength";
 import { DropZone, formatBytes, hasExt, IMAGE_EXT, VIDEO_EXT } from "../components/DropZone";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { VocabEditor, cleanVocabulary } from "../components/Vocabulary";
 import { useI18n, type T } from "../i18n";
 import { go } from "../router";
 
@@ -48,6 +49,7 @@ export function NewJob() {
   const [cutStyle, setCutStyle] = useState<CutStyleChoice>("auto");
   // undefined: a custom length that is not valid yet (blocks the upload)
   const [target, setTarget] = useState<TargetChoice | undefined>(null);
+  const [vocabulary, setVocabulary] = useState<VocabEntry[]>([]);
   const [tried, setTried] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState<"idle" | "upload" | "start">("idle");
@@ -87,6 +89,7 @@ export function NewJob() {
           brief: brief.trim() || undefined,
           cut_style: cutStyle,
           target_s: target,
+          vocabulary: cleanVocabulary(vocabulary),
         },
         (p) => setProgress(p.total ? Math.round((p.loaded / p.total) * 100) : null),
       );
@@ -262,6 +265,11 @@ export function NewJob() {
           onChange={(e) => setBrief(e.target.value)}
         />
       </div>
+
+      <details className="details" data-testid="new-vocab">
+        <summary className="h3">{t("vocab.job.title")}</summary>
+        <VocabEditor id="nv" value={vocabulary} onChange={setVocabulary} disabled={busy} />
+      </details>
 
       {tried && errors.length > 0 && (
         <div className="banner banner-error" role="alert">
