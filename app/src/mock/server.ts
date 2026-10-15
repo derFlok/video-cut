@@ -12,6 +12,7 @@ import type {
   PlanJson,
   Stage,
   TargetRange,
+  TranscriptWord,
   VideoType,
   VocabEntry,
   VocabSuggestion,
@@ -39,6 +40,28 @@ interface MockJob {
   vocabulary?: VocabEntry[];
   vocabApplied?: number;
   heard?: VocabSuggestion[];
+  /** The transcript (made on first use) and the edits an undo can take back. */
+  words?: TranscriptWord[];
+  edits?: { i: number; before: TranscriptWord }[];
+}
+
+const SAMPLE = "Heute zeige ich euch, wie Zentrowia den Ablauf einfacher macht. Ähm, also, zuerst öffnet ihr die Übersicht. Dann wählt ihr den Bericht aus und klickt auf Senden. Das war's schon!";
+
+/** A transcript for the mock: the sample repeated, one word every 0.4 s; every 7th sentence is cut. */
+function mockWords(n = 4): TranscriptWord[] {
+  const out: TranscriptWord[] = [];
+  let t = 0;
+  let out_t = 0;
+  let sentence = 0;
+  for (let r = 0; r < n; r++)
+    for (const w of SAMPLE.split(" ")) {
+      const cut = sentence % 7 === 6 || w.startsWith("Ähm");
+      out.push({ i: out.length, w, t0: +t.toFixed(2), t1: +(t + 0.35).toFixed(2), out_t0: cut ? null : +out_t.toFixed(2), out_t1: cut ? null : +(out_t + 0.35).toFixed(2) });
+      t += 0.4;
+      if (!cut) out_t += 0.4;
+      if (/[.!?]$/.test(w)) sentence++;
+    }
+  return out;
 }
 
 export interface MockState {
@@ -611,6 +634,44 @@ export function createMock(opts: MockOptions = {}) {
           if (captions) d.overlays_stale = true;
           return view({ result: { applied, terms: {}, caption_words: captions, overlays_stale: captions > 0 } });
         }
+      }
+      if (b === "transcript") {
+        if (d.status === "new") return json(409, { detail: { message: "the job has no transcript yet", code: "state" } });
+        job.words ??= mockWords();
+        job.edits ??= [];
+        const words = job.words;
+        const view = () =>
+          json(200, {
+            id, total: words.length, offset: 0, words, has_reel: !!d.outputs?.reel, edits: words.filter((w) => w.edited).length,
+            can_undo: job.edits!.length > 0, edits_at: null, drift: 0, captions_stale: !!d.captions_stale, overlays_stale: !!d.overlays_stale,
+          });
+        if (!c && method === "GET") return view();
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        if (!c && method === "PATCH") {
+          const { i, text } = body as { i: number; text: string };
+          if (typeof text !== "string" || text.length > 60 || /[\u0000-\u001f]/.test(text)) return json(422, { detail: { message: "invalid text" } });
+          const w = words[i];
+          if (!w) return json(422, { detail: { message: `no word ${i}` } });
+          job.edits.push({ i, before: { ...w } });
+          const asr = w.asr ?? w.w;
+          words[i] = text ? { ...w, w: text, edited: true, asr, hidden: undefined } : { ...w, w: asr, edited: true, asr, hidden: true };
+          if (d.outputs?.reel && d.brand) d.captions_stale = d.overlays_stale = true;
+          return view();
+        }
+        if (c === "undo" && method === "POST") {
+          const last = job.edits.pop();
+          if (!last) return json(409, { detail: { message: "there is no edit to undo", code: "state" } });
+          words[last.i] = last.before;
+          return view();
+        }
+      }
+      if (b === "captions" && c === "refresh" && method === "POST") {
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        if (!d.overlays_stale) return json(409, { detail: { message: "the captions of this job are up to date", code: "state" } });
+        void simulate(id, ["overlays", "verify"], "result", () => {
+          d.captions_stale = d.overlays_stale = false;
+        });
+        return json(202, { ok: true });
       }
       if (b === "overlays" && method === "POST") {
         if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });

@@ -1397,3 +1397,75 @@ progress {
 .slidemark:focus-visible {
   outline: 2px solid var(--text);
 }
+
+/* Transkript: flowing words, one plain button each (cheap for ~1500 words) */
+.ts-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+.ts-search {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.ts-all,
+.ts-always {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 0.9rem;
+}
+.ts-text {
+  max-height: 60vh;
+  overflow-y: auto;
+  line-height: 1.9;
+}
+.ts-sentence {
+  margin: 0 0 6px;
+}
+.ts-time {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-right: 4px;
+}
+.ts-word {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0 1px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ts-word:hover,
+.ts-word:focus-visible {
+  background: var(--info-bg);
+}
+.ts-edited {
+  background: var(--change-bg);
+  color: var(--change);
+  text-decoration: underline dotted;
+}
+.ts-hidden {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.ts-cut {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.ts-hit {
+  outline: 2px solid var(--focus);
+}
+.ts-edit {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.ts-edit input[type="text"],
+.ts-edit input:not([type]) {
+  max-width: 100%;
+}

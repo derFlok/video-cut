@@ -253,6 +253,9 @@ export interface JobDetail {
   cut_stale?: boolean;
   /** A vocabulary changed the captions of the finished reel: set them again (/overlays). */
   overlays_stale?: boolean;
+  /** The human edited the transcript since the reel's captions were set: set them again
+   * without Claude (/captions/refresh). */
+  captions_stale?: boolean;
   /** The chosen target length (null: automatic) and the range the plan aims for (null: no
    * fixed length, as long as the content needs). */
   target_s?: number | null;
@@ -318,3 +321,35 @@ export type JobEvent =
   | { t: "gate"; gate: "plan" | "result" }
   | { t: "done"; ok: boolean }
   | { t: "error"; text: string };
+
+/** One word of GET /api/jobs/{id}/transcript: source time, and the time in the finished
+ * reel when the cut keeps it (null otherwise). */
+export interface TranscriptWord {
+  i: number;
+  w: string;
+  t0: number;
+  t1: number;
+  out_t0: number | null;
+  out_t1: number | null;
+  /** The human changed it; `asr` is what the transcriber wrote. */
+  edited?: boolean;
+  asr?: string;
+  /** Hidden from the captions (an empty edit). */
+  hidden?: boolean;
+}
+
+/** GET /api/jobs/{id}/transcript (also the answer of an edit or an undo). */
+export interface TranscriptView {
+  id: string;
+  total: number;
+  offset: number;
+  words: TranscriptWord[];
+  has_reel: boolean;
+  edits: number;
+  can_undo: boolean;
+  edits_at: string | null;
+  /** Words that differ from the human's edit record (set back on the next refresh). */
+  drift: number;
+  captions_stale: boolean;
+  overlays_stale: boolean;
+}
