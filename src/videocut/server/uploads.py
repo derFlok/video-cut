@@ -15,6 +15,7 @@ from pathlib import Path
 from python_multipart.multipart import MultipartParser, parse_options_header
 from starlette.requests import Request
 
+from ..tools._job_slides import FILE_EXT as SLIDE_EXT
 from ..tools.common import binary, home
 from ..tools.job import ASSET_EXT, SCREEN_EXT
 
@@ -22,6 +23,8 @@ VIDEO_EXT = SCREEN_EXT  # camera and screen recordings: .mov .mp4 .m4v .mkv .web
 MAX_FILE_BYTES = 40 * 1024**3  # one recording; 4K ProRes for a few minutes stays below
 MAX_TEXT_BYTES = 16 * 1024  # a form text field (the brief is one line)
 MAX_HEADER_BYTES = 4096
+MAX_SLIDE_FILES = 30  # slide files (PDFs or images) per job
+MAX_SLIDE_BYTES = 200 * 1024**2  # one slide file (tools/_job_slides.MAX_FILE_BYTES)
 WRITE_BATCH = 1024**2  # bytes handed to the parser thread at once
 NAME_RE = re.compile(r"[^A-Za-z0-9._ -]+")
 
@@ -66,9 +69,11 @@ async def read_form(
     file_fields: dict[str, set[str]],
     text_fields: set[str],
     max_file_bytes: int | None = None,
+    field_caps: dict[str, tuple[int, int]] | None = None,
 ) -> Form:
     """Parse a multipart body into a staging folder. `file_fields` maps a field name to its
-    allowed extensions; a field may repeat (assets). Unknown fields are refused."""
+    allowed extensions; a field may repeat (assets). Unknown fields are refused.
+    `field_caps` {field: (max files, max bytes per file)} tightens the limits of a field."""
     ctype, params = parse_options_header(request.headers.get("content-type", ""))
     boundary = params.get(b"boundary")
     if ctype != b"multipart/form-data" or not boundary:
@@ -102,6 +107,10 @@ async def read_form(
             return
         if name not in file_fields:
             raise UploadError(f"unexpected file field {name!r}")
+        n_max, b_max = (field_caps or {}).get(name, (None, cap))
+        if n_max is not None and len(form.files.get(name, [])) >= n_max:
+            raise UploadError(f"{name}: at most {n_max} files", 413)
+        state["cap"] = b_max
         fname = safe_name(filename.decode("utf-8", "replace"))
         if Path(fname).suffix.lower() not in file_fields[name]:
             allowed = ", ".join(sorted(file_fields[name]))
@@ -120,7 +129,7 @@ async def read_form(
                 raise UploadError(f"{state['name']}: text too long", 413)
             state["text"] += data[start:end]
         elif state["out"] is not None:
-            if state["size"] > cap:
+            if state["size"] > state.get("cap", cap):
                 raise UploadError(f"{state['name']}: file larger than the limit", 413)
             state["out"].write(data[start:end])
 
@@ -223,6 +232,18 @@ def check_video(path: Path, need_audio: bool) -> None:
 IMAGE_CODECS = {"png", "mjpeg", "webp", "jpeg2000"}
 
 
+def check_slide(path: Path) -> None:
+    """A slide upload: a PDF (by its magic bytes; parsed later in a time-limited child
+    process, tools/_pdf.py) or an image that probes as PNG, JPEG or WebP."""
+    with path.open("rb") as f:
+        head = f.read(1024)
+    if path.suffix.lower() == ".pdf" or head.startswith(b"%PDF"):
+        if b"%PDF-" not in head:
+            raise UploadError(f"{path.name}: not a PDF file", 415)
+        return
+    check_image(path)
+
+
 def check_image(path: Path) -> None:
     info = probe(path)
     streams = info["streams"]
@@ -232,4 +253,4 @@ def check_image(path: Path) -> None:
         raise UploadError(f"{path.name}: not a PNG, JPEG or WebP image", 415)
 
 
-__all__ = ["ASSET_EXT", "VIDEO_EXT", "Form", "UploadError", "read_form"]
+__all__ = ["ASSET_EXT", "SLIDE_EXT", "VIDEO_EXT", "Form", "UploadError", "read_form"]

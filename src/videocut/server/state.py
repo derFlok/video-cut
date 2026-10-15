@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .. import redaction as red
 from .. import run as pipeline
+from ..tools import _job_slides
 from ..tools.common import ID_RE, JOB_FILE, ToolError, jobs_root, read_job
 from ..tools.job import (
     is_approved,
@@ -36,7 +37,7 @@ STILL_EXT = {
     ".webp": "image/webp",
 }
 # GET /api/jobs/{id}/stills/{path}: path relative to the job folder, under one of these.
-STILL_PREFIXES = ("work/plan_stills/", "work/sheets/", "out/verify/")
+STILL_PREFIXES = ("work/plan_stills/", "work/sheets/", "out/verify/", "work/slides/stills/")
 
 
 class NotFound(Exception):
@@ -336,6 +337,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "plan_sha": project_sha(job),
         "has_screen": bool(data.get("screen")),
         "assets": data.get("assets", []),
+        "slides": slides_view(job, data),
         "redaction": redaction_view(job),
         "outputs": outputs(job),
         "verify": verify if isinstance(verify, dict) else None,
@@ -343,6 +345,32 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "revisions": revs,
         "versions": versions,
     }
+
+
+def slides_view(job: Path, data: dict) -> dict:
+    """The job's slide settings and, once cut, where the reel shows each slide (output
+    seconds, for the result timeline)."""
+    view = _job_slides.view(job, data)
+    marks = []
+    edl = _json(job / "work" / "edl.json")
+    t = 0.0
+    for s in (edl.get("segments") if isinstance(edl, dict) else None) or []:
+        if not isinstance(s, dict):
+            continue
+        try:
+            d = float(s["out"]) - float(s["in"])
+        except (KeyError, TypeError, ValueError):
+            break
+        sid = s.get("slide")
+        if isinstance(sid, str) and d > 0:
+            if marks and marks[-1]["id"] == sid and abs(marks[-1]["t1"] - t) < 1e-6:
+                marks[-1]["t1"] = round(t + d, 3)  # one slide over consecutive segments
+            else:
+                marks.append({"id": sid, "t0": round(t, 3), "t1": round(t + d, 3),
+                              "layout": s.get("layout")})  # fmt: skip
+        t += max(0.0, d)
+    return {"mode": view["mode"], "wish": view["wish"], "pages": len(view["pages"]),
+            "stale": view["stale"], "marks": marks}  # fmt: skip
 
 
 def _history_url(job: Path, rel) -> str | None:

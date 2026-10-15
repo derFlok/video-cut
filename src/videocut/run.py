@@ -1298,6 +1298,7 @@ def run(
     redact_style: str | None = None,
     slides_mode: str | None = None,
     slides_wish: str | None = None,
+    plan_feedback_slide: str | None = None,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
@@ -1361,7 +1362,10 @@ def run(
             if plan_feedback is not None:
                 from .tools.common import write_json
 
-                write_json(request, {"text": plan_feedback.strip(), "plan_sha256": plan_before})
+                req = {"text": plan_feedback.strip(), "plan_sha256": plan_before}
+                if plan_feedback_slide:
+                    req["slide"] = plan_feedback_slide  # the slide the feedback is about
+                write_json(request, req)
                 prompt += PLAN_REVISE
                 if target_changed:
                     data = read_job(job)
