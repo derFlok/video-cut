@@ -765,3 +765,10 @@
 - Real check (copy of a real ~3.4 min 16:9 demo, preview reel, 111 caption groups +
   10 overlays): verify runs (before: ffmpeg error); 13 caption + 2 overlay sheets, 852 s
   wall (most of it the screen checks; the human's app was rendering at the same time).
+- The `screen_time` check reads its five reference pictures per screen segment (one seek
+  into the full-size recording each, ~0.6 s) four at a time: verify of the same job with
+  its real records 81 s -> 42 s, identical results. (The 852 s above came from a copy
+  without the personal-data decision: every candidate was then checked for leaks.)
+- Real check with the job's records (approval, personal-data decision, overlay record):
+  render 396 s; verify not ok on 3 real flags (a blink at cut 1, a keyword card over the
+  screen view, a keyword card on its own caption); 0 screen flags.

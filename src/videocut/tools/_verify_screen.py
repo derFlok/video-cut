@@ -685,11 +685,14 @@ def screen_time(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
             if rect:
                 mask[rect[1] - v.y : rect[3] - v.y, rect[0] - v.x : rect[2] - v.x] = False
         reel_view = _grey(img[v.y : v.y + v.h, v.x : v.x + v.w].astype(float))
-        win = _layouts.window_at(seg, n)
+        win = _in_recording(seg, _layouts.window_at(seg, n))
         t = float((seg.screen_frame + n) / plan.fps)
+        # each reference is one seek into the full-size recording (~0.5 s): read them at once
+        offsets = (0.0, *MAP_OFFSETS)
+        asks = [(t + dt, win, v) for dt in offsets]
+        refs = _ocr.pmap(lambda a: _screen_view(ctx["screen"], *a, sinfo), asks)
         diffs = {}
-        for dt in (0.0, *MAP_OFFSETS):
-            ref = _screen_view(ctx["screen"], t + dt, _in_recording(seg, win), v, sinfo)
+        for dt, ref in zip(offsets, refs, strict=True):
             if ref is None:
                 continue
             d = np.abs(_grey(ref) - reel_view)
