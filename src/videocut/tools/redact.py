@@ -10,8 +10,9 @@ text recognition (macOS Vision, _ocr.py). Nothing leaves the machine.
               (t screen seconds, camera_t with a valid work/sync.json, box normalised to
               the screen). The summary lists every distinct text with the time it is seen
               and `suggest` (e-mail addresses, phone numbers and IBANs found by pattern).
-              With screenshots (job.json "assets"), also `asset_texts` [{"asset", "text",
-              "box", "conf"}] and their pattern hits.
+              With screenshots (job.json "assets") or uploaded slide pages
+              (input/slides/page_NN.png: untrusted, treated like screenshots), also
+              `asset_texts` [{"asset", "text", "box", "conf"}] and their pattern hits.
     measure   for every candidate of work/redaction.json with "text": finds the text on
               the screen (inside the plan's time "range", and wherever else it is shown),
               follows it over time (samples every MEASURE_STEP s, halved where it moves or
@@ -38,7 +39,7 @@ import numpy as np
 
 from .. import redaction as red_mod
 from ..edl import read_sync
-from . import _ocr
+from . import _job_slides, _ocr
 from ._layouts import probe_screen, screen_source
 from .common import (
     ToolError,
@@ -255,11 +256,17 @@ def suggest(texts: list[dict]) -> list[dict]:
     return out
 
 
+def _assets(job: Path, meta: dict) -> list[str]:
+    """The job's still images that may show personal data: its screenshots (job.json
+    "assets") and its uploaded slide pages (input/slides/page_NN.png, untrusted)."""
+    return [*(meta.get("assets") or []), *_job_slides.pages(job)]
+
+
 def asset_texts(job: Path) -> list[dict]:
-    """Text lines of the job's screenshots (job.json "assets"): [{"asset", "text", "box",
-    "conf"}], box normalised to the image."""
+    """Text lines of the job's screenshots and slide pages (`_assets`): [{"asset", "text",
+    "box", "conf"}], box normalised to the image."""
     out = []
-    for rel in read_job(job).get("assets") or []:
+    for rel in _assets(job, read_job(job)):
         f = red_mod.asset_file(job, rel)
         if f is None or not f.is_relative_to(job) or not f.is_file():
             continue
@@ -276,8 +283,9 @@ def text_tool(args) -> dict:
     job = resolve_job(args.job).resolve()
     _need_ocr()
     meta = read_job(job)
-    if not meta.get("screen") and not meta.get("assets"):
-        raise ToolError("the job has no screen recording and no screenshots")
+    assets = _assets(job, meta)
+    if not meta.get("screen") and not assets:
+        raise ToolError("the job has no screen recording, no screenshots and no slide pages")
     out: dict = {}
     if meta.get("screen"):
         doc = screen_text(job, force=args.force)
@@ -294,14 +302,14 @@ def text_tool(args) -> dict:
             "more_texts": max(0, len(texts) - SUMMARY_TEXTS),
             "suggest": hits,
         }
-    if meta.get("assets"):
+    if assets:
         lines = asset_texts(job)
         hits = [
             {**h, "asset": ln["asset"]}
             for ln in lines
             for h in suggest([{"text": ln["text"], "box": ln["box"]}])
         ]
-        print(f"screenshots: {len(lines)} text lines, {len(hits)} pattern hit(s)")
+        print(f"screenshots/slide pages: {len(lines)} text lines, {len(hits)} pattern hit(s)")
         out["asset_texts"] = lines[:SUMMARY_TEXTS]
         out["suggest"] = out.get("suggest", []) + hits
     return out

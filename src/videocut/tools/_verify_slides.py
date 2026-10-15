@@ -77,6 +77,7 @@ def check(job: Path, edl: edl_mod.Edl, reel_size: tuple[int, int]) -> dict:
     slides = slides_mod.by_id(doc)
     places = slides_mod.placements(edl)
     tokens, lang = slides_mod.brand_tokens(job), job_lang(read_job(job))
+    cands, shot_style = slides_mod.redaction(job)  # image slides burn these boxes in
     out, fps = tuple(edl.size), edl.fps
     docs, still, bubbles, times = [], [], [], []
     for sid, pl in places.items():
@@ -111,7 +112,8 @@ def check(job: Path, edl: edl_mod.Edl, reel_size: tuple[int, int]) -> dict:
             docs.append({**entry, "flags": [*flags, "slide_untrusted"], "error": untrusted})
             continue
         want = slides_mod.spec(s, pl["layout"], out, fps, pl["seconds"], pl["reveal"], tokens,
-                               lang)  # fmt: skip
+                               lang, redact=slides_mod.page_boxes(job, s, cands),
+                               redact_style=shot_style)  # fmt: skip
         if report.get("spec_sha256") != slides_mod.spec_sha(want, job):
             flags.append("slide_stale")
         geo = slides_mod.geometry_doc(pl["layout"], out, tokens)

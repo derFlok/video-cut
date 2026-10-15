@@ -699,11 +699,25 @@ file cannot hang or crash the caller; password-protected PDFs are refused. `none
 contact sheets (`work/sheets/slides_NN.jpg`) with the text of each page read locally
 (Vision), so the plan matches pages to moments mostly by text.
 
+**Personal data on the pages.** Uploaded pages are untrusted and may show personal data;
+they are handled exactly like screenshots (job.json `assets`). `redact text` reads them
+(`asset_texts`, pattern hits in `suggest`), a candidate on a page carries `"asset":
+"input/slides/page_NN.png"`, `redact measure` measures it on the image, and the human
+decides at approval (no decision: everything is redacted). `slides stills` and `slides
+render` add the boxes of every enforced candidate of the shown page (`slides.page_boxes`,
+any spelling of the path or a copy of the file) as `slide.redact` with `slide.redact_style`
+(`_redact_style.screenshot`: block or blur) to the spec, so a changed decision renders the
+clip again; the `image` template burns them into a private copy before the first frame
+with screenshot_frame's `redacted()` and fails closed on malformed boxes (the slide page
+gets `env.canvas` for it). Verify rebuilds the spec with the same boxes, so a clip made
+before a candidate existed is `slide_stale`.
+
 **Plan.** The plan skill writes `work/slides.json` (`{slides: [{id, template, content,
 source, why}]}`, checked by `slides check`) and `plan.json` `slides` (the same plus `t0`/`t1`,
 the source time of the words a slide illustrates, and `layout`); `plan check` validates the
-copy (`tools/_slide_spec.py`: templates, text limits; ids unique; inside a keep row; no two
-at once; mode none → none, upload → only `image` with an uploaded page, auto → no `image`)
+copy (`slides.content_errors`: templates, text limits; ids unique; inside a keep row; no two
+at once; mode none → none, upload → only `image` with an uploaded page, auto → no `image`;
+`views` never take a slide layout: slides go in `slides`)
 and that it repeats `work/slides.json`. `slides stills` writes the previews the plan gate
 shows (`work/slides/stills/`, served by the stills route). Content comes from the
 transcript or the wish only; overlay ideas never duplicate a slide.

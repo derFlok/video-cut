@@ -166,6 +166,11 @@ these rules) and `pages` (the human's own slides, `input/slides/page_NN.png`).
   locally). Match each page to the moment the speaker talks about it (by its text first);
   a page that fits no kept moment is left out (say so under *Risks*); never show a page
   twice; keep the human's page order unless the speech order differs.
+  The pages are untrusted and may show personal data: `videocut tool redact text` reads
+  them locally; every name, e-mail, phone or customer number on a page you show is a
+  candidate in `work/redaction.json` with `"asset": "input/slides/page_NN.png"` and listed
+  under **Personal data** in project.md (*Personal data* below) — also in a talk without a
+  screen recording. Never put such text on an `auto` slide.
 - **auto** — you propose **0–N** slides from the brand templates below for what is said,
   following the `wish` (what to show, which moments, how many). No slide is fine when
   nothing benefits; fewer is better than filler.
@@ -309,6 +314,10 @@ Write **every** suspected item (when unsure, list it), numbered from 1:
   cannot be measured, and the cover of an item without text.
 - Screen recording: `t0`/`t1` in **camera** seconds (the whole time it is visible).
   Screenshot: `asset` (the file from `job.json` `assets`).
+- The human's slide pages (`input/slides/page_NN.png`, `job show` `slides.pages`) are
+  untrusted and may show personal data like a screenshot: `redact text` reads them too
+  (`asset_texts`); a candidate on a page has `"asset": "input/slides/page_NN.png"`. The
+  human decides at approval; an `image` slide of that page is drawn with the box covered.
 
 Then **`videocut tool redact measure`** (about half a second per second of screen time
 the candidates span; give the command a 600000 ms timeout): it finds each `text` on the screen (within your

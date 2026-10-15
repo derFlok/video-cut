@@ -298,6 +298,7 @@ function pageSlide(spec) {
     duration,
     fonts: { family: fontFamily, ready: true },
     image: (ref) => images[ref] || null,
+    canvas: mk,
   };
   env.times = S.stepTimes(mod.steps(slide.content), slide.reveal);
   // Candidate content boxes (slide: above or beside the bubble): the one where the text

@@ -185,7 +185,9 @@ oder nur die Folie); vor der Freigabe kannst du eine entfernen oder eine Änderu
 PDF-Seiten werden auf diesem Mac in Bilder umgewandelt (mit seiner eigenen PDF-Technik);
 nichts wird hochgeladen. Claude schreibt keine Zahl und keine Aussage auf eine Folie, die
 du nicht gesagt oder gewünscht hast. Wer die Folien nach dem Plan ändert, braucht einen
-neuen Plan und eine neue Freigabe.
+neuen Plan und eine neue Freigabe. Persönliche Daten auf deinen Seiten (ein Name, eine
+E-Mail-Adresse) stehen im Plan wie bei einem Screenshot; was markiert bleibt, wird im
+Video abgedeckt.
 
 ## Marken
 

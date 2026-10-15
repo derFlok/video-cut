@@ -337,3 +337,94 @@ def test_views_never_take_a_slide_layout():
     assert any("slide layout; slides go in $.slides" in e for e in errs), errs
     face = {**view, "layout": "face"}
     assert plan_tool.validate(plan(views=[face]), "9:16", 30.0, False) == []
+
+
+# ---------------------------------------------------------------- personal data on pages
+
+
+def test_slide_pages_are_read_for_personal_data(monkeypatch, capsys):
+    from videocut.tools import redact
+
+    job = make_job()
+    (job / "input" / "slides").mkdir()
+    make_png(job / "input" / "slides" / "page_01.png", "320x200")
+    line = {"text": "kontakt@zentrovia.example", "box": [0.1, 0.1, 0.5, 0.2], "conf": 0.9}
+    monkeypatch.setattr(redact, "_need_ocr", lambda: None)
+    monkeypatch.setattr(redact._ocr, "recognize", lambda rgb: [line])
+    code, out, _ = run_tool(capsys, "redact", "text", "--job", str(job))
+    assert code == 0
+    assert out["asset_texts"] == [{"asset": "input/slides/page_01.png", **line}]
+    assert [(h["kind"], h["asset"]) for h in out["suggest"]] == [
+        ("email", "input/slides/page_01.png")
+    ]
+
+
+def test_image_slides_burn_in_every_enforced_box_of_their_page():
+    job = make_job()
+    (job / "input" / "slides").mkdir()
+    page = job / "input" / "slides" / "page_01.png"
+    page.write_bytes(b"page")
+    (job / "input" / "slides" / "copy.png").write_bytes(b"page")
+    (job / "input" / "slides" / "page_02.png").write_bytes(b"other")
+    box = [0.1, 0.1, 0.5, 0.2]
+    cands = [
+        {"id": 1, "kind": "email", "asset": "input/slides/page_01.png", "box": box},
+        {"id": 2, "kind": "name", "asset": "input/slides/page_02.png", "box": [0, 0, 1, 1]},
+        {"id": 3, "kind": "name", "t0": 1.0, "t1": 2.0, "box": [0, 0, 1, 1]},
+    ]
+    shown = {"id": "s1", "template": "image", "content": {"asset": "input/slides/copy.png"}}
+    assert slides_tool.page_boxes(job, shown, cands) == [box]
+    title = {"id": "s2", "template": "title", "content": {"title": "Zentrovia"}}
+    assert slides_tool.page_boxes(job, title, cands) == []
+    tokens = {"colors": {}, "fonts": {}}
+    plain = slides_tool.spec(shown, "slide", (1080, 1920), 30, 4, [], tokens, "de")
+    red = slides_tool.spec(shown, "slide", (1080, 1920), 30, 4, [], tokens, "de",
+                           redact=[box], redact_style="blur")  # fmt: skip
+    assert "redact" not in plain["slide"]
+    assert red["slide"]["redact"] == [box] and red["slide"]["redact_style"] == "blur"
+    assert slides_tool.spec_sha(plain, job) != slides_tool.spec_sha(red, job)
+
+
+def test_image_slides_redact_by_default_without_a_decision():
+    job = make_job()
+    cand = {"id": 1, "kind": "email", "asset": "input/slides/page_01.png", "box": [0, 0, 1, 1]}
+    (job / "work" / "redaction.json").write_text(json.dumps({"candidates": [cand]}))
+    cands, style = slides_tool.redaction(job)
+    assert [c["id"] for c in cands] == [1]
+    assert style in ("blur", "block")
+
+
+@pytest.mark.media
+def test_verify_checks_an_image_slide_against_its_redaction(capsys, tmp_path):
+    from test_slides_render import _clip, _job, needs_renderer
+
+    from videocut import edl as edl_mod
+    from videocut.tools import _verify_slides
+
+    if needs_renderer.args[0]:
+        pytest.skip("needs the renderer")
+    doc = {"slides": [{"id": "p1", "template": "image", "source": "upload", "why": "page",
+                       "content": {"asset": "input/slides/page_01.png"}}]}  # fmt: skip
+    job = _job(capsys, _clip(tmp_path / "take.mp4", (1080, 1920), 4), "rv", "9:16", doc)
+    src = json.loads((job / "job.json").read_text())["source"]
+    seg = {"in": 0.0, "out": 3.0, "layout": "slide_full", "slide": "p1"}
+    raw = {"fps": 30, "size": [1080, 1920], "source": src, "segments": [seg]}
+    (job / "work" / "edl.json").write_text(json.dumps(raw))
+    edl = edl_mod.from_dict(raw)
+
+    def flags():
+        return _verify_slides.check(job, edl, (1080, 1920))["slides"][0]["flags"]
+
+    code, s, out = run_tool(capsys, "slides", "render", str(job))
+    assert code == 0, out
+    assert "slide_stale" not in flags()
+    # personal data found on the page after the clip was made: the old clip is stale
+    cand = {"id": 1, "kind": "email", "asset": "input/slides/page_01.png",
+            "box": [0.1, 0.1, 0.4, 0.2], "reason": "e-mail on the page"}  # fmt: skip
+    (job / "work" / "redaction.json").write_text(json.dumps({"candidates": [cand]}))
+    assert "slide_stale" in flags()
+    code, s, out = run_tool(capsys, "slides", "render", str(job))
+    assert code == 0 and s["rendered"] == ["p1"], out
+    spec = json.loads((job / "work" / "slides" / "p1.spec.json").read_text())
+    assert spec["slide"]["redact"] == [cand["box"]]
+    assert "slide_stale" not in flags()

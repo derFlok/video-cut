@@ -201,7 +201,9 @@ circle, side by side, or slide only); remove one or ask for a change before appr
 
 PDF pages are turned into pictures on this Mac (its own PDF engine); nothing is uploaded.
 Claude never puts a number or claim on a slide that you did not say or ask for. Changing
-the slides after planning needs a new plan and a new approval.
+the slides after planning needs a new plan and a new approval. Personal data on your pages (a name,
+an e-mail address) is listed in the plan like on a screenshot; what you leave marked is
+covered in the video.
 
 ## Brands
 

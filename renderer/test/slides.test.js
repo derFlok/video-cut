@@ -214,3 +214,27 @@ test("numbers in the job language", () => {
   assert.equal(S.formatValue(12000.5, "en"), "12,000.5");
   assert.equal(S.quoted("x", "de"), "„x“");
 });
+
+test("image: redact boxes are burnt into a copy before any frame; malformed ones fail", () => {
+  const fakeCanvas = (w, h) => {
+    const ctx = fakeCtx();
+    return { width: w, height: h, ctx, getContext: () => ctx };
+  };
+  const page = { width: 1920, height: 1080 };
+  const base = { template: "image", content: CONTENT.image, area: [0, 0, 960, 540] };
+  const e = env("16:9", base, { image: () => page, canvas: fakeCanvas });
+  const plain = tpl("image").layout(fakeCtx(), base, e);
+  assert.equal(plain.img, page);
+  const slide = { ...base, redact: [[0.1, 0.1, 0.4, 0.2]], redact_style: "block" };
+  const L = tpl("image").layout(fakeCtx(), slide, e);
+  assert.notEqual(L.img, page);
+  const ops = L.img.ctx.log.map((o) => o[0]);
+  assert.ok(ops.includes("fillRect") && ops.indexOf("drawImage") < ops.indexOf("fillRect"));
+  const log = [];
+  tpl("image").draw(fakeCtx(log), 3, slide, e, L);
+  const drawn = log.filter((o) => o[0] === "drawImage").map((o) => o[1]);
+  assert.ok(drawn.length > 0 && drawn.every((x) => x === L.img), "frames draw only the copy");
+  assert.throws(() => tpl("image").layout(fakeCtx(), { ...base, redact: "all" }, e), /redact/);
+  assert.throws(() => tpl("image").layout(fakeCtx(), { ...base, redact: [[0.5, 0, 0.1, 1]] }, e), /redact\[0\]/);
+  assert.throws(() => tpl("image").layout(fakeCtx(), { ...slide, redact_style: "crop" }, e), /redact_style/);
+});

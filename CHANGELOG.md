@@ -24,6 +24,12 @@
   with the slide moments of the reel; stills from `work/slides/stills/`.
 - App: "Folien & Animationen" in *Neues Video*, slide cards at the plan gate ("Folie
   entfernen", a change per slide), slide marks under the result player (de/en).
+- Personal data on uploaded pages: handled like screenshots (`redact text` reads them,
+  candidates with `asset`, the human decides at approval); image slides burn the enforced
+  boxes in (renderer `slides/image.js`, screenshot_frame's redaction, fail closed).
+- Overlays and revise skills: no captions, keywords or overlays during `slide` and
+  `slide_full`; in `slide_split` only in the speaker part. `plan check` refuses slide
+  layouts in `views`; plan stills and `sheet` treat slide layouts as slides, not screen.
 
 ### Added
 - Repository scaffold, Apache-2.0 licence, design brief (`docs/BRIEF.md`).

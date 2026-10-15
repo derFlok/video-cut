@@ -95,6 +95,7 @@ Typical requests and the edit (segment times, `zoom_keys`, `screen_zoom`, `redac
     `reveal` (seconds from the segment's `in_src`) to the words.
   - *another layout* → its segment(s) `layout` (`slide`, `slide_split`, `slide_full`).
   After every slide change: `videocut tool slides render` before rendering.
+  Overlays and captions around slides: No captions, keywords or overlays during slide and slide_full segments (the renderer hides them through overlays.json views hide: true). In slide_split the slide part is a block: captions and keywords go in the speaker part only.
 - **A caption typo** → the words of that caption group in `edl.json` `captions` (same
   times, only the spelling the human asked for).
 

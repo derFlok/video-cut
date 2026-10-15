@@ -39,6 +39,12 @@ The EDL places them (edl.py): a segment with layout slide / slide_split / slide_
             unchanged is kept. The sha256 of every clip and report is recorded outside the
             job folder ($VIDEOCUT_HOME/state/<job>/slides_render.json); verify trusts only
             those. `tool render` runs this itself when a clip is missing or stale.
+
+An image slide shows an uploaded page: untrusted, it may show personal data. Its page is
+an asset like a screenshot (`redact text` reads it, candidates carry "asset"); stills and
+clips add the boxes of every enforced candidate of that page (job.redaction_enforced, the
+safe default without a decision) as slide.redact with slide.redact_style
+(_redact_style.screenshot), and the image template burns them in before the first frame.
 """
 
 import hashlib
@@ -48,8 +54,9 @@ from fractions import Fraction
 from pathlib import Path, PurePosixPath
 
 from .. import edl as edl_mod
+from .. import redaction as red_mod
 from ..paths import RENDERER, state_dir
-from . import _layouts
+from . import _layouts, _redact_style
 from . import _render_plan as plan_mod
 from ._geometry import job_size, sized
 from .common import (
@@ -62,7 +69,7 @@ from .common import (
     run_tool,
     write_json,
 )
-from .job import job_lang
+from .job import job_lang, redaction_enforced
 
 TEMPLATES = (
     "title", "bullets", "big_number", "compare", "steps", "timeline", "bar_chart", "quote",
@@ -81,7 +88,8 @@ ASSET_EXT = (".png", ".jpg", ".jpeg")
 SLIDE_KEYS = {"id", "template", "content", "source", "why"}
 SLIDES_FILE = "work/slides.json"
 RENDER_CODE = ("render.js", "lib/slide.js", "lib/card.js", "lib/style.js", "lib/layout.js",
-               "lib/spring.js", "scenes/number_card.js")  # fmt: skip
+               "lib/spring.js", "scenes/number_card.js",
+               "scenes/screenshot_frame.js")  # fmt: skip
 
 
 # --- schema -------------------------------------------------------------------------------
@@ -448,11 +456,33 @@ def code_sha(template: str) -> str:
     return h.hexdigest()
 
 
+def redaction(job: Path) -> tuple[list[dict], str]:
+    """(enforced candidates, screenshot redact style) for the image slides of `job`."""
+    cands, _ = redaction_enforced(job)
+    return cands, _redact_style.screenshot(_redact_style.resolved(read_job(job)))
+
+
+def page_boxes(job: Path, slide: dict, cands: list[dict]) -> list[list[float]]:
+    """The redact boxes of every candidate on an image slide's page (any spelling of the
+    path, or a copy of the file); [] for other templates."""
+    asset = (slide.get("content") or {}).get("asset") if slide.get("template") == "image" else None
+    if not isinstance(asset, str):
+        return []
+    return [
+        b
+        for c in cands
+        if "asset" in c and red_mod.same_asset(job, asset, c["asset"])
+        for b in red_mod.asset_boxes(c)
+    ]
+
+
 def spec(
     slide: dict, layout: str, out: tuple[int, int], fps: float, duration: float,
     reveal: list[float], tokens: dict, lang: str, with_frame: bool = False,
+    redact: list[list[float]] | None = None, redact_style: str = "block",
 ) -> dict:  # fmt: skip
-    """The renderer spec ("mode": "slide") of one slide in `layout` at output size `out`."""
+    """The renderer spec ("mode": "slide") of one slide in `layout` at output size `out`;
+    `redact` boxes (0..1 of an image slide's page) are burnt in as `redact_style`."""
     geo = _layouts.slide_geometry(layout, out, tokens)
     r = geo.rect
 
@@ -477,6 +507,9 @@ def spec(
         },
         "code": code_sha(slide["template"]),
     }
+    if redact:
+        doc["slide"]["redact"] = [list(b) for b in redact]
+        doc["slide"]["redact_style"] = redact_style
     if with_frame:
         sp = geo.speaker
         doc["frame"] = {
@@ -591,12 +624,14 @@ def ensure_clips(job: Path, edl: edl_mod.Edl | None = None, force: bool = False)
     slides, places = by_id(doc), placements(edl)
     out, fps = tuple(edl.size), edl.fps
     tokens, lang = brand_tokens(job), job_lang(read_job(job))
+    cands, shot_style = redaction(job)
     sdir = job / "work" / "slides"
     sdir.mkdir(parents=True, exist_ok=True)
     clips, rendered, kept, summary, files = {}, [], [], [], []
     for sid, pl in places.items():
         s = slides[sid]
-        sp = spec(s, pl["layout"], out, fps, pl["seconds"], pl["reveal"], tokens, lang)
+        sp = spec(s, pl["layout"], out, fps, pl["seconds"], pl["reveal"], tokens, lang,
+                  redact=page_boxes(job, s, cands), redact_style=shot_style)  # fmt: skip
         sha = spec_sha(sp, job)
         mov, rep, spf = sdir / f"{sid}.mov", sdir / f"{sid}.json", sdir / f"{sid}.spec.json"
         try:
@@ -702,6 +737,7 @@ def stills(args) -> dict:
     out = edl.size if edl is not None else job_size(job)
     fps = edl.fps if edl is not None else DEFAULT_FPS
     tokens, lang = brand_tokens(job), job_lang(read_job(job))
+    cands, shot_style = redaction(job)
     sdir = job / "work" / "slides" / "stills"
     sdir.mkdir(parents=True, exist_ok=True)
     done = []
@@ -716,7 +752,8 @@ def stills(args) -> dict:
         # the final state: every build step in (automatic pace without reveal times) + 2 s
         last = max([*reveal, 0.5 + 0.7 * max(step_count(s) - 1, 0)])
         dur = round(max(last + 3.0, 4.0 if s["template"] != "image" else 9.0), 3)
-        sp = spec(s, layout, out, fps, dur, reveal, tokens, lang, with_frame=True)
+        sp = spec(s, layout, out, fps, dur, reveal, tokens, lang, with_frame=True,
+                  redact=page_boxes(job, s, cands), redact_style=shot_style)  # fmt: skip
         face_png = sdir / f"{s['id']}_speaker.png"
         face_png.unlink(missing_ok=True)
         if sp["frame"]["speaker"] and t_src is not None:
