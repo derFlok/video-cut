@@ -254,8 +254,8 @@ def test_transcript_api_edit_undo_and_refresh(client, fake):
     data["overlays"] = {"brand": "acme", "verify_ok": True}
     (job / "job.json").write_text(json.dumps(data))
     edl = json.loads((job / "work" / "edl.json").read_text())
-    edl["captions"] = [{"t0": 0.0, "t1": 1.5, "words": [{"w": "Hallo", "t0": 0.0, "t1": 0.5},
-                                                        {"w": "von", "t0": 1.0, "t1": 1.5}]}]  # fmt: skip
+    said = [{"w": "Hallo", "t0": 0.0, "t1": 0.5}, {"w": "von", "t0": 1.0, "t1": 1.5}]
+    edl["captions"] = [{"t0": 0.0, "t1": 1.5, "words": said}]
     (job / "work" / "edl.json").write_text(json.dumps(edl))
 
     r = client.get("/api/jobs/j1/transcript")

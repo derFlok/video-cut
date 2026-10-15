@@ -407,7 +407,7 @@ const de = {
   "transcript.time.reel": "Zeit im fertigen Video",
   "transcript.time.source": "Zeit in der Aufnahme",
   "transcript.stale": "Du hast das Transkript geändert. Die Untertitel im Video zeigen noch den alten Text.",
-  "transcript.refresh.hint": "Ohne Claude, etwa 1 Minute.",
+  "transcript.refresh.hint": "Ohne Claude, ein bis zwei Minuten.",
 
   "time.ago": "vor {t}",
 };
@@ -817,7 +817,7 @@ const en: Record<Key, string> = {
   "transcript.time.reel": "Time in the finished video",
   "transcript.time.source": "Time in the recording",
   "transcript.stale": "You changed the transcript. The captions in the video still show the old text.",
-  "transcript.refresh.hint": "Without Claude, about 1 minute.",
+  "transcript.refresh.hint": "Without Claude, a minute or two.",
 
   "time.ago": "{t} ago",
 };

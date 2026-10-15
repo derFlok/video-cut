@@ -235,6 +235,21 @@ without transcribing again and offers to set the captions again. The job page al
 .venv/bin/videocut run take.mov --vocab "Zentrovia=Zentrowia,Sentro Via"
 ```
 
+### Fixing single words
+
+One word wrong in a finished video? Open **Transkript** on the job page, click the word,
+type the correct text and press Enter (Esc cancels; empty hides the word from the
+captions). The video jumps to that moment. "Immer so schreiben" also adds the spelling to
+the brand's Wörterbuch. Then **Untertitel neu setzen** puts the corrected captions into
+the reel without Claude (a minute or two). Your edits stay when the vocabulary is applied
+again, and Claude treats them as the truth.
+
+```bash
+.venv/bin/videocut tool transcript show <job> --from 10 --to 20   # words with their index
+.venv/bin/videocut tool transcript edit <job> 84 "Riesen-Golfszene"
+.venv/bin/videocut tool transcript undo <job>
+```
+
 ## Privacy
 
 - Recordings, audio and renders stay on your Mac.

@@ -219,6 +219,22 @@ fertigen Video korrigiert „Auf das Transkript anwenden“ ohne neue Transkript
 .venv/bin/videocut run aufnahme.mov --vocab "Zentrovia=Zentrowia,Sentro Via"
 ```
 
+### Einzelne Wörter korrigieren
+
+Ein Wort im fertigen Video falsch? Öffne **Transkript** auf der Videoseite, klick auf das
+Wort, schreib den richtigen Text und drück Enter (Esc bricht ab; leer blendet das Wort in
+den Untertiteln aus). Das Video springt an die Stelle. „Immer so schreiben“ trägt die
+Schreibweise zusätzlich ins Wörterbuch der Marke ein. Danach setzt **Untertitel neu
+setzen** die korrigierten Untertitel ins Video, ohne Claude (ein bis zwei Minuten). Deine
+Änderungen bleiben, auch wenn das Wörterbuch erneut angewendet wird, und Claude nimmt sie
+als richtig.
+
+```bash
+.venv/bin/videocut tool transcript show <job> --from 10 --to 20   # Wörter mit Nummer
+.venv/bin/videocut tool transcript edit <job> 84 "Riesen-Golfszene"
+.venv/bin/videocut tool transcript undo <job>
+```
+
 ## Lizenz
 
 Apache-2.0. Unabhängiges Projekt, nicht mit Anthropic verbunden.
