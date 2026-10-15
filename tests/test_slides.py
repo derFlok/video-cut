@@ -229,8 +229,37 @@ def test_slide_geometry_every_format(fmt, layout):
         assert overlap(r.box(), p.box()) == 0
         if out[0] / out[1] > 1.2:
             assert r.h == out[1] and p.x == r.w
+            assert _layouts.slide_seam(layout, out) is None
         else:
             assert r.w == out[0] and p.y == r.h
+            # the captions' seam: a free margin above it (their upper half goes there)
+            assert _layouts.slide_seam(layout, out) == p.y
+            share = 0.12 if out[1] / out[0] >= 1.6 else 0.09
+            assert p.y - g.area[3] >= round(min(out) * share) - 1, g.area
+    if layout != "slide_split":
+        assert _layouts.slide_seam(layout, out) is None
+
+
+def test_slide_split_views_carry_the_seam_and_the_content_box():
+    from videocut.tools import overlays as overlays_mod
+
+    segs = [
+        {"in": 0, "out": 1},
+        {"in": 1, "out": 3, "layout": "slide_split", "slide": "s2"},
+        {"in": 3, "out": 4, "layout": "slide_full", "slide": "s1"},
+    ]
+    for size in ((1080, 1920), (1080, 1350), (1920, 1080)):
+        e, plan = _plan(segs, size)
+        slides = _layouts.plan_slides(e, plan, (1920, 1080), None, tuple(e.size), {})["segs"]
+        views = overlays_mod._slide_views(plan, slides, None, (1920, 1080))
+        split, full = views
+        g = _layouts.slide_geometry("slide_split", size)
+        assert split["screen"] == g.rect.box() and "seam" not in full
+        if size[0] > size[1]:  # side by side: no seam, the slide part stays hard
+            assert "seam" not in split and "content" not in split
+        else:
+            assert split["seam"] == g.speaker.y and split["content"] == list(g.area)
+            assert split["content"][3] < split["seam"]
 
 
 def test_brand_pip_token_moves_and_sizes_the_bubble():

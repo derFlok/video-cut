@@ -26,8 +26,10 @@ function layout(ctx, item, env) {
         px: style.captionPx(env),
         role: "heading",
         maxLines: 2,
-        // Landscape, square and 4:5: bottom centre, above the bottom safe zone.
+        // Landscape, square and 4:5: bottom centre, above the bottom safe zone; on the
+        // seam while a stacked slide_split view is on screen (any format).
         position: f.tall ? undefined : "bottom",
+        seam: true,
         t0: item.t0,
         t1: item.t1,
       },

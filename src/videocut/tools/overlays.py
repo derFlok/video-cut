@@ -21,7 +21,8 @@ organic safe zones (docs/BRIEF.md §8). captions/overlays are copied from the ED
 
 Slides (every job type): overlays.json "views" also lists per slide range the speaker
 (the bubble of `slide`, the face in the speaker part of `slide_split`); a `slide_split`
-view's `screen` is the slide's part (captions and scenes keep off it), and a `slide` /
+view's `screen` is the slide's part (scenes keep off it; portrait/square captions sit on
+its `seam` with the speaker part, off its `content` box), and a `slide` /
 `slide_full` view has "hide": true: the renderer draws no caption and no overlay item
 while it is on screen (the slide is the picture; the voice goes on).
 
@@ -226,8 +227,10 @@ def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[di
 def _slide_views(plan, slides: dict, face: dict | None, src: tuple[int, int]) -> list[dict]:
     """Per slide range (output time and px): `speaker` (slide: the bubble; slide_split: the
     face box inside the speaker part, else that part's upper half; slide_full: none),
-    `screen` (slide_split: the slide's part, kept clear) and "hide" (slide, slide_full: no
-    caption or overlay item is drawn there)."""
+    `screen` (slide_split: the slide's part, kept clear), "hide" (slide, slide_full: no
+    caption or overlay item is drawn there) and, for a stacked slide_split, `seam` (output
+    y of the boundary between the parts: captions go on it) and `content` (the slide's
+    content box: the only part of the slide a seam caption must keep off)."""
     out, f0 = [], 0
     median = ((face or {}).get("median") or {}).get("box")
     for i, r in enumerate(plan.ranges):
@@ -243,6 +246,7 @@ def _slide_views(plan, slides: dict, face: dict | None, src: tuple[int, int]) ->
                     speaker = [box[0] + part.x, box[1] + part.y, box[2] + part.x,
                                box[3] + part.y]  # fmt: skip
             hide = seg.layout != "slide_split"
+            seam = _layouts.slide_seam(seg.layout, plan.out_size)
             out.append({
                 "t0": round(float(f0 / plan.fps), 6),
                 "t1": round(float((f0 + r.frames) / plan.fps), 6),
@@ -251,6 +255,7 @@ def _slide_views(plan, slides: dict, face: dict | None, src: tuple[int, int]) ->
                 "screen": None if hide else g.rect.box(),
                 "speaker": speaker,
                 **({"hide": True} if hide else {}),
+                **({"seam": seam, "content": list(g.area)} if seam is not None else {}),
             })  # fmt: skip
         f0 += r.frames
     return out

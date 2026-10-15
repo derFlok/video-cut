@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed — captions on the seam of a slide_split
+- Portrait, 4:5 and square `slide_split`: captions sit centred on the seam between the
+  slide part and the speaker part (renderer `placeBlock` position "seam", overlays.json
+  views `seam` and `content`) instead of on the speaker's mouth and chin; the slide's
+  content box keeps `SLIDE_SEAM` (12 % of the short side in 9:16, 9 % otherwise) free
+  above the seam for their upper half, and the face counts from the brow line down
+  there (hair and forehead may be covered). A caption group across the start or end of
+  such a stretch is cut there by its word times, so each part is placed for its own
+  layout. 16:9 (side by side) is unchanged.
+- Verify: a seam caption is judged on the slide's content box (`overlay_on_slide_content`,
+  also for any item that touches it) and on the face below the brow line; a caption on
+  the mouth or on slide text is still flagged.
+
 ### Added — slides and animations (job flow, skills, app)
 - job.json `slides` {mode none|upload|auto|both, wish}: `videocut tool job slides`,
   `videocut run --slides-mode --slides-wish`, the new-job form. Human only; a plan made

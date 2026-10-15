@@ -129,7 +129,7 @@ A scene the renderer does not have is skipped (`skipped_scenes` in the summary);
 another.
 
 **Slides** (segments with `"slide"` in `work/edl.json`): a slide is already on screen for
-those words. No captions, keywords or overlays during slide and slide_full segments (the renderer hides them through overlays.json views hide: true). In slide_split the slide part is a block: captions and keywords go in the speaker part only.
+those words. No captions, keywords or overlays during slide and slide_full segments (the renderer hides them through overlays.json views hide: true). In slide_split the slide part is a block: keywords go in the speaker part only; captions sit on the seam between the two parts by themselves (portrait/4:5/1:1). `overlay_on_slide_content` means an item touches the slide's text: shorten or move it.
 No overlay repeating a slide's words or numbers elsewhere either. Never change
 `work/slides.json` or a slide segment (the run fails otherwise).
 

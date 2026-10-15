@@ -130,7 +130,10 @@ function pageMain(spec) {
   // Product demo (overlays.json "views", flattened by validViews): every item keeps off a
   // screen view that does not fill the frame and off every zoom target.
   // The slide part of a slide_split view is hard: text goes in the speaker part only.
+  // A caption may sit on the seam of a portrait/square slide_split instead: there only
+  // the slide's content box is hard (env.seamDuring; lib/layout.js placeBlock "seam").
   const blocks = (views || []).map((v) => ({ t0: v.t0, t1: v.t1, box: v.screen, hard: !!v.hard }));
+  const seams = (views || []).filter((v) => v.seam);
   const env = {
     tokens,
     size,
@@ -148,6 +151,13 @@ function pageMain(spec) {
     // Blocks already placed that are on screen at some point in [t0, t1].
     blocksDuring: (t0, t1) => blocks.filter((b) => b.t0 < t1 && b.t1 > t0).map((b) => b.box),
     hardDuring: (t0, t1) => blocks.filter((b) => b.hard && b.t0 < t1 && b.t1 > t0).map((b) => b.box),
+    // The seam of a slide_split view on screen at some point in [t0, t1] (the first one):
+    // {y, content (its hard boxes), parts (the slide parts it replaces as obstacles)}.
+    seamDuring: (t0, t1) => {
+      const on = seams.filter((v) => v.t0 < t1 && v.t1 > t0);
+      if (!on.length) return null;
+      return { y: on[0].seam, content: on.map((v) => v.content), parts: on.map((v) => v.screen) };
+    },
     addBlock: (t0, t1, box) => blocks.push({ t0, t1, box }),
     // Decoded image for an asset reference a scene declared (null when not loaded),
     // and an offscreen canvas for scenes that prepare images once (redaction).
@@ -438,14 +448,15 @@ function items(spec, known) {
     else skipped.push(o.scene);
   }
   // Captions last, so they draw on top of cards.
-  for (const c of spec.captions || [])
+  for (const c of require("./lib/seams").splitAtSeams(spec.captions || [], validViews(spec.views)))
     list.push({ scene: "caption", t0: c.t0, t1: c.t1, words: c.words || [] });
   return { list, skipped };
 }
 
 // Areas to keep clear in a product demo, flattened to {t0, t1, screen: [x0, y0, x1, y1]}
 // (output time/px): each view's `screen` (null when the screen fills the frame: it is the
-// picture; `hard` for the slide part of a slide_split view) and each of its `focus` zoom
+// picture; `hard` for the slide part of a slide_split view, with its `seam` y and
+// `content` box when the parts are stacked) and each of its `focus` zoom
 // targets ({t0, t1, box}). Malformed entries are dropped.
 function validViews(views) {
   const box = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[2] > b[0] && b[3] > b[1];
@@ -453,7 +464,11 @@ function validViews(views) {
   const out = [];
   for (const v of Array.isArray(views) ? views : []) {
     if (!span(v)) continue;
-    if (box(v.screen)) out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice(), hard: v.layout === "slide_split" });
+    if (box(v.screen)) {
+      const split = v.layout === "slide_split";
+      const seam = split && Number.isFinite(v.seam) && box(v.content) ? { seam: v.seam, content: v.content.slice() } : {};
+      out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice(), hard: split, ...seam });
+    }
     for (const f of Array.isArray(v.focus) ? v.focus : []) {
       if (span(f) && box(f.box)) out.push({ t0: f.t0, t1: f.t1, screen: f.box.slice() });
     }
