@@ -301,7 +301,8 @@ describe("locked correction box", () => {
   });
 
   it("revising on the page locks with the revision's reason", async () => {
-    installMock({ step: 5 });
+    // slow enough steps that a slow machine still sees the revise stage before verify
+    installMock({ step: 300 });
     const user = userEvent.setup();
     wrap(<JobPage id="job-done" />);
     await user.type(await screen.findByLabelText(t("result.feedback")), "Musik leiser");
@@ -311,7 +312,7 @@ describe("locked correction box", () => {
     expect(screen.getByLabelText(t("result.feedback"))).toBeDisabled();
     // the old reel stays playable during a revision
     expect(screen.queryByTestId("result-pending")).not.toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByTestId("fb-locked")).not.toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.queryByTestId("fb-locked")).not.toBeInTheDocument(), { timeout: 5000 });
   });
 });
 

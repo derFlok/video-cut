@@ -885,6 +885,7 @@ def test_cut_style_defaults_in_job_detail(client):
     }  # fmt: skip
 
 
+@pytest.mark.media
 def test_create_job_rejects_an_unknown_cut_style_or_lang(client, portrait_clip):
     for field, value in (("cut_style", "slow"), ("lang", "fr")):
         with portrait_clip.open("rb") as cam:
