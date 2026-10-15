@@ -516,3 +516,92 @@ def test_a_revision_first_moves_an_old_job_into_video_time(tmp_path, monkeypatch
     meta.write_text(json.dumps({"denoised": True, "time_base": "video"}))
     run.upgrade_time_base(job)
     assert calls == [("ingest", "--denoise"), ("ingest",)]
+
+
+def test_a_failed_final_verify_resumes_without_a_new_overlay_run(fake, videocut_home, monkeypatch):
+    """The overlay run finished (overlays.json, overlay.mov recorded) but its final verify
+    failed: the next run repeats render + verify as tool steps, not the Claude run."""
+    from videocut.tools import overlays as overlays_mod
+
+    claude, video = fake
+    real = claude.__call__
+
+    def verify_crashed(prompt, job_dir, *a, **k):
+        res = real(prompt, job_dir, *a, **k)
+        if prompt.startswith(run.OVERLAYS_PROMPT):
+            work = job_dir / "work"
+            for rel in overlays_mod.RECORDED:
+                (job_dir / rel).write_text(rel)
+            overlays_mod.write_record(job_dir)  # as `videocut tool overlays` does
+            for name in ("edl.json", "overlays.json"):  # overlay.mov is newer than its inputs
+                os.utime(work / name, (1, 1))
+            (job_dir / "out" / "verify.json").unlink()  # verify crashed inside the run
+        return res
+
+    monkeypatch.setattr(run.agent, "run", verify_crashed)
+    lines = []
+    with pytest.raises(run.RunError, match="final render and verify"):
+        run.run(str(video), approve=True, brand="_example", say=lines.append)
+    job = Path(lines[0].split("job: ")[1])
+    pending = json.loads((job / "job.json").read_text())["overlays_pending"]
+    assert pending["brand"] == "_example" and pending["project_sha256"]
+
+    steps = []
+
+    def tool(job_dir, *argv, need_ok=True):
+        steps.append((argv[0], need_ok))
+        out = job_dir / "out"
+        if argv[0] == "render":
+            (out / "render.json").write_text(json.dumps({"overlay": True}))
+            (out / "reel.mp4").write_bytes(b"y")
+        else:
+            (out / "verify.json").write_text('{"ok": true, "reel": "out/reel.mp4"}')
+        return {"ok": True}
+
+    monkeypatch.setattr(run, "tool", tool)
+    assert run.run(job.name, say=lines.append) == 0
+    assert [c[0] for c in claude.calls] == ["plan", "cut", "overlays"]  # no second overlay run
+    assert steps == [("render", True), ("verify", False)]
+    assert any("without a new Claude run" in x for x in lines)
+    data = json.loads((job / "job.json").read_text())
+    assert data["overlays"]["verify_ok"] is True and data["overlays_pending"] is None
+
+    # Files changed after the run (or another brand) are not resumed: Claude runs again.
+    update = {"overlays_pending": {**data["overlays"], "files": {}}, "overlays": None}
+    job_tool.update_job(job, **update)
+    monkeypatch.setattr(run.agent, "run", real)
+    assert run.run(job.name, say=lines.append) == 0
+    assert [c[0] for c in claude.calls][3:] == ["overlays"] and len(steps) == 2
+
+
+def test_overlays_resumable_needs_the_recorded_files(fake, videocut_home, monkeypatch):
+    from videocut.tools import overlays as overlays_mod
+
+    claude, video = fake
+    lines = []
+    assert run.run(str(video), approve=True, say=lines.append) == 0
+    job = Path(lines[0].split("job: ")[1])
+    work = job / "work"
+    for rel in overlays_mod.RECORDED:
+        (job / rel).write_text(rel)
+    overlays_mod.write_record(job)
+    for name in ("edl.json", "overlays.json"):
+        os.utime(work / name, (1, 1))
+    cut = run.segments_sha(job)
+    pending = {
+        "brand": "_example",
+        "segments_sha256": cut,
+        "edl_sha256": run._file_sha(work / "edl.json"),
+        "files": overlays_mod.file_hashes(job),
+    }
+    job_tool.update_job(job, overlays_pending=pending)
+    assert run.overlays_resumable(job, "_example", cut)
+    assert not run.overlays_resumable(job, "other", cut)
+    assert not run.overlays_resumable(job, "_example", "0" * 64)
+    (work / "overlay_boxes.json").write_text("edited")  # not what the tool recorded
+    assert not run.overlays_resumable(job, "_example", cut)
+    overlays_mod.write_record(job)
+    job_tool.update_job(job, overlays_pending={**pending, "files": overlays_mod.file_hashes(job)})
+    assert run.overlays_resumable(job, "_example", cut)
+    os.utime(work / "overlay.mov", (1, 1))  # not newer than edl.json: render would not use it
+    assert not run.overlays_resumable(job, "_example", cut)

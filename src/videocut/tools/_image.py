@@ -86,10 +86,49 @@ def fmt_time(t: float) -> str:
     return f"{cs // 6000:02d}:{cs % 6000 // 100:02d}.{cs % 100:02d}"
 
 
+# ffmpeg's expression parser refuses nesting deeper than 100 (a flat "a+b+c+..." of about
+# 100 terms fails with "Cannot allocate memory"); the trees built here stay far below that.
+MAX_EXPR_DEPTH = 40
+
+
+def any_of(terms: list[str]) -> str:
+    """Sum of ffmpeg expression terms as a balanced tree: nesting log2(n), not n, so a
+    select over hundreds of frames still parses (select_times, _verify_screen)."""
+    if not terms:
+        return "0"
+    if len(terms) == 1:
+        return terms[0]
+    mid = len(terms) // 2
+    return f"({any_of(terms[:mid])}+{any_of(terms[mid:])})"
+
+
+def expr_depth(expr: str) -> int:
+    """Nesting of an expression as ffmpeg's parser sees it: parentheses plus one level per
+    chained "+" (escaped commas and quotes do not matter)."""
+    depth = best = 0
+    chain = [0]
+    for ch in expr:
+        if ch == "(":
+            depth += 1
+            chain.append(0)
+        elif ch == ")":
+            depth -= 1
+            chain.pop()
+        elif ch == "+":
+            chain[-1] += 1
+        best = max(best, depth + sum(chain))
+    return best
+
+
 def select_times(times: list[float], fps: float) -> str:
     """select expression keeping exactly the frames nearest to the given times."""
     half = 0.5 / fps
-    return "+".join(f"between(t\\,{t - half:.6f}\\,{t + half - 1e-6:.6f})" for t in times)
+    return any_of([f"between(t\\,{t - half:.6f}\\,{t + half - 1e-6:.6f})" for t in times])
+
+
+def select_frames(numbers: list[int]) -> str:
+    """select expression keeping exactly the frames with these numbers (0-based)."""
+    return any_of([f"eq(n\\,{n})" for n in numbers])
 
 
 def snap(t: float, fps: float) -> float:

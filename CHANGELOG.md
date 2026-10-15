@@ -746,3 +746,22 @@
   The app names the flag ("Schwärzung schneidet Text an" / "redaction cuts through text").
   Review fix: a block whose screen frames could not be read is not cached as "nothing to
   grow" (the next render tries again); a retune of the growth constants drops the cache.
+
+### Fixed — verify on long reels; resuming without a second overlay run
+- Frame selection for verify, sheets and the screen checks is a balanced `(a+b)+(c+d)`
+  expression tree (`_image.any_of`, `select_times`, `select_frames`) instead of a flat sum
+  of one term per frame. ffmpeg refuses expressions nested deeper than 100 ("Error
+  initializing filters / Cannot allocate memory"): a flat sum failed at 101 frames, so a
+  ~5 min demo with 111 caption groups could not be verified, and "Weiter" restarted the
+  overlay run, which failed the same way. Measured on a 5 min 1080p30 reel, 295 frames:
+  one pass with the tree 7.3 s, batches of 40 with input seeks 8.2 s, one seek per frame
+  (pool of 4–8) 23–25 s; all three frame-identical, so the single pass stays.
+- `videocut run` (and the app's "Weiter"): when the overlay run finished but its final
+  render or verify failed, job.json `overlays_pending` records brand, approved plan, cut,
+  EDL and the overlay files. The next run repeats `render` + `verify` as tool steps
+  instead of a new Claude run, when all of them still match, the overlay record outside
+  the job folder confirms the files and overlay.mov is newer than its inputs. Same checks
+  afterwards as after a Claude run; `--brand` still redoes the overlays.
+- Real check (copy of a real ~3.4 min 16:9 demo, preview reel, 111 caption groups +
+  10 overlays): verify runs (before: ffmpeg error); 13 caption + 2 overlay sheets, 852 s
+  wall (most of it the screen checks; the human's app was rendering at the same time).

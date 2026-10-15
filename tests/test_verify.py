@@ -8,8 +8,9 @@ import numpy as np
 import pytest
 from helpers import run_tool
 
+from videocut.tools import _image as im
+from videocut.tools import _verify_screen, verify
 from videocut.tools import overlays as overlays_mod
-from videocut.tools import verify
 
 pytestmark = pytest.mark.skipif(clips.ffmpeg() is None, reason="needs ffmpeg")
 
@@ -380,3 +381,57 @@ def test_merge_spans_and_the_bubble_square():
     assert merge_spans([(3.0, 4.0), (0.0, 1.0), (1.02, 2.0)], 1 / 30) == [(0.0, 2.0), (3.0, 4.0)]
     sq = inscribed([1563, 670, 1843, 950])  # a 280 px bubble
     assert sq[2] - sq[0] == sq[3] - sq[1] == 196 and sq[0] > 1563 and sq[3] < 950
+
+
+# ---------------------------------------------------------------- long reels
+
+
+def test_select_expressions_stay_within_ffmpeg_nesting():
+    """ffmpeg refuses an expression nested deeper than 100 ("Cannot allocate memory"): a
+    flat a+b+c+... of a long reel's caption groups failed verify. The trees stay shallow."""
+    times = [i / 30 for i in range(0, 9000, 3)]  # 3000 frames of a 5 min reel
+    for expr in (im.select_times(times, 30), im.select_frames(list(range(3000)))):
+        assert im.expr_depth(expr) <= im.MAX_EXPR_DEPTH
+    assert im.expr_depth("+".join(["eq(n\\,1)"] * 150)) > 100  # what the measure catches
+    assert im.select_times([1.0], 30).startswith("between(") and im.any_of([]) == "0"
+
+
+def _long_reel(path: Path, seconds: int) -> None:
+    subprocess.run(
+        [
+            clips.ffmpeg(), "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"testsrc2=size=360x640:rate=30:duration={seconds}",
+            "-f", "lavfi", "-i", f"aevalsrc='{AMP}*sin(2*PI*300*t)':s=48000:d={seconds}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-shortest", str(path),
+        ],
+        check=True,
+    )  # fmt: skip
+
+
+def test_verify_runs_on_a_reel_with_many_caption_groups(capsys, tmp_path):
+    long = tmp_path / "long" / "reel.mp4"
+    long.parent.mkdir()
+    _long_reel(long, 12)
+    job = _job(capsys, long, [], duration=12.0)
+    src = json.loads((job / "job.json").read_text())["source"]
+    caps = [{"t0": i * 0.075, "t1": i * 0.075 + 0.075, "words": []} for i in range(160)]
+    edl = {"fps": 30, "size": [360, 640], "source": src, "segments": [{"in": 0, "out": 12}]}
+    (job / "work" / "edl.json").write_text(json.dumps({**edl, "captions": caps}))
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0, s
+    doc = json.loads((job / "out" / "verify.json").read_text())
+    assert len(doc["caption_times"]) == 160
+    assert len(doc["caption_sheets"]) == -(-160 // verify.CAPTION_COLS**2)
+
+
+def test_many_reel_frames_are_read_exactly(tmp_path):
+    long = tmp_path / "reel.mp4"
+    _long_reel(long, 8)
+    want = list(range(0, 240, 2))  # 120 frames: more than one flat expression could hold
+    got = _verify_screen._frames(long, want, (360, 640))
+    assert sorted(got) == want
+    for n in (0, 118, 238):
+        assert np.array_equal(got[n], _verify_screen._frames(long, [n], (360, 640))[n])
+    streamed = dict(_verify_screen._frame_stream(long, want, (360, 640)))
+    assert all(streamed[n] is not None and np.array_equal(streamed[n], got[n]) for n in want)

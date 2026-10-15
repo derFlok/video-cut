@@ -67,7 +67,7 @@ import numpy as np
 from .. import edl as edl_mod
 from .. import redaction as red_mod
 from ..paths import tool_env
-from . import _layouts, _ocr, _redact_blur, _redact_grow
+from . import _image, _layouts, _ocr, _redact_blur, _redact_grow
 from . import _render_plan as plan_mod
 from ._geometry import framed, sized
 from .common import ToolError, binary
@@ -146,7 +146,7 @@ def _frames(reel: Path, numbers: list[int], size: tuple[int, int]) -> dict[int, 
     if not numbers:
         return {}
     want = sorted(set(numbers))
-    sel = "+".join(f"eq(n\\,{n})" for n in want)
+    sel = _image.select_frames(want)
     out = _raw(
         ["-i", str(reel), "-an", "-vf", f"select='{sel}'", "-fps_mode", "passthrough"]
         + ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
@@ -164,7 +164,7 @@ def _frame_stream(reel: Path, numbers: list[int], size: tuple[int, int]):
     if not want:
         return
     w, h = size
-    sel = "+".join(f"eq(n\\,{n})" for n in want)
+    sel = _image.select_frames(want)
     cmd = [binary("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(reel),
            "-an", "-vf", f"select='{sel}'", "-fps_mode", "passthrough", "-f", "rawvideo",
            "-pix_fmt", "rgb24", "-"]  # fmt: skip

@@ -209,8 +209,10 @@ def capture_stdout():
         router.local.buf = prev
 
 
-def tool(job: Path, *argv: str) -> dict:
-    """Run `videocut tool <argv> --job <job>` in-process; return its summary line."""
+def tool(job: Path, *argv: str, need_ok: bool = True) -> dict:
+    """Run `videocut tool <argv> --job <job>` in-process; return its summary line.
+    need_ok=False: a summary with "ok": false is returned (verify flags), only a failed
+    run raises."""
     from .cli import main
 
     with capture_stdout() as buf:
@@ -220,7 +222,7 @@ def tool(job: Path, *argv: str) -> dict:
         summary = json.loads(lines[-1]) if lines else {}
     except json.JSONDecodeError:
         summary = {}
-    if code != 0 or not summary.get("ok", False):
+    if code != 0 or (need_ok and not summary.get("ok", False)):
         raise RunError(f"videocut tool {' '.join(argv)} failed: {summary.get('error', code)}")
     return summary
 
@@ -585,6 +587,38 @@ def overlays_done(job: Path, brand_id: str) -> bool:
         and rec.get("verify_ok") is True
         and not rec.get("stale")
         and bool(composited)
+    )
+
+
+def _overlay_files(job: Path) -> dict:
+    from .tools.overlays import file_hashes
+
+    return file_hashes(job)
+
+
+def overlays_resumable(job: Path, brand_id: str, cut_sha: str | None) -> bool:
+    """A finished overlay run whose final render or verify failed (job.json
+    "overlays_pending", written when the Claude run returned) left exactly the files still
+    there: same brand, cut and EDL, the overlay files `videocut tool overlays` recorded,
+    overlay.mov newer than its inputs (render composites it). Then render + verify are
+    repeated as tool steps instead of a new Claude run."""
+    from .tools.common import is_fresh
+    from .tools.overlays import check_record
+
+    rec = read_job(job).get("overlays_pending")
+    work = job / "work"
+    files = _overlay_files(job)
+    inputs = (work / "edl.json", work / "overlays.json", work / "words.json")
+    return (
+        isinstance(rec, dict)
+        and rec.get("brand") == brand_id
+        and cut_sha is not None
+        and rec.get("segments_sha256") == cut_sha
+        and rec.get("edl_sha256") == _file_sha(work / "edl.json")
+        and None not in files.values()
+        and rec.get("files") == files
+        and check_record(job) is None
+        and is_fresh([work / "overlay.mov"], [p for p in inputs if p.is_file()])
     )
 
 
@@ -1322,12 +1356,34 @@ def run(
     if job_brand and (brand or not overlays_done(job, job_brand)):
         cut_sha = segments_sha(job)
         started = _fs_now(job)
-        prompt = OVERLAYS_PROMPT
-        old = read_job(job).get("overlays")
-        edl_caps = (json.loads(edl.read_text()).get("captions") if edl.is_file() else None) or []
-        if edl_caps and not (isinstance(old, dict) and old.get("segments_sha256") == cut_sha):
-            prompt += OVERLAYS_RECUT
-        claude(job, "overlays", prompt, max_turns, None, say)
+        pending = read_job(job).get("overlays_pending")
+        same_plan = isinstance(pending, dict) and pending.get("project_sha256") == approved_sha
+        if not brand and same_plan and overlays_resumable(job, job_brand, cut_sha):
+            say("overlays: the last overlay run finished; rendering and verifying again "
+                "without a new Claude run")  # fmt: skip
+            tool(job, "render")
+            tool(job, "verify", need_ok=False)  # flags are judged below, like after a run
+        else:
+            prompt = OVERLAYS_PROMPT
+            old = read_job(job).get("overlays")
+            edl_caps = (
+                json.loads(edl.read_text()).get("captions") if edl.is_file() else None
+            ) or []
+            if edl_caps and not (isinstance(old, dict) and old.get("segments_sha256") == cut_sha):
+                prompt += OVERLAYS_RECUT
+            update_job(job, overlays_pending=None)
+            claude(job, "overlays", prompt, max_turns, None, say)
+            # The Claude part is done: a failing render or verify below is resumed without it.
+            update_job(
+                job,
+                overlays_pending={
+                    "brand": job_brand,
+                    "project_sha256": approved_sha,
+                    "segments_sha256": cut_sha,  # the run must not change the cut
+                    "edl_sha256": _file_sha(edl),
+                    "files": _overlay_files(job),
+                },
+            )
         if project_sha(job) != approved_sha:
             raise RunError("work/project.md changed during the overlay run; approve it again")
         if segments_sha(job) != cut_sha:
@@ -1347,6 +1403,7 @@ def run(
                 "edl_sha256": _file_sha(job / "work" / "edl.json"),
                 "verify_ok": bool(verify.get("ok")),
             },
+            overlays_pending=None,
         )
     elif job_brand:
         say(f"overlays: already done for brand {job_brand} (--brand {job_brand} redoes them)")
