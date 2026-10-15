@@ -42,6 +42,8 @@ PASSES = 4
 SAMPLES = 5  # screen frames read per redact block (distinct frames only)
 CACHE = "redact_grown.json"
 VERSION = 1
+# a retune of any of these drops the cache
+PARAMS = [LINE_CUT, MARGIN, SEARCH, SEARCH_X, SNAP_MAX, BOUNDARY, PASSES, SAMPLES]
 
 
 def _text_px(screen: tuple[int, int]) -> float:
@@ -209,11 +211,12 @@ def apply(job: Path, blocks: list[dict], src: Path, info: dict, fps: float) -> l
     sid = _screen_id(src)
     try:
         cache = json.loads(path.read_text())
-        if cache.get("version") != VERSION or cache.get("screen") != sid:
+        stamp = (cache.get("version"), cache.get("params"), cache.get("screen"))
+        if stamp != (VERSION, PARAMS, sid):
             cache = None
     except (OSError, ValueError, AttributeError):
         cache = None
-    cache = cache or {"version": VERSION, "screen": sid, "boxes": {}}
+    cache = cache or {"version": VERSION, "params": PARAMS, "screen": sid, "boxes": {}}
     out, dirty = [], False
     for b in blocks:
         t0, t1 = b["t0"] + b["offset"], b["t1"] + b["offset"]
@@ -224,8 +227,9 @@ def apply(job: Path, blocks: list[dict], src: Path, info: dict, fps: float) -> l
                       if (f := grab_screen(src, info, t, fps)) is not None]  # fmt: skip
             box, why = grow(b["box"], frames, tuple(info["size"])) if frames else (b["box"], [])
             hit = {"box": list(box), "grown": why}
-            cache["boxes"][key] = hit
-            dirty = True
+            if frames:  # no frame read: not cached, the next render tries again
+                cache["boxes"][key] = hit
+                dirty = True
         planned = [round(float(v), 5) for v in b["box"]]
         if hit["grown"] and hit["box"] != planned:
             out.append({"box": hit["box"], "planned": planned, "grown": hit["grown"]})

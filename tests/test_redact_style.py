@@ -485,3 +485,33 @@ def test_verify_flags_a_line_a_crop_cuts_through(monkeypatch):
     assert through[0]["flags"] == ["redaction_partial"] and through[0]["samples"][0]["read"]
     below = docs(int(ink[-1]) + 12)
     assert below[0]["flags"] == [] and len(below[0]["samples"]) >= 1
+
+
+def test_grow_cache_skips_failed_grabs_and_drops_on_retune(tmp_path, monkeypatch):
+    from videocut.tools import _redact_grow as rg
+    from videocut.tools import redact
+
+    (tmp_path / "work").mkdir()
+    src = tmp_path / "screen.mov"
+    src.write_bytes(b"x")
+    info = {"size": [1000, 800], "duration": 10.0}
+    block = {"t0": 1.0, "t1": 2.0, "box": [0.1, 0.1, 0.3, 0.2], "offset": 0.0}
+    grabs = []
+    monkeypatch.setattr(_ocr, "available", lambda: True)
+    monkeypatch.setattr(redact, "shown_pts", lambda s, i, t, fps: t)
+    monkeypatch.setattr(redact, "grab_screen", lambda s, i, t, fps: grabs.append(t))
+    monkeypatch.setattr(rg, "grow", lambda box, frames, screen: ([0.1, 0.1, 0.3, 0.25], ["text"]))
+    cache = tmp_path / "work" / rg.CACHE
+
+    assert rg.apply(tmp_path, [block], src, info, 30) == [{"box": block["box"]}]
+    assert grabs and not cache.exists()  # nothing read: nothing cached, tried again next time
+
+    monkeypatch.setattr(redact, "grab_screen", lambda s, i, t, fps: grabs.append(t) or np.zeros(1))
+    grabs.clear()
+    out = rg.apply(tmp_path, [block], src, info, 30)
+    assert out[0]["box"] == [0.1, 0.1, 0.3, 0.25] and grabs
+    grabs.clear()
+    assert rg.apply(tmp_path, [block], src, info, 30) == out and not grabs  # cached
+
+    monkeypatch.setattr(rg, "PARAMS", [*rg.PARAMS, 1])
+    assert rg.apply(tmp_path, [block], src, info, 30) == out and grabs  # retuned: read again

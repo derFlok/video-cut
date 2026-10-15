@@ -743,3 +743,6 @@
   of the height (199 -> 246/248 px of 2648: the tab title line plus the chrome's edge),
   the dialog box over the lines it cut; 0 screen flags, `text_cut` clean on 40 boxes and
   39 crop edges. Growth adds OCR at render (render 292 s, verify 235 s on 126 s of reel).
+  The app names the flag ("Schwärzung schneidet Text an" / "redaction cuts through text").
+  Review fix: a block whose screen frames could not be read is not cached as "nothing to
+  grow" (the next render tries again); a retune of the growth constants drops the cache.

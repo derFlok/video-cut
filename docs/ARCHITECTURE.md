@@ -95,6 +95,7 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            runs.jsonl, claude-plan.jsonl, claude-cut.jsonl                       videocut run
            revision_request.json, revision.json, revision_report.md,
            revisions.jsonl (one line per feedback run)                           revise run
+           redact_grown.json (redact boxes grown over the text they cut)        render
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
            verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg      verify
            history/reel-<k>.mp4 (the reel before a revision; the last five)       revise run
