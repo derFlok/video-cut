@@ -631,6 +631,31 @@
   follow-up should judge clicks against the source or an audible level, or keep a noise
   floor in the denoised track.
 
+### Fixed — verify `click` false positives
+- The click baseline is the audible audio around the cut (blocks quieter than −70 dBFS, the
+  denoiser's digital silence, are left out; floor −60 dBFS instead of −80). A `click` now
+  also needs an audible step (`step_db` ≥ −45 dBFS) that stands alone (`step_sharpness` ≥ 10:
+  the step vs. the median step within ±1 ms; a sample discontinuity, not a breath, consonant
+  or mouth tick). New numbers per cut: `step_db`, `step_sharpness`.
+- Real checks (copies of the two jobs above, verify run on the existing reels): demo 5 →
+  0 `click` flags, selfie 1 → 0 (highest click_peak 7.2 and 8.9, before 44.2 and 22.0).
+  Generated hard cuts still flag: sine step click_peak 31 / sharpness 32, speech-like clip
+  without crossfade 22 and 44 / sharpness 45–51; crossfaded cuts 5–6 / sharpness ≤ 6.
+
+### Added — duplicate and rename a job
+- `videocut tool job duplicate <job> [--title T] [--keep-approval]` → `<id>-copy-N`:
+  input/ hard-linked, work/ and out/ copied (copy-on-write clones where the filesystem
+  has them). The approval and the personal-data decision move along only with
+  `--keep-approval` (a human choice); otherwise the copy needs its own approval. The
+  overlay record (hash-checked provenance of work/overlay*) always moves along.
+  `videocut tool job title <job> <title>`: job.json `title`, shown instead of the plan's
+  title. Both human only (refused inside an agent run).
+- API: `POST /api/jobs/{id}/duplicate {title?, keep_approval?}`, `PUT /api/jobs/{id}/title
+  {title}`; list and detail return the display title and `copy_of`.
+- App: job page title with inline rename and a "⋯" menu with "Duplizieren" (dialog with
+  the title and "Freigabe übernehmen", explained, offered only for an approved job); the job
+  list shows a "Kopie" badge on copies.
+
 ### Added — Transcript vocabulary
 - brand.json and job.json `vocabulary`: `[{term, variants, note?}]`, the canonical spelling
   of names the transcriber gets wrong and their known misspellings; validated by `brand

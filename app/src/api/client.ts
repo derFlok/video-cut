@@ -213,6 +213,10 @@ export const api = {
   },
   start: (id: string) => call<unknown>("POST", `${J(id)}/start`),
   remove: (id: string) => call<unknown>("DELETE", J(id)),
+  /** Copy the job; keep_approval takes over the approval and the personal-data decision. */
+  duplicate: (id: string, body: { title?: string; keep_approval: boolean }) =>
+    call<JobSummary>("POST", `${J(id)}/duplicate`, body),
+  setTitle: (id: string, title: string) => call<{ id: string; title: string }>("PUT", `${J(id)}/title`, { title }),
   events: (id: string, onEvent: (ev: JobEvent) => void, onError: () => void) =>
     transport.events(`${J(id)}/events`, onEvent, onError),
 

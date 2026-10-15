@@ -111,6 +111,8 @@ export interface JobSummary {
   status: Status;
   stage: Stage;
   title: string | null;
+  /** The id of the job this one was duplicated from. */
+  copy_of?: string | null;
   thumb_url: string | null;
   target_s?: number | null;
 }
@@ -204,6 +206,7 @@ export interface JobDetail {
   revisions: Revision[];
   versions?: Version[];
   title?: string | null;
+  copy_of?: string | null;
   brief?: string | null;
   created?: string;
   /** The stored choice (absent: automatic) and what it resolves to. */

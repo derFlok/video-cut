@@ -17,8 +17,19 @@ Numbers per cut
              or a glitch frame) where the EDL does not change the framing (crop or zoom:
              info `reframe`)
     audio    `click_peak`: largest sample-to-sample step within +-10 ms of the cut relative to
-             the median step size around it; `hf_spike_db`: energy of the second difference
-             (a high-pass) within +-10 ms vs. its local median (flag `click`)
+             the median step size of the audible audio around it (+-100 ms, blocks quieter
+             than -70 dBFS left out: the digital silence of a denoised track and room tone
+             are no baseline, next to them any breath or mouth tick looked like a click);
+             `hf_spike_db`: energy of the second difference (a high-pass) within +-10 ms vs.
+             the same audible baseline; `step_db`: that largest step in dBFS;
+             `step_sharpness`: that step vs. the median step within +-1 ms of it (a sample
+             discontinuity stands alone, a breath, consonant or mouth tick does not). Flag
+             `click` only for an audible (step_db >= -45), sharp (>= 10) step with
+             click_peak >= 12 or hf_spike_db >= 15. Calibrated on generated hard cuts
+             (sine and speech-like: click_peak 22-44, sharpness 29-51, step -13..-7 dBFS)
+             against crossfaded ones and two real reels (a selfie and a demo, 28 cuts:
+             highest click_peak 8.9, sharpness 2.6 at the one hf_spike_db >= 15; before,
+             six false flags)
     blink    flag `blink_at_cut` when one of the two output frames on either side of the cut
              shows a blink: the frames are mapped to source time via the EDL and looked up
              in the blink intervals of a current work/face.json
@@ -91,7 +102,10 @@ LARGE_JUMP_X_MEDIAN = 3.0  # `visual_jump`: jump_score this many times the other
 LARGE_JUMP_MIN = 8.0  # ... and at least this (a still pose with a few normal jump cuts)
 CLICK_PEAK_MAX, HF_SPIKE_DB_MAX = 12.0, 15.0
 CLICK_HALF_S, BASE_S, BLOCK = 0.010, 0.100, 240
-FLOOR = 1e-4  # about -80 dBFS: keeps ratios finite next to digital silence
+CLICK_SHARP_MIN, SHARP_HALF, SHARP_GAP = 10.0, 48, 2  # the +-1 ms around a step, minus +-2
+CLICK_AUDIBLE_DB = -45.0  # a smaller step (room tone, a soft mouth tick) is not a cut click
+BASE_AUDIBLE_DB = -70.0  # baseline blocks quieter than this (digital silence) are left out
+FLOOR = 1e-3  # -60 dBFS: the smallest baseline step, so ratios stay sane next to silence
 STRIP_TILES, TILE_W, WAVE_H = 5, 216, 140
 FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
 CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
@@ -173,19 +187,32 @@ def audio_numbers(x: np.ndarray, t: float) -> dict:
     s = int(round(t * RATE))
     half, base = int(CLICK_HALF_S * RATE), int(BASE_S * RATE)
     if s - half < 2 or s + half >= len(x):
-        return {"click_peak": None, "hf_spike_db": None}
-    d1 = np.diff(x.astype(np.float64), prepend=x[0])
+        return {"click_peak": None, "hf_spike_db": None, "step_db": None, "step_sharpness": None}
+    x64 = x.astype(np.float64)
+    d1 = np.diff(x64, prepend=x64[0])
     d2 = np.diff(d1, prepend=d1[0])
     near = slice(s - half, s + half)
+    sides = [slice(max(0, s - base), s - half), slice(s + half, s + base)]
+    audible = np.concatenate([_block_rms(x64[p]) for p in sides]) >= 10 ** (BASE_AUDIBLE_DB / 20)
 
     def around(d):
-        parts = [d[max(0, s - base) : s - half], d[s + half : s + base]]
-        blocks = np.concatenate([_block_rms(p) for p in parts if len(p) >= BLOCK] or [np.zeros(0)])
+        blocks = np.concatenate([_block_rms(d[p]) for p in sides])[audible]
         return float(np.median(blocks)) if len(blocks) else 0.0
 
-    peak = float(np.abs(d1[near]).max()) / max(around(d1), FLOOR)
+    k = s - half + int(np.abs(d1[near]).argmax())
+    step = abs(float(d1[k]))
+    local = np.abs(
+        np.r_[d1[k - SHARP_HALF : k - SHARP_GAP], d1[k + SHARP_GAP + 1 : k + SHARP_HALF + 1]]
+    )
+    sharp = step / max(float(np.median(local)) if len(local) else 0.0, 1e-9)
+    peak = step / max(around(d1), FLOOR)
     hf = float(np.sqrt((d2[near] ** 2).mean())) / max(around(d2), FLOOR * 0.1)
-    return {"click_peak": round(peak, 2), "hf_spike_db": round(20 * np.log10(max(hf, 1e-9)), 1)}
+    return {
+        "click_peak": round(peak, 2),
+        "hf_spike_db": round(float(20 * np.log10(max(hf, 1e-9))), 1),
+        "step_db": round(float(20 * np.log10(max(step, 1e-9))), 1),
+        "step_sharpness": round(min(sharp, 1e6), 1),
+    }
 
 
 def is_jump(visual: dict) -> bool:
@@ -216,8 +243,11 @@ def cut_notes(
             LARGE_JUMP_MIN, LARGE_JUMP_X_MEDIAN * median_jump
         ):
             flags.append("visual_jump")
-    if audio["click_peak"] is not None and (
-        audio["click_peak"] >= CLICK_PEAK_MAX or audio["hf_spike_db"] >= HF_SPIKE_DB_MAX
+    if (
+        audio["click_peak"] is not None
+        and audio.get("step_db", 0.0) >= CLICK_AUDIBLE_DB
+        and audio.get("step_sharpness", CLICK_SHARP_MIN) >= CLICK_SHARP_MIN
+        and (audio["click_peak"] >= CLICK_PEAK_MAX or audio["hf_spike_db"] >= HF_SPIKE_DB_MAX)
     ):
         flags.append("click")
     if blink:
