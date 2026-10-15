@@ -157,21 +157,25 @@ export function TranscriptPanel({ live }: { live: Live }) {
     const w = editing;
     if (!w) return;
     const text = draft.trim().replace(/\s+/g, " ");
-    if (text === w.w && !w.hidden) {
+    if (text === (w.hidden ? "" : w.w)) {
       setEditing(null);
       return;
     }
     void act(async () => {
-      let v = await api.editWord(job.id, w.i, text, w.t0);
-      const heard = w.asr ?? w.w;
-      if (always && text && vocabKey(text) !== vocabKey(heard)) {
-        await remember(text, heard);
-        v = await api.transcript(job.id);
-        setNote(t("transcript.remembered", { term: text, heard }));
-      }
-      setView(v);
+      // the edit is saved first; the Wörterbuch is a second step that may fail on its own
+      setView(await api.editWord(job.id, w.i, text, w.t0));
       setEditing(null);
       void live.reload();
+      const heard = w.asr ?? w.w;
+      if (always && text && vocabKey(text) !== vocabKey(heard)) {
+        try {
+          await remember(text, heard);
+          setNote(t("transcript.remembered", { term: text, heard }));
+        } finally {
+          setView(await api.transcript(job.id));
+          void live.reload();
+        }
+      }
     });
   };
 
@@ -245,6 +249,11 @@ export function TranscriptPanel({ live }: { live: Live }) {
             {q ? t("transcript.hits", { n: hits }) : t("transcript.count", { n: words.length, e: view.edits })}
             {note && ` · ${note}`}
           </p>
+          {view.drift > 0 && (
+            <p className="banner banner-warn" data-testid="transcript-drift">
+              {t("transcript.drift", { n: view.drift })}
+            </p>
+          )}
           <div className="ts-text" onClick={start} data-testid="transcript-text">
             {groups.map((g) => (
               <Sentence

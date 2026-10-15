@@ -38,7 +38,8 @@ from .common import ToolError, job_parent, read_job, resolve_job, run_tool, upda
 
 MAX_TEXT = 60
 LOG = "transcript_edits.jsonl"
-MATCH_S = 0.3  # an edit finds its word again within this time (alignment may move it)
+FAR_S = 3.0  # an edit finds its word again: the same text, the nearest start this close
+JOINERS = {"\u200c", "\u200d"}  # zero-width (non-)joiner: needed in some scripts, emoji
 CAPTION_S = 0.002  # a caption word is the transcript word with the same output start
 
 
@@ -50,8 +51,12 @@ def clean_text(text) -> str:
     characters; runs of whitespace become one space. "" hides the word."""
     if not isinstance(text, str):
         raise ToolError("the text must be a string")
-    if any(unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co") and c != " " for c in text):
-        raise ToolError("the text must not contain control characters")
+    if any(
+        unicodedata.category(c) in ("Cc", "Cs", "Co")
+        or (unicodedata.category(c) == "Cf" and c not in JOINERS)
+        for c in text
+    ):
+        raise ToolError("the text must not contain control or formatting characters")
     text = " ".join(text.split())
     if len(text) > MAX_TEXT:
         raise ToolError(f"the text may have at most {MAX_TEXT} characters")
@@ -109,36 +114,44 @@ def record_path(job: Path) -> Path:
     return state_dir() / job.resolve().name / LOG
 
 
-def read_log(job: Path) -> list[dict]:
-    """The edit record (the state copy; the job's own copy only when there is none, e.g. a
-    job copied by hand)."""
-    for p in (record_path(job), job / "work" / LOG):
+def read_log(job: Path) -> list[dict] | None:
+    """The edit record, None when the human never edited this job folder. Only the state
+    copy counts: the job's own copy is agent-writable and never read."""
+    try:
+        lines = record_path(job).read_text().splitlines()
+    except OSError:
+        return None
+    out = []
+    for line in lines:
         try:
-            lines = p.read_text().splitlines()
-        except OSError:
+            e = json.loads(line)
+        except ValueError:
             continue
-        out = []
-        for line in lines:
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(e, dict) and isinstance(e.get("t0"), int | float):
-                out.append(e)
-        return out
-    return []
+        if isinstance(e, dict) and isinstance(e.get("t0"), int | float):
+            out.append(e)
+    return out
 
 
-def _append(job: Path, entry: dict) -> None:
-    """Add to the record (started from the job's copy the first time, e.g. a copied job)
-    and mirror it into the job's copy."""
+def _append(job: Path, entry: dict) -> str | None:
+    """Add to the record and mirror it into the job's copy; returns the record before (to
+    roll back), None when there was none."""
     rec, mirror = record_path(job), job / "work" / LOG
-    if not rec.is_file():
-        rec.parent.mkdir(parents=True, exist_ok=True)
-        rec.write_text(mirror.read_text() if mirror.is_file() else "")
+    before = rec.read_text() if rec.is_file() else None
+    rec.parent.mkdir(parents=True, exist_ok=True)
     with rec.open("a") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     mirror.write_text(rec.read_text())
+    return before
+
+
+def _rollback(job: Path, before: str | None) -> None:
+    rec, mirror = record_path(job), job / "work" / LOG
+    if before is None:
+        rec.unlink(missing_ok=True)
+        mirror.unlink(missing_ok=True)
+    else:
+        rec.write_text(before)
+        mirror.write_text(before)
 
 
 def replay(entries: list[dict]) -> tuple[list[tuple[float, str, str | None]], list[dict]]:
@@ -164,15 +177,19 @@ def find(words: list[dict], t0: float, asr_text: str) -> int | None:
     best = None
     for i, w in enumerate(words):
         d = abs(w["t0"] - t0)
-        if d <= MATCH_S and _key(w) == k and (best is None or d < best[0]):
+        if d <= FAR_S and _key(w) == k and (best is None or d < best[0]):
             best = (d, i)
     return best[1] if best else None
 
 
 def enforce(job: Path, words: list[dict]) -> int:
     """Make the edit fields of `words` exactly the record (in place); returns how many
-    words had to change (an edit lost or added outside the record)."""
-    final, _ = replay(read_log(job))
+    words had to change (an edit lost or added outside the record). Without a record (the
+    human never edited this folder) nothing changes."""
+    log = read_log(job)
+    if log is None:
+        return 0
+    final, _ = replay(log)
     want: dict[int, str] = {}
     for t0, a, text in final:
         i = find(words, t0, a)
@@ -226,9 +243,20 @@ def _save(job: Path, doc: dict) -> None:
     mark_stale(job)
 
 
+def _commit(job: Path, entry: dict, doc: dict) -> None:
+    """Record the entry and save words.json; a failed save takes the entry back."""
+    before = _append(job, entry)
+    try:
+        _save(job, doc)
+    except BaseException:
+        _rollback(job, before)
+        raise
+
+
 def mark_stale(job: Path) -> bool:
-    """A job with rendered captions: job.json overlays.stale = "transcript" (kept when they
-    were stale already). A job without captions just keeps the edit."""
+    """A job with rendered captions: job.json overlays.stale = "transcript" (also over
+    "vocabulary": the tool refresh sets those captions too). A job without captions just
+    keeps the edit."""
     try:
         caps = json.loads((job / "work" / "edl.json").read_text()).get("captions")
     except (OSError, ValueError, AttributeError):
@@ -236,7 +264,7 @@ def mark_stale(job: Path) -> bool:
     rec = read_job(job).get("overlays")
     if not caps or not isinstance(rec, dict):
         return False
-    if not rec.get("stale"):
+    if rec.get("stale") != "transcript":
         update_job(job, overlays={**rec, "stale": "transcript"})
     return True
 
@@ -248,12 +276,13 @@ def edit(job: Path, i: int, text: str, t0: float | None = None) -> dict:
     text = clean_text(text)
     doc = _words_doc(job)
     words = doc["words"]
+    enforce(job, words)  # "prev" below comes from the record, not from what is on disk
     if not 0 <= i < len(words):
         raise ToolError(f"no word {i} (the transcript has {len(words)})")
     w = words[i]
     if t0 is not None and abs(w["t0"] - t0) > 1e-3:
         raise ToolError("the transcript changed since it was read; load it again")
-    if text and text == w["w"] and "edit" not in w:
+    if ("edit" in w and w["edit"] == text) or (text and text == w["w"] and "edit" not in w):
         return {"i": i, "changed": False, "word": w}
     entry = {
         "at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -264,8 +293,7 @@ def edit(job: Path, i: int, text: str, t0: float | None = None) -> dict:
         "to": text,
         "prev": w.get("edit"),
     }
-    _append(job, entry)
-    _save(job, doc)
+    _commit(job, entry, doc)
     i2 = find(doc["words"], entry["t0"], entry["asr"])
     i = i if i2 is None else i2
     return {"i": i, "changed": True, "word": doc["words"][i]}
@@ -273,8 +301,7 @@ def edit(job: Path, i: int, text: str, t0: float | None = None) -> dict:
 
 def undo(job: Path) -> dict:
     _human_only()
-    entries = read_log(job)
-    _, stack = replay(entries)
+    _, stack = replay(read_log(job) or [])
     if not stack:
         raise ToolError("there is no edit to undo")
     last = stack[-1]
@@ -289,8 +316,7 @@ def undo(job: Path) -> dict:
         "to": last.get("from"),
         "prev": last.get("to"),
     }
-    _append(job, entry)
-    _save(job, doc)
+    _commit(job, entry, doc)
     i = find(doc["words"], last["t0"], str(last.get("asr", "")))
     return {"i": i, "undone": {k: last.get(k) for k in ("i", "from", "to")}}
 
@@ -299,6 +325,34 @@ def edits_at(job: Path) -> str | None:
     """When the last edit (or undo) was made (ISO), None without one."""
     entries = read_log(job)
     return entries[-1].get("at") if entries else None
+
+
+def after_agent(job: Path, say=print) -> None:
+    """After an agent run: the human's edits back into words.json if the run changed them
+    (`run.claude`)."""
+    try:
+        doc = _words_doc(job)
+    except ToolError:
+        return
+    if n := enforce(job, doc["words"]):
+        _save(job, doc)
+        say(f"  {n} word(s) of the human's transcript edits restored")
+
+
+def stale_if_drift(job: Path, say=print) -> None:
+    """After the overlays were recorded: captions that do not show the human's text make
+    them stale again ("Untertitel neu setzen" offers the tool refresh)."""
+    if n := caption_drift(job):
+        mark_stale(job)
+        say(f"  {n} caption word(s) do not show the transcript edits; set the captions again")
+
+
+def caption_drift(job: Path) -> int:
+    """Caption words of the EDL that do not show the human's text (0 without edits): an
+    agent run that rebuilt or changed the captions makes the overlays stale again."""
+    if read_log(job) is None:
+        return 0
+    return patch_captions(job, write=False)["changed"]
 
 
 # --- output time ----------------------------------------------------------------------
@@ -330,7 +384,7 @@ def output_times(words: list[dict], edl_data: dict | None) -> list[tuple | None]
 # --- captions refresh -----------------------------------------------------------------
 
 
-def patch_captions(job: Path) -> dict:
+def patch_captions(job: Path, write: bool = True) -> dict:
     """The human's text in the EDL's caption blocks. Returns {"changed", "rebuilt"}; a
     caption word that needs a word back (an undone hide) or an edited word the captions do
     not carry at its time rebuilds the captions from words.json (`captions --force`)."""
@@ -391,7 +445,23 @@ def patch_captions(job: Path) -> dict:
     # A word the human ever edited that is in the cut and shown, but not in the captions
     # (a hide taken back, or the captions were made from other times): only a rebuild
     # puts it there.
-    ever = {(round(float(e["t0"]), 3), _key(str(e.get("asr", "")))) for e in read_log(job)}
+    ever = {(round(float(e["t0"]), 3), _key(str(e.get("asr", "")))) for e in read_log(job) or []}
+    # a patched block longer than the brand's pace allows: regroup it
+    from .captions import PACES, job_pace
+
+    try:
+        limit = PACES[job_pace(job)].max_chars
+    except ToolError:
+        limit = None
+    for b in data["captions"]:
+        ws = b.get("words") if isinstance(b, dict) else None
+        if (
+            limit
+            and isinstance(ws, list)
+            and any(isinstance(x, dict) and x.get("edit") for x in ws)
+        ):
+            if len(" ".join(str(x.get("w", "")) for x in ws if isinstance(x, dict))) > limit:
+                rebuild = True
     starts = [
         cw["t0"]
         for b in data["captions"]
@@ -407,7 +477,7 @@ def patch_captions(job: Path) -> dict:
             break
     if rebuild:
         return {"changed": changed, "rebuilt": True}
-    if changed:
+    if changed and write:
         from ..edl import validate
 
         if errors := validate(data):
@@ -444,18 +514,27 @@ def refresh(job: Path, say=print) -> int:
     if n := enforce(job, words_doc["words"]):
         _save(job, words_doc)
         say(f"  restored {n} word edit(s) from the record")
-    res = patch_captions(job)
-    if res["rebuilt"]:
-        say("  captions rebuilt from the transcript")
-        pipeline.tool(job, "captions", "--force")
-    else:
-        say(f"  {res['changed']} caption word(s) changed")
-    pipeline.tool(job, "overlays")
-    say("verify: rendering the reel and checking it")
-    pipeline.tool(job, "render")
-    if pipeline.segments_sha(job) != cut_sha:
-        raise ToolError("the render changed the cut (EDL segments); cut it again")
-    verify = pipeline.tool(job, "verify", need_ok=False)
+    edl_path = job / "work" / "edl.json"
+    edl_before = edl_path.read_bytes()
+    try:
+        res = patch_captions(job)
+        if res["rebuilt"]:
+            say("  captions rebuilt from the transcript")
+            pipeline.tool(job, "captions", "--force")
+            patch_captions(job)  # marks the human's words ("edit") in the new blocks
+        else:
+            say(f"  {res['changed']} caption word(s) changed")
+        pipeline.tool(job, "overlays")
+        say("verify: rendering the reel and checking it")
+        pipeline.tool(job, "render")
+        if pipeline.segments_sha(job) != cut_sha:
+            raise ToolError("the render changed the cut (EDL segments); cut it again")
+        verify = pipeline.tool(job, "verify", need_ok=False)
+    except BaseException:
+        # the EDL as the reel was made from it, so the refresh can be tried again
+        if edl_path.read_bytes() != edl_before:
+            edl_path.write_bytes(edl_before)
+        raise
     try:
         verify = json.loads((job / "out" / "verify.json").read_text())
     except (OSError, ValueError):

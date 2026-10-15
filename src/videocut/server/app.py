@@ -739,6 +739,9 @@ def create_app(
         job = job_or_404(job_id)
         if not state.overlays_stale(job):
             raise conflict("state", "the overlays of this job are not stale")
+        if state.captions_stale(job):
+            # transcript edits: the tool refresh sets them (a Claude run could rewrite them)
+            raise conflict("state", "the transcript was edited; use /captions/refresh")
         return submit(job, "overlays", lambda say, ask: run_with.overlays(job, say, ask))
 
     # -------------------------------------------------------------- transcript
@@ -761,7 +764,7 @@ def create_app(
             if w.get("hidden"):
                 row["hidden"] = True
             rows.append(row)
-        log = transcript.read_log(job)
+        log = transcript.read_log(job) or []
         return {
             "id": job.name,
             "total": len(words),

@@ -76,6 +76,7 @@ from .edl import SCREEN_LAYOUTS
 from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
 from .tools import _format, _job_slides, _length, _redact_style, _style
+from .tools import transcript as transcript_edits
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
     approve_job,
@@ -418,6 +419,7 @@ def claude(job: Path, phase: str, prompt: str, max_turns: int, resume: str | Non
         max_turns=max_turns,
     )
     entry = log_run(job, phase, res, time.monotonic() - t0, resume is not None)
+    transcript_edits.after_agent(job, say)  # the human's word edits are not the agent's to change
     tokens = _tokens(res.usage)
     say(
         f"{phase}: {'done' if res.ok else 'FAILED'} in {entry['wall_s']}s, {res.turns} turns"
@@ -1123,6 +1125,7 @@ def _record_overlays(job: Path, brand: str, verify: dict) -> None:
             "verify_ok": bool(verify.get("ok")),
         },
     )
+    transcript_edits.stale_if_drift(job)
 
 
 def upgrade_time_base(job: Path) -> None:
@@ -1484,6 +1487,7 @@ def run(
             },
             overlays_pending=None,
         )
+        transcript_edits.stale_if_drift(job, say)
     elif job_brand:
         say(f"overlays: already done for brand {job_brand} (--brand {job_brand} redoes them)")
     else:

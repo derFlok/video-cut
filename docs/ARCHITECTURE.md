@@ -243,26 +243,32 @@ control characters, whitespace collapsed. Human only (`VIDEOCUT_AGENT` refuses).
 
 - **Record:** every edit and undo is a line `{at, i, t0, asr, from, to, prev}` (`undo:
   true`) in `$VIDEOCUT_HOME/state/<job>/transcript_edits.jsonl`, outside what an agent run
-  may write, mirrored to `work/transcript_edits.jsonl` (a job copied by hand starts its
-  record from the mirror). Replaying it gives each edited word's text; words are found
-  again by the model's text and the nearest start within 0.3 s, so indices may shift
-  (vocabulary merges). `enforce` writes exactly the record onto words.json on every edit,
-  undo, `vocab apply`, `transcribe` (through it) and caption refresh; `transcript show`
-  and the GET report `drift` (words that differ). Undo takes back the last edit not yet
-  undone (the word's previous edit, or none).
+  may write, mirrored to `work/transcript_edits.jsonl` for reading only (the mirror is
+  never read back: an agent could write it). An entry is recorded only together with its
+  words.json save (a failed save takes it back). Replaying the record gives each edited
+  word's text; words are found again by the model's text and the nearest start within
+  3 s, so indices may shift (vocabulary merges, the video time shift). `enforce` writes
+  exactly the record onto words.json on every edit, undo, `vocab apply`, `transcribe`
+  (through it), caption refresh and after every Claude run (`run.claude`); without a
+  record (no human edit in this folder) it changes nothing. `transcript show` and the
+  GET report `drift` (words that differ; the app warns). Undo takes back the last edit not
+  yet undone (the word's previous edit, or none).
 - **Vocabulary:** an edited word is never restored, matched or suggested by `vocab.py`,
   and an edited caption word is never re-corrected: the manual edit wins and survives
   every `vocab apply`. After an edit or undo the vocabulary is applied again around it.
 - **Captions:** `captions` leaves hidden words out and shows an edited word's text. An
   edit on a job whose reel has captions sets job.json `overlays.stale = "transcript"`
-  (kept when already stale; `vocab apply` keeps that reason too); job detail
-  `captions_stale`. `refresh` (`POST /api/jobs/{id}/captions/refresh`, run kind
+  (also over "vocabulary": the refresh covers both; `vocab apply` keeps "transcript");
+  job detail `captions_stale`; `POST /overlays` (a Claude run) is refused while it is set.
+  After an overlay or revise run records the overlays, caption words that do not show the
+  human's text make them stale again. `refresh` (`POST /api/jobs/{id}/captions/refresh`, run kind
   `captions`; the app's "Untertitel neu setzen", no Claude) puts the edited text into the
   EDL's caption blocks by output time (keeping the agent's blocks and emphasis; hidden
   words dropped, an undone edit back to the transcript's text) or, when a word the human
-  edited is in the cut but not in the captions (a hide taken back), rebuilds them with
-  `captions --force`; then `overlays`, `render`, `verify` and the overlay record (no
-  longer stale). It refuses before anything runs when `edl snap --dry-run` would move a
+  edited is in the cut but not in the captions (a hide taken back) or a patched block is
+  longer than the brand's pace allows, rebuilds them with `captions --force` (and marks
+  the human's words again); then `overlays`, `render`, `verify` and the overlay record (no
+  longer stale). A failure puts edl.json back as it was, so the refresh can be retried. It refuses before anything runs when `edl snap --dry-run` would move a
   cut point (a reel cut before snapping; render would change the cut) and fails when the
   segments changed anyway. Measured on a copy of a 27 s 9:16 demo job (2 words): 164 s
   wall at load average ~70 (overlays 72 s, render 68 s, verify 23 s), verify result

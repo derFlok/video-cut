@@ -408,6 +408,7 @@ const de = {
   "transcript.time.source": "Zeit in der Aufnahme",
   "transcript.stale": "Du hast das Transkript geändert. Die Untertitel im Video zeigen noch den alten Text.",
   "transcript.refresh.hint": "Ohne Claude, ein bis zwei Minuten.",
+  "transcript.drift": "{n} deiner Änderungen fehlen im Transkript; sie werden beim nächsten Schritt wiederhergestellt.",
 
   "time.ago": "vor {t}",
 };
@@ -818,6 +819,7 @@ const en: Record<Key, string> = {
   "transcript.time.source": "Time in the recording",
   "transcript.stale": "You changed the transcript. The captions in the video still show the old text.",
   "transcript.refresh.hint": "Without Claude, a minute or two.",
+  "transcript.drift": "{n} of your changes are missing from the transcript; the next step puts them back.",
 
   "time.ago": "{t} ago",
 };

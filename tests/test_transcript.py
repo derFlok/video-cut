@@ -327,3 +327,74 @@ def test_refresh_refuses_when_a_render_would_move_the_cut(capsys, monkeypatch):
     monkeypatch.setattr(pipeline, "tool", lambda *a, **k: pytest.fail("nothing may run"))
     with pytest.raises(transcript.ToolError, match="move 3 cut point"):
         transcript.refresh(job, say=lambda _: None)
+
+
+def test_a_forged_mirror_is_never_the_record(capsys):
+    job = make_job()
+    forged = {"at": "x", "i": 0, "t0": 0.0, "asr": "Hallo", "from": "Hallo", "to": "Hacked"}
+    (job / "work" / "transcript_edits.jsonl").write_text(json.dumps(forged) + "\n")
+    assert transcript.read_log(job) is None
+    run_tool(capsys, "vocab", "apply", "v1")
+    assert words_of(job)[0]["w"] == "Hallo"
+    run_tool(capsys, "transcript", "edit", "v1", "1", "vom")
+    assert [e["to"] for e in transcript.read_log(job)] == ["vom"]
+    assert words_of(job)[0]["w"] == "Hallo"
+    code, s, _ = run_tool(capsys, "transcript", "undo", "v1")
+    code, s, _ = run_tool(capsys, "transcript", "undo", "v1")
+    assert code == 1  # the forged entry is nothing to undo
+
+
+def test_a_failed_save_takes_the_entry_back(capsys, monkeypatch):
+    job = make_job()
+    run_tool(capsys, "transcript", "edit", "v1", "0", "Hi")
+    before = transcript.record_path(job).read_text()
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(transcript, "write_json", boom)
+    with pytest.raises(OSError):
+        transcript.edit(job, 1, "vom")
+    assert transcript.record_path(job).read_text() == before
+    assert (job / "work" / "transcript_edits.jsonl").read_text() == before
+
+
+def test_same_text_again_is_no_edit_and_joiners_are_allowed(capsys):
+    job = make_job()
+    run_tool(capsys, "transcript", "edit", "v1", "0", "")
+    code, s, _ = run_tool(capsys, "transcript", "edit", "v1", "0", "")
+    assert s["changed"] is False and len(transcript.read_log(job)) == 1
+    assert transcript.clean_text("Hallo‍Welt") == "Hallo‍Welt"
+    with pytest.raises(transcript.ToolError):
+        transcript.clean_text("Hallo‮Welt")
+
+
+def test_after_an_agent_run_the_edits_come_back(capsys):
+    job = make_job()
+    run_tool(capsys, "transcript", "edit", "v1", "0", "Hi")
+    doc = json.loads((job / "work" / "words.json").read_text())
+    doc["words"][0] = {k: v for k, v in doc["words"][0].items() if k not in ("edit", "w_asr")}
+    doc["words"][0]["w"] = "Hallo"
+    (job / "work" / "words.json").write_text(json.dumps(doc))
+    lines = []
+    transcript.after_agent(job, lines.append)
+    assert words_of(job)[0]["w"] == "Hi" and "restored" in lines[0]
+
+
+def test_a_long_edit_regroups_the_block(capsys):
+    make_brand()
+    job = captioned_job()
+    run_tool(capsys, "transcript", "edit", "v1", "1", "von dem wirklich sehr langen Namen hier")
+    assert transcript.patch_captions(job)["rebuilt"] is True
+
+
+def test_claude_overlays_redo_is_refused_while_edits_wait(client):
+    make_brand()
+    job = captioned_job("j1")
+    approve_job(job)
+    cut_job(job, overlay=True)
+    data = json.loads((job / "job.json").read_text())
+    data["overlays"] = {"brand": "acme", "verify_ok": True, "stale": "transcript"}
+    (job / "job.json").write_text(json.dumps(data))
+    r = client.post("/api/jobs/j1/overlays")
+    assert r.status_code == 409 and "captions/refresh" in r.json()["detail"]["message"]
