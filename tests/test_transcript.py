@@ -398,3 +398,18 @@ def test_claude_overlays_redo_is_refused_while_edits_wait(client):
     (job / "job.json").write_text(json.dumps(data))
     r = client.post("/api/jobs/j1/overlays")
     assert r.status_code == 409 and "captions/refresh" in r.json()["detail"]["message"]
+
+
+def test_hooks_after_runs_never_crash_and_see_a_missing_word(capsys):
+    make_brand()
+    job = captioned_job()
+    run_tool(capsys, "transcript", "edit", "v1", "1", "")
+    transcript.patch_captions(job)
+    run_tool(capsys, "transcript", "undo", "v1")  # the hidden word must come back
+    assert transcript.caption_drift(job) >= 1
+    (job / "work" / "edl.json").write_text('{"segments": "broken"}')
+    (job / "work" / "words.json").write_text("not json")
+    lines = []
+    transcript.stale_if_drift(job, lines.append)
+    transcript.after_agent(job, lines.append)
+    assert all("could not" in x for x in lines) or lines == []

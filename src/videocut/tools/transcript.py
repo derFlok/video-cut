@@ -332,19 +332,23 @@ def after_agent(job: Path, say=print) -> None:
     (`run.claude`)."""
     try:
         doc = _words_doc(job)
-    except ToolError:
-        return
-    if n := enforce(job, doc["words"]):
-        _save(job, doc)
-        say(f"  {n} word(s) of the human's transcript edits restored")
+        if n := enforce(job, doc["words"]):
+            _save(job, doc)
+            say(f"  {n} word(s) of the human's transcript edits restored")
+    except (ToolError, OSError, ValueError, KeyError, TypeError) as e:  # never ends a run
+        say(f"  the transcript edits could not be checked: {e}")
 
 
 def stale_if_drift(job: Path, say=print) -> None:
     """After the overlays were recorded: captions that do not show the human's text make
     them stale again ("Untertitel neu setzen" offers the tool refresh)."""
-    if n := caption_drift(job):
-        mark_stale(job)
-        say(f"  {n} caption word(s) do not show the transcript edits; set the captions again")
+    try:
+        n = caption_drift(job)
+        if n:
+            mark_stale(job)
+            say(f"  {n} caption word(s) do not show the transcript edits; set them again")
+    except (ToolError, OSError, ValueError, KeyError, TypeError) as e:  # best effort
+        say(f"  the captions could not be checked against the transcript edits: {e}")
 
 
 def caption_drift(job: Path) -> int:
@@ -352,7 +356,8 @@ def caption_drift(job: Path) -> int:
     agent run that rebuilt or changed the captions makes the overlays stale again."""
     if read_log(job) is None:
         return 0
-    return patch_captions(job, write=False)["changed"]
+    res = patch_captions(job, write=False)
+    return res["changed"] + (1 if res["rebuilt"] else 0)
 
 
 # --- output time ----------------------------------------------------------------------
