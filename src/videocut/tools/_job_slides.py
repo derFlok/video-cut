@@ -184,13 +184,22 @@ def slides_cmd(args) -> dict:
 # --------------------------------------------------------------- import
 
 
+def _sub(argv: list[str], timeout: int, name: str) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"{name}: reading it took longer than {timeout} s") from None
+    except OSError as e:
+        raise ToolError(f"{name}: cannot be read ({e})") from None
+
+
 def _probe_image(path: Path) -> tuple[int, int]:
     """(w, h) of a PNG/JPEG/WebP judged by content; ToolError otherwise."""
-    r = subprocess.run(
+    r = _sub(
         [binary("ffprobe"), "-v", "error", "-protocol_whitelist", "file",
          "-show_entries", "stream=codec_name,width,height:format=format_name",
          "-of", "json", str(path)],
-        capture_output=True, text=True, timeout=60, check=False,
+        60, path.name,
     )  # fmt: skip
     try:
         info = json.loads(r.stdout or "{}")
@@ -218,11 +227,11 @@ def _fit(w: int, h: int) -> tuple[int, int]:
 
 def _image_page(src: Path, dst: Path) -> None:
     w, h = _fit(*_probe_image(src))
-    r = subprocess.run(
+    r = _sub(
         [binary("ffmpeg"), "-v", "error", "-nostdin", "-y", "-protocol_whitelist", "file",
          "-i", str(src), "-frames:v", "1",
          "-vf", f"scale={w}:{h}:flags=lanczos,format=rgb24", str(dst)],
-        capture_output=True, text=True, timeout=120, check=False,
+        120, src.name,
     )  # fmt: skip
     if r.returncode != 0 or not dst.is_file():
         raise ToolError(f"{src.name}: could not be converted ({r.stderr.strip()[-200:]})")
@@ -268,7 +277,7 @@ def import_slides(job: Path, files: list[Path], replace: bool = False, say=print
                 if len(old) + len(made) > MAX_PAGES:
                     raise ToolError(f"at most {MAX_PAGES} slide pages per job")
         if replace and dest.is_dir():
-            shutil.rmtree(dest)
+            dest.rename(tmp / "old")  # removed with tmp once the new pages are in place
         dest.mkdir(exist_ok=True)
         if not replace:  # renumber what is there (a gap after a manual delete)
             for k, rel in enumerate(old, 1):

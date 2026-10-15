@@ -170,7 +170,9 @@ function SlideCard({
   const fid = `slide-fb-${slide.id}`;
   const send = (e: FormEvent) => {
     e.preventDefault();
-    if (text.trim()) onAsk(text.trim(), slide.id);
+    if (!text.trim()) return;
+    onAsk(text.trim(), slide.id);
+    setText("");
   };
   return (
     <li className="viewcard slidecard" data-slide={slide.id}>

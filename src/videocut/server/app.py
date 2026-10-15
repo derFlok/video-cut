@@ -867,6 +867,21 @@ def _new_job(form) -> dict:
         )
     except pipeline.RunError as e:
         raise HTTPException(400, str(e)) from None
+    try:
+        _new_job_settings(job, brand_ref, words, f, slide_files, slides_mode, slides_wish)
+    except HTTPException:
+        shutil.rmtree(job, ignore_errors=True)  # no half-made job is left behind
+        raise
+    except BaseException as e:
+        shutil.rmtree(job, ignore_errors=True)
+        if isinstance(e, OSError):
+            raise HTTPException(500, f"could not finish the new job: {e}") from None
+        raise
+    return {"id": job.name}
+
+
+def _new_job_settings(job, brand_ref, words, f, slide_files, slides_mode, slides_wish) -> None:
+    """Everything set on a new job after `job new`; the caller removes the job on failure."""
     fields = {}
     if brand_ref:
         fields["brand"] = brand_ref
@@ -880,10 +895,8 @@ def _new_job(form) -> dict:
             _job_slides.import_slides(job, slide_files, say=lambda _: None)
         if slides_mode != "none" or slides_wish:
             _job_slides.set_slides(job, slides_mode, slides_wish, say=lambda _: None)
-    except ToolError as e:  # a broken PDF: no half-made job is left behind
-        shutil.rmtree(job, ignore_errors=True)
+    except ToolError as e:  # a broken PDF (the caller removes the job)
         raise HTTPException(415 if slide_files else 400, f"slides: {e}") from None
-    return {"id": job.name}
 
 
 def _new_job_redact_style(job, value) -> None:

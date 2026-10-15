@@ -94,7 +94,7 @@ export function PlanReview({ live }: { live: Live }) {
     try {
       live.begin("plan_revise");
       await api.planFeedback(job.id, text, slide);
-      setAsk("");
+      if (!slide) setAsk("");
     } catch (e2) {
       setAsking(false);
       setErr(e2);

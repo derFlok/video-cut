@@ -693,9 +693,11 @@ def show(args) -> dict:
     out["slides"] = _job_slides.view(job, data)
     sl = out["slides"]
     if sl["mode"] != "none":
-        print(f"slides: {sl['mode']}, {len(sl['pages'])} uploaded page(s)"
-              + (f"; wish: {sl['wish']}" if sl["wish"] else "")
-              + ("; the plan was made for other slides, stale" if sl["stale"] else ""))
+        print(
+            f"slides: {sl['mode']}, {len(sl['pages'])} uploaded page(s)"
+            + (f"; wish: {sl['wish']}" if sl["wish"] else "")
+            + ("; the plan was made for other slides, stale" if sl["stale"] else "")
+        )
     return out
 
 

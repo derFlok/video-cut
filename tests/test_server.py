@@ -1198,3 +1198,24 @@ def test_slide_marks_follow_the_edl_and_stills_are_served(client):
     (job / "work" / "slides" / "stills" / "s1.jpg").write_bytes(b"\xff\xd8\xff")
     assert client.get("/api/jobs/j1/stills/work/slides/stills/s1.jpg").status_code == 200
     assert client.get("/api/jobs/j1/stills/input/slides/page_01.png").status_code == 404
+
+
+@pytest.mark.media
+def test_job_create_removes_the_job_when_slides_fail_unexpectedly(
+    client, portrait_clip, monkeypatch
+):
+    from videocut.tools import _job_slides
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(_job_slides, "import_slides", boom)
+    with portrait_clip.open("rb") as cam:
+        r = client.post(
+            "/api/jobs",
+            files=[("camera", (portrait_clip.name, cam, "video/quicktime")),
+                   ("slides", ("deck.pdf", b"%PDF-1.4\n", "application/pdf"))],
+            data={"type": "thought", "slides_mode": "upload"},
+        )  # fmt: skip
+    assert r.status_code == 500 and "disk full" in r.json()["detail"]["message"]
+    assert not any(jobs_root().iterdir())
