@@ -150,6 +150,37 @@ Write the approved views into the segments (all times **camera seconds**, like `
   16:9 give the target's `box` (the zoom window is widened to the screen's shape anyway):
   captions and overlays keep clear of exactly that box.
 
+### Slides (the plan has a *Slides* table; `work/slides.json` exists)
+
+Put every approved slide on screen for the words it illustrates (plan `slides[].t0`–`t1`,
+source seconds), as segment fields:
+
+```json
+{"in": 31.20, "out": 36.80, "slide": "s1", "layout": "slide", "reveal": [0.4, 1.9, 3.6]}
+```
+
+- `slide`: the id from `work/slides.json`; `layout`: the plan's (`slide`, `slide_split`,
+  `slide_full`). The slide's segment(s) cover its words: split the keep row at word gaps
+  (`out` of one = `in` of the next is a join, not a cut) so the slide starts on its first
+  word and ends after its last one. A slide over several consecutive segments keeps its
+  animation running (no restart at the cut): give each the same `slide` and `layout`.
+- `reveal` (only `bullets`, `steps`, `timeline`, `bar_chart`, `compare`): one time per
+  build step, in seconds **from the segment's `in_src`** (its `in` before snapping), each
+  on the word that names that step (`work/words.json` `t0` minus the segment's in). Use
+  the words exactly; never guess. Without `reveal` the steps build evenly.
+- **Never change a slide's text or template** and never add a slide the plan does not have:
+  `work/slides.json` stays as approved (the run fails otherwise). A slide whose words were
+  cut by the cut style: leave it out and say so under *Deviations from the plan*.
+- Slides contain no screen content: personal-data `redact` blocks are not needed on a
+  slide segment, and a slide never shows while a redaction applies to the same moment
+  unless that segment is the slide's.
+- `videocut tool slides check` (ids in the EDL exist, assets exist) after writing them;
+  `videocut tool slides render` before every `render` (one clip per slide, length from the
+  EDL), and again after every change of a slide segment.
+- verify checks slide segments for text that does not fit, reading time (≥ 0.25 s per
+  word on the slide + 1 s) and a speaker bubble covering slide text: lengthen the segment
+  to the next word gap, or switch the layout as the plan allows; report what you changed.
+
 Then `videocut tool edl snap` and `videocut tool edl check`. Fix every reported path until
 it passes. `cut_in_speech` (error) means an `in`/`out` lies in full speech: a word is
 clipped there. Move it to the word gap before/after (`videocut tool sheet burst <t>`),
@@ -162,7 +193,8 @@ blink), then snap again. After every change of `in`/`out`: snap, then check.
 
 Each round:
 
-1. `videocut tool render --preview` (fast, half size).
+1. `videocut tool render --preview` (fast, half size; with slides after
+   `videocut tool slides render`).
 2. `videocut tool verify`. Its summary lists `flagged` cuts (`click`, `visual_jump` = a jump
    far larger than the other cuts, `blink_at_cut`) and `failed` global checks (duration, black/frozen
    stretches, size). `speech_clipped` is a hard failure: a word is cut off at that output
@@ -189,7 +221,8 @@ render are in output time; map them back to segments with the running sum of seg
 
 ## 3. Final render
 
-`videocut tool render` (full size, two-pass loudness) and `videocut tool verify`. Do not read
+`videocut tool render` (full size, two-pass loudness; with slides after
+`videocut tool slides render`) and `videocut tool verify`. Do not read
 more images here unless something new is flagged.
 
 ## 4. Write `work/cut_report.md`
@@ -200,6 +233,8 @@ more images here unless something new is flagged.
 Output: out/reel.mp4 · <duration> s · <n> segments · cut style: <style> · verify: ok | not ok
 ## Rounds
 1. <what verify said> → <what you changed>
+## Slides
+- <id> at output <t0>–<t1> s · <template> · <layout> · reveal on "<word>", …
 ## Deviations from the plan
 - <and why>
 ## Open doubts for the human

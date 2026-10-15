@@ -83,6 +83,18 @@ Typical requests and the edit (segment times, `zoom_keys`, `screen_zoom`, `redac
   the default; never write `fade_ms`, it is legacy).
 - **An overlay** (wrong text, too early, remove it) → that item of `overlays`; text only
   from what is spoken, never a new claim, the brand's `voice` (`videocut tool brand show`).
+- **A slide** (the `slide` of the segment `located.segment` in `work/edl.json`, or the
+  slide whose words the feedback names; ids in `work/slides.json`):
+  - *wrong text or number* → that slide's `content` in `work/slides.json`, only words that
+    were spoken or that the feedback gives (never a new claim of your own), within the
+    template's limits; `videocut tool slides check`.
+  - *remove it* → drop `slide`, `layout` and `reveal` from its segment(s) (they become
+    `face`, or the view they had in a demo) and the slide from `work/slides.json`.
+  - *earlier / later / longer* → move the slide segment boundary to another word gap
+    (split or join segments; keep `slide` on every segment it spans), then snap; adjust
+    `reveal` (seconds from the segment's `in_src`) to the words.
+  - *another layout* → its segment(s) `layout` (`slide`, `slide_split`, `slide_full`).
+  After every slide change: `videocut tool slides render` before rendering.
 - **A caption typo** → the words of that caption group in `edl.json` `captions` (same
   times, only the spelling the human asked for).
 

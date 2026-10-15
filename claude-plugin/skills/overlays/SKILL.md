@@ -128,6 +128,13 @@ caption is drawn while the end card is on screen.
 A scene the renderer does not have is skipped (`skipped_scenes` in the summary); then pick
 another.
 
+**Slides** (segments with `"slide"` in `work/edl.json`): a slide is already on screen for
+those words. Never put a `keyword`, `number_card`, `list_item`, `bar_chart` or
+`split_compare` over a slide segment, nor one repeating the slide's words or numbers
+elsewhere; no overlay at all during a `slide_full` segment. Captions stay as they are
+(`videocut tool captions` places them). Never change `work/slides.json` or a slide segment
+(the run fails otherwise).
+
 ## 4. Render, check, fix (max 2 rounds)
 
 1. `videocut tool edl check` until it passes.
