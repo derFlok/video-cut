@@ -393,6 +393,56 @@ def test_delete_moves_the_job_to_trash(client):
     assert (Path(r.json()["trash"]) / "job.json").is_file()
 
 
+# ---------------------------------------------------------------- duplicate, title
+
+
+def test_duplicate_without_and_with_the_approval(client):
+    job = planned_job(candidates=[SCREEN])
+    red.decide(job, [1], "command")
+    approve_job(job)
+    r = client.post("/api/jobs/j1/duplicate", json={"title": "Zentrovia second take"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["id"] == "j1-copy-1" and d["copy_of"] == "j1" and d["title"] == "Zentrovia second take"
+    copy = jobs_root() / "j1-copy-1"
+    assert not is_approved(copy) and red.read_decision(copy) is None
+    detail = client.get("/api/jobs/j1-copy-1").json()
+    assert detail["approved"] is False and detail["redaction"]["decision"] is None
+    assert detail["copy_of"] == "j1" and detail["title"] == "Zentrovia second take"
+    assert is_approved(job)  # the original keeps its approval
+
+    r = client.post("/api/jobs/j1/duplicate", json={"keep_approval": True})
+    assert r.status_code == 200 and r.json()["id"] == "j1-copy-2"
+    copy2 = jobs_root() / "j1-copy-2"
+    assert is_approved(copy2) and red.valid_decision(copy2)["redact"] == [1]
+    assert client.get("/api/jobs/j1-copy-2").json()["redaction"]["decision"]["mode"] == "redact_all"
+    listed = {j["id"]: j for j in client.get("/api/jobs").json()}
+    assert listed["j1-copy-1"]["copy_of"] == "j1" and listed["j1"]["copy_of"] is None
+    assert client.post("/api/jobs/nope/duplicate", json={}).status_code == 404
+
+
+def test_duplicate_refused_while_a_run_is_busy(client, monkeypatch):
+    make_job()
+    monkeypatch.setattr(client.app.state.runs, "busy", lambda job_id: True)
+    r = client.post("/api/jobs/j1/duplicate", json={})
+    assert r.status_code == 409
+    assert not (jobs_root() / "j1-copy-1").exists()
+
+
+def test_title_overrides_the_plan_title(client):
+    job = make_job()
+    (job / "work" / "plan.json").write_text(json.dumps({"title": "Plan title"}))
+    assert client.get("/api/jobs/j1").json()["title"] == "Plan title"
+    r = client.put("/api/jobs/j1/title", json={"title": "  Zentrovia   explained "})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"id": "j1", "title": "Zentrovia explained"}
+    assert client.get("/api/jobs/j1").json()["title"] == "Zentrovia explained"
+    assert client.get("/api/jobs").json()[0]["title"] == "Zentrovia explained"
+    assert client.put("/api/jobs/j1/title", json={"title": ""}).status_code == 422
+    assert client.put("/api/jobs/j1/title", json={"title": "   "}).status_code == 400
+    assert client.put("/api/jobs/j1/title", json={"title": "x" * 121}).status_code == 422
+
+
 # ---------------------------------------------------------------- plan
 
 

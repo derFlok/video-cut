@@ -35,7 +35,7 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>` | `job.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>` | `job.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]` | `brand.py` |
 | `captions [--force]` | `captions.py` |
 | `overlays [--no-render]` | `overlays.py` |
@@ -101,6 +101,14 @@ human). Approval stores the SHA-256 of `work/project.md`; `job show` reports `ap
 only while the plan is unchanged, so a new plan needs a new approval. The trusted record lives outside the
 agent-writable job folder, in `$VIDEOCUT_HOME/approvals/<id>.json` (job path, time, SHA-256);
 job.json only mirrors it for display, and `render` (also `--preview`) refuses without it.
+
+`job duplicate` (human only; `POST /api/jobs/{id}/duplicate`) makes `<id>-copy-N` with
+input/ hard-linked and work/, out/ copied (copy-on-write where possible; never hard links,
+tools rewrite files there). The approval record and the personal-data decision are copied
+(naming the new folder) only with `--keep-approval` / `keep_approval`, otherwise the copy
+needs its own approval; the overlay record always moves along (it is checked against the
+files' hashes). job.json gets `copy_of`; an optional `title` (`job title`, `PUT
+/api/jobs/{id}/title`) is the display title before the plan's.
 
 Ingest is idempotent: an output newer than its input is kept. DeepFilterNet runs with delay
 compensation (`-D`) so cleaned audio stays in sync with the picture. Transcribe keeps a
@@ -327,7 +335,9 @@ brand colours survive into the yuv420p H.264 reel at ΔE ≈ 1 (CIE76, read as B
 Per inner cut: a luma jump score, audio click numbers and a picture. A jump cut in a talking
 head is expected: a clear jump is info `jump_cut` (plus `reframe` when the EDL changes crop or
 zoom at that cut). The flag `visual_jump` is raised only for a jump ≥ 3× (and ≥ 8) the median jump score
-of the reel's other cuts without a reframe; `click` for an audio step. Overlays: per drawn box
+of the reel's other cuts without a reframe; `click` for an audible (≥ −45 dBFS), isolated
+sample step at the cut, measured against the audible audio around it (the denoiser's
+digital silence is no baseline). Overlays: per drawn box
 (`work/overlay_boxes.json`) `overlay_in_safe_zone` and `overlay_on_face` (> 2 % of the face
 box at any face sample while visible) and `overlay_overlap` (an overlay and a caption on
 screen together share > 10 % of the smaller box); the full-frame `cta_end` plate is exempt

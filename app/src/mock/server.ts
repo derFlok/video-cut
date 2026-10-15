@@ -372,6 +372,7 @@ export function createMock(opts: MockOptions = {}) {
       status: d.status,
       stage: d.stage,
       title: j.title,
+      copy_of: d.copy_of ?? null,
       thumb_url: d.status === "new" ? null : `/api/jobs/${d.id}/stills/work/plan_stills/view-1.jpg`,
       target_s: d.target_s ?? null,
     };
@@ -432,6 +433,30 @@ export function createMock(opts: MockOptions = {}) {
       if (!b && method === "DELETE") {
         state.jobs.delete(id);
         return json(200, { ok: true });
+      }
+      if (b === "duplicate" && method === "POST") {
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        const req = body as { title?: string; keep_approval?: boolean };
+        const base = id.replace(/-copy-\d+$/, "");
+        let n = 1;
+        while (state.jobs.has(`${base}-copy-${n}`)) n++;
+        const nid = `${base}-copy-${n}`;
+        const copy: MockJob = clone(job);
+        const keep = !!req.keep_approval && d.approved;
+        copy.created = new Date().toISOString();
+        copy.title = req.title?.trim() || job.title;
+        copy.events = [];
+        Object.assign(copy.detail, { id: nid, title: copy.title, copy_of: id, approved: keep });
+        if (!keep) copy.detail.redaction = { ...copy.detail.redaction, decision: null };
+        state.jobs.set(nid, copy);
+        return json(200, summary(copy));
+      }
+      if (b === "title" && method === "PUT") {
+        const title = String((body as { title?: string })?.title ?? "").trim();
+        if (!title) return json(422, { detail: "the title is empty" });
+        job.title = title;
+        d.title = title;
+        return json(200, { id, title });
       }
       if (b === "start" && method === "POST") {
         if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });

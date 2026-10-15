@@ -25,15 +25,18 @@ from ..tools import _format, _length, _style
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
+    TITLE_MAX,
     approve_job,
     approved_plan_json,
     brand_id,
+    duplicate_job,
     is_approved,
     project_sha,
     read_approval,
     revoke_approval,
     set_cut_style,
     set_target,
+    set_title,
 )
 from . import brands, state
 from .runs import Busy, Runs
@@ -211,6 +214,15 @@ class TargetBody(BaseModel):
     target_s: float | str | None = Field(default=None)
 
 
+class DuplicateBody(BaseModel):
+    title: str | None = Field(default=None, max_length=TITLE_MAX)
+    keep_approval: bool = False
+
+
+class TitleBody(BaseModel):
+    title: str = Field(min_length=1, max_length=TITLE_MAX)
+
+
 class ApproveBody(BaseModel):
     plan_sha: str
     redaction: Redaction | None = None
@@ -329,6 +341,35 @@ def create_app(
         shutil.move(str(job), str(dst))
         runs.channels.pop(job.name, None)
         return {"id": job.name, "trash": str(dst)}
+
+    @app.post("/api/jobs/{job_id}/duplicate")
+    @decision
+    def duplicate(job_id: str, body: DuplicateBody) -> dict:
+        """Copy the job to <id>-copy-N. The approval and the personal-data decision move
+        along only with keep_approval (the human ticks it); else the copy needs its own."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = duplicate_job(job, body.title, body.keep_approval)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        copy = state.job_dir(res["id"])
+        return state.summary(copy, runs.channels.get(copy.name))
+
+    @app.put("/api/jobs/{job_id}/title")
+    @decision
+    def put_title(job_id: str, body: TitleBody) -> dict:
+        """The display title (job.json "title"); it overrides the plan's title."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            set_title(job, body.title)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        return {
+            "id": job.name,
+            "title": state.title(job, json.loads((job / "job.json").read_text())),
+        }
 
     @app.post("/api/jobs/{job_id}/start")
     @decision

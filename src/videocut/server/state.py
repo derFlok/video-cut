@@ -88,9 +88,10 @@ def plan_json(job: Path) -> dict | None:
 
 
 def title(job: Path, data: dict) -> str:
-    t = (plan_json(job) or {}).get("title")
-    if isinstance(t, str) and t.strip():
-        return t.strip()[:120]
+    """The display title: the human's (job.json "title"), else the plan's, else the brief."""
+    for t in (data.get("title"), (plan_json(job) or {}).get("title")):
+        if isinstance(t, str) and t.strip():
+            return t.strip()[:120]
     brief = (data.get("brief") or "").strip().splitlines()
     return brief[0][:120] if brief else job.name
 
@@ -224,6 +225,7 @@ def summary(job: Path, ch: Channel | None) -> dict:
         "queued": ch is not None and ch.state == "queued",
         "gate": gate(job, data) if st != "running" else None,
         "title": title(job, data),
+        "copy_of": data.get("copy_of"),
         "thumb_url": f"/api/jobs/{job.name}/media/cover" if cover else None,
     }
 
@@ -281,6 +283,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "source_duration_s": source_duration(job),
         "lang": job_lang(data),
         "title": title(job, data),
+        "copy_of": data.get("copy_of"),
         "status": st,
         "stage": stage,
         # when the running stage started (ISO), for "since ... in this step" after a reload

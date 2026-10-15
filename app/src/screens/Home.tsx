@@ -50,7 +50,10 @@ export function Home() {
                   {j.thumb_url ? <img src={api.url(j.thumb_url)} alt="" loading="lazy" /> : <span className="thumb-empty" />}
                 </span>
                 <span className="jobcard-body">
-                  <span className="jobcard-title">{j.title || t("home.untitled")}</span>
+                  <span className="jobcard-title">
+                    {j.title || t("home.untitled")}
+                    {j.copy_of && <span className="badge badge-copy">{t("job.copy.badge")}</span>}
+                  </span>
                   <span className="jobcard-meta">
                     <span>{typeName(j.type)}</span>
                     {j.format && j.format !== "auto" && (

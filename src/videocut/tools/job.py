@@ -1,7 +1,8 @@
-"""`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style|target`: create
-a job folder, inspect it, approve its plan, decide which personal-data candidates are demo
-data (human only, src/videocut/redaction.py), set its brand, its screen recording, its output
-format, its cut style or its target length.
+"""`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style|target|duplicate|
+title`: create a job folder, inspect it, approve its plan, decide which personal-data
+candidates are demo data (human only, src/videocut/redaction.py), set its brand, its screen
+recording, its output format, its cut style or its target length, duplicate it or give it a
+display title.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -18,7 +19,9 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                by `run` after every plan run; another target makes the plan stale),
                lang (optional language of the plan's and reports' human-facing text:
                "de" | "en"; absent: "de"),
-               approval {at, project_sha256, target_s}: a display copy only, never trusted
+               approval {at, project_sha256, target_s}: a display copy only, never trusted,
+               title (optional display title set by the human; overrides the plan's title),
+               copy_of (the id of the job this one was duplicated from)
     input/     the recording (hard link or copy, never moved) and other uploads
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
     out/       finished renders
@@ -29,6 +32,13 @@ matched against the current work/project.md and the job's current target length,
 approved. A changed target length changes what the plan must contain (unlike the format or
 the cut style): `job target` revokes the approval, the plan stays stale until a plan run
 made for the new target (job.json "plan_target"), and a stale plan cannot be approved.
+
+`job duplicate` makes <id>-copy-N: input/ hard-linked (inputs are never written in place),
+work/ and out/ copied (copy-on-write clones where the filesystem has them; tools rewrite
+files there, so never hard links). The approval and the personal-data decision are human
+decisions about the original folder: the copy gets neither unless the human passes
+--keep-approval, it needs its own approval otherwise. The overlay record (provenance of
+work/overlay*, checked against file hashes) always moves along.
 """
 
 import hashlib
@@ -36,11 +46,14 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
 from .. import brand
 from .. import redaction as red
+from ..paths import state_dir
 from . import _format, _length, _style
 from .common import (
     ID_RE,
@@ -686,6 +699,138 @@ def approve(args) -> dict:
     return {"job": str(job), "status": data["status"], **data["approval"]}
 
 
+TITLE_MAX = 120
+COPY_RE = re.compile(r"-copy-\d+$")
+
+
+def _clone_tree(src: Path, dst: Path) -> None:
+    """Copy the folder `src` to `dst` (must not exist), as copy-on-write clones when the
+    filesystem can (APFS, btrfs, XFS), else as plain copies."""
+    if not src.is_dir():
+        dst.mkdir(parents=True)
+        return
+    flag = ["-c"] if sys.platform == "darwin" else ["--reflink=auto"]
+    try:
+        r = subprocess.run(["cp", *flag, "-R", str(src), str(dst)], capture_output=True)
+        ok = r.returncode == 0
+    except OSError:
+        ok = False
+    if not ok:
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(src, dst, symlinks=True)
+
+
+def copy_id(job_id: str, taken=lambda i: (jobs_root() / i).exists()) -> str:
+    """<id>-copy-N with the smallest free N (a copy of a copy counts on from its base)."""
+    base = COPY_RE.sub("", job_id)
+    n = 1
+    while True:
+        suffix = f"-copy-{n}"
+        cand = base[: 80 - len(suffix)].rstrip("-._") + suffix
+        if not taken(cand):
+            return cand
+        n += 1
+
+
+def title_arg(value) -> str:
+    t = " ".join(str(value or "").split())
+    if not t:
+        raise ToolError("the title is empty")
+    if len(t) > TITLE_MAX:
+        raise ToolError(f"the title is longer than {TITLE_MAX} characters")
+    return t
+
+
+def _moved_record(src: Path, dst: Path, job: Path) -> None:
+    """Copy a record kept outside the job folder, naming the new folder in "job"."""
+    try:
+        rec = json.loads(src.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(rec, dict):
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    write_json(dst, {**rec, "job": str(job.resolve())})
+
+
+def duplicate_job(job: Path, title: str | None = None, keep_approval: bool = False) -> dict:
+    """Duplicate the job folder `job` (see the module docstring); the new job's summary."""
+    data = read_job(job)
+    title = title_arg(title) if title is not None else None
+    new_id = copy_id(job.name)
+    dst = jobs_root() / new_id
+    try:
+        (dst / "input").mkdir(parents=True)
+        for f in sorted((job / "input").rglob("*")):
+            rel = f.relative_to(job / "input")
+            if f.is_dir():
+                (dst / "input" / rel).mkdir(parents=True, exist_ok=True)
+            elif f.is_file():
+                (dst / "input" / rel).parent.mkdir(parents=True, exist_ok=True)
+                _link_or_copy(f, dst / "input" / rel)
+        for d in ("work", "out"):
+            _clone_tree(job / d, dst / d)
+    except OSError as e:  # e.g. disk full: leave no half-made copy
+        shutil.rmtree(dst, ignore_errors=True)
+        raise ToolError(f"could not duplicate {job.name}: {e}") from None
+    now = datetime.now().astimezone()
+    copy = {**data, "id": new_id, "created": now.isoformat(timespec="seconds"),
+            "copy_of": job.name}  # fmt: skip
+    if title is not None:
+        copy["title"] = title
+    kept = keep_approval and read_approval(job) is not None
+    if not kept:
+        copy.pop("approval", None)
+        if copy.get("status") == "approved":
+            copy["status"] = "ingested"
+    # A deleted job leaves its records outside the folder (approvals/, state/<id>/); a
+    # reused copy id must never inherit them.
+    approval_path(dst).unlink(missing_ok=True)
+    shutil.rmtree(state_dir() / new_id, ignore_errors=True)
+    write_json(dst / JOB_FILE, copy)
+    if kept:
+        _moved_record(approval_path(job), approval_path(dst), dst)
+    if keep_approval:
+        _moved_record(red.decision_path(job), red.decision_path(dst), dst)
+    from .overlays import record_path  # overlays imports this module
+
+    _moved_record(record_path(job), record_path(dst), dst)
+    return {
+        "job": str(dst),
+        "id": new_id,
+        "copy_of": job.name,
+        "title": copy.get("title"),
+        "approval_kept": kept,
+        "approved": is_approved(dst),
+        "redaction_kept": keep_approval and red.read_decision(dst) is not None,
+    }
+
+
+def duplicate(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human duplicates a job (not available inside an agent run)")
+    job = resolve_job(args.job_ref or args.job)
+    res = duplicate_job(job, args.title, args.keep_approval)
+    print(res["job"])
+    if not res["approval_kept"] and read_approval(job) is not None:
+        print("the copy needs its own approval (pass --keep-approval to take it over)")
+    return res
+
+
+def set_title(job: Path, value) -> dict:
+    t = title_arg(value)
+    update_job(job, title=t)
+    return {"job": str(job), "id": job.name, "title": t}
+
+
+def title_cmd(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human sets the title (not available inside an agent run)")
+    res = set_title(resolve_job(args.job_ref or args.job), args.title)
+    print(f"{res['id']}: {res['title']}")
+    return res
+
+
 def register(subparsers) -> None:
     p = subparsers.add_parser("job", help="create or inspect a job folder")
     sub = p.add_subparsers(dest="job_cmd", required=True)
@@ -770,3 +915,24 @@ def register(subparsers) -> None:
     tg.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     tg.add_argument("target", metavar="LENGTH", help=TARGET_HELP)
     tg.set_defaults(handler=run_tool("job target", target_cmd))
+    du = sub.add_parser(
+        "duplicate",
+        help="copy a job to <id>-copy-N; the copy needs its own approval (human only)",
+        parents=[job_parent()],
+    )
+    du.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    du.add_argument("--title", help="display title of the copy")
+    du.add_argument(
+        "--keep-approval",
+        action="store_true",
+        help="take over the approval and the personal-data decision of the original",
+    )
+    du.set_defaults(handler=run_tool("job duplicate", duplicate))
+    ti = sub.add_parser(
+        "title",
+        help="set the display title of a job (overrides the plan's title; human only)",
+        parents=[job_parent()],
+    )
+    ti.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    ti.add_argument("title", help="the new title")
+    ti.set_defaults(handler=run_tool("job title", title_cmd))

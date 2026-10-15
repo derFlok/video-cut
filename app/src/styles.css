@@ -943,6 +943,64 @@ progress {
   min-width: 200px;
 }
 
+/* job header: title, rename, menu */
+.titlebar-main {
+  min-width: 0;
+}
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.title-edit {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.title-edit input {
+  width: min(480px, 100%);
+}
+.menu {
+  position: relative;
+}
+.menu-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px;
+}
+.menu-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.menu-list button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.badge-copy {
+  margin-left: 8px;
+  font-family: inherit;
+  font-weight: 500;
+}
+.modal-small {
+  width: min(520px, 100%);
+}
+
 /* personal data dialog */
 .modal-backdrop {
   position: fixed;

@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import clips
+import numpy as np
 import pytest
 from helpers import run_tool
 
@@ -137,6 +138,79 @@ def test_cut_outside_the_reel_is_a_failed_check(capsys, reel):
     job = _job(capsys, reel, [1.0, 9.0])
     code, s, _ = run_tool(capsys, "verify", "--job", str(job))
     assert code == 0 and "cuts_in_range" in s["failed"] and s["cuts"] == 1
+
+
+# ---------------------------------------------------------------- click calibration
+# Shapes of the false flags measured on two real reels (a denoised track is digital silence
+# between words): a soft mouth tick in a short stretch of room tone, a word fragment that
+# starts just before the cut. A real cut click is an audible sample step at the cut.
+
+R = verify.RATE
+CUT = R // 2
+
+
+def _db(v):
+    return 10 ** (v / 20)
+
+
+def _sines(level_db, silent_around=False):
+    """300 Hz up to the cut, then 440 Hz starting at its peak: a sample step at the cut."""
+    t = np.arange(R) / R
+    x = _db(level_db) * np.sin(2 * np.pi * 300 * t)
+    x[CUT:] = _db(level_db) * np.sin(2 * np.pi * 440 * (t[CUT:] - t[CUT]) + np.pi / 2)
+    if silent_around:  # only +-20 ms of sound, digital silence around it
+        x[: CUT - 960], x[CUT + 960 :] = 0.0, 0.0
+    return x.astype(np.float32)
+
+
+def _tick():
+    rng = np.random.default_rng(1)
+    x = np.zeros(R)
+    x[CUT - 480 : CUT + 1440] = rng.normal(0, _db(-62), 1920)  # the gate opens briefly
+    m = np.arange(240)
+    x[CUT + 100 : CUT + 340] += _db(-45) * np.exp(-m / 40) * np.sin(2 * np.pi * 3000 * m / R)
+    return x.astype(np.float32)
+
+
+def _word_onset():
+    rng = np.random.default_rng(2)
+    n = np.arange(1392)
+    v = sum(
+        np.sin(2 * np.pi * f * n / R + rng.uniform(0, 6)) / (i + 1)
+        for i, f in enumerate((140, 280, 420, 560, 700, 1200, 2400))
+    )
+    v = v / np.abs(v).max() * _db(-12) * np.minimum(1, n / 96) * np.minimum(1, (1391 - n) / 96)
+    x = np.zeros(R)
+    x[CUT - 432 : CUT + 960] = v  # starts 9 ms before the cut
+    return x.astype(np.float32)
+
+
+NO_VIS = {"diff_cut": None, "diff_around": None, "jump_score": None}
+
+
+def _clicks(x):
+    a = verify.audio_numbers(x, CUT / R)
+    return "click" in verify.cut_notes(NO_VIS, a, None)[0], a
+
+
+@pytest.mark.parametrize("make", [lambda: _sines(-10), lambda: _sines(-20, silent_around=True)])
+def test_a_real_sample_step_clicks(make):
+    flagged, a = _clicks(make())
+    assert flagged, a
+    assert a["click_peak"] >= 20 and a["step_sharpness"] >= 20 and a["step_db"] >= -30
+
+
+@pytest.mark.parametrize(
+    "make", [_tick, _word_onset, lambda: _sines(-55)], ids=["tick", "word_onset", "inaudible"]
+)
+def test_quiet_or_natural_sounds_next_to_silence_do_not_click(make):
+    flagged, a = _clicks(make())
+    assert not flagged, a
+
+
+def test_digital_silence_has_no_click():
+    flagged, a = _clicks(np.zeros(R, np.float32))
+    assert not flagged and a["click_peak"] == 0.0, a
 
 
 def _vis(score):
