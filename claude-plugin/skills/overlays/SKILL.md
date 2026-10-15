@@ -29,6 +29,9 @@ brand's look, render, check and fix. **You never change the cut.**
 - **Language:** overlay and caption text is what is spoken, in the language spoken (never
   translated). `videocut tool job show` → `lang` (`de` default, `en`) is the language of
   the free text of `work/overlay_report.md` (*Why*, rounds, doubts); headings stay as given.
+- **Human edits:** a word of `work/words.json` with `"edit"` is the human's text (`w_asr` was
+  heard): it is the truth, quote it as written, never change it back; `"hidden": true` stays out of
+  every caption. Never edit `words.json` text or `work/transcript_edits.jsonl` yourself.
 - **Vocabulary:** `videocut tool job show` → `vocabulary_effective` (`[{term, variants}]`,
   the brand's and this video's names; a human sets it, never you). Every text you write
   uses the canonical `term` exactly as given, never a variant: keywords, cards, lower thirds, titles, the

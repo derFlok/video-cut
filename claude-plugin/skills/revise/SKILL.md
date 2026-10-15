@@ -42,6 +42,9 @@ human's feedback is the authority for these changes; everything else stays as it
   sentence cut inside only for a filler or false start; tight: every pause above
   `keep_pause_s` goes). The free text of `work/revision.json` `summary` and of
   `work/revision_report.md` is in `lang` (`de` default); headings stay as given.
+- **Human edits:** a word of `work/words.json` with `"edit"` is the human's text (`w_asr` was
+  heard): it is the truth, quote it as written, never change it back; `"hidden": true` stays out of
+  every caption. Never edit `words.json` text or `work/transcript_edits.jsonl` yourself.
 - **Vocabulary:** `videocut tool job show` → `vocabulary_effective` (`[{term, variants}]`,
   the brand's and this video's names; a human sets it, never you). Every text you write
   uses the canonical `term` exactly as given, never a variant: every overlay, title, card and caption text you

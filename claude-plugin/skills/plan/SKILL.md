@@ -26,6 +26,9 @@ approves the plan before anything is cut. Workflow after browser-use/video-use (
   `work/plan.json` `title`, `core_message`, every `why`, `risks`, `change_note` and each
   personal-data `reason`. Quoted spoken words stay exactly as spoken (never translated);
   headings, table column names, field names and the scene/view/kind ids stay as given.
+- **Human edits:** a word of `work/words.json` with `"edit"` is the human's text (`w_asr` was
+  heard): it is the truth, quote it as written, never change it back; `"hidden": true` stays out of
+  every caption. Never edit `words.json` text or `work/transcript_edits.jsonl` yourself.
 - **Vocabulary:** `videocut tool job show` → `vocabulary_effective` (`[{term, variants}]`,
   the brand's and this video's names; a human sets it, never you). Every text you write
   uses the canonical `term` exactly as given, never a variant: the working title, hook, core message, overlay
