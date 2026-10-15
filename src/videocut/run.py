@@ -43,6 +43,11 @@ for "cut again with the approved plan" (the app's /recut: cut + overlays, no new
 the plan contains: a plan made for another length is stale, its approval is revoked, and the
 run plans again (with `--plan-feedback`, the revise-the-plan run is told the new length);
 every plan run records the length it was made for (job.json "plan_target").
+`--slides-mode none|upload|auto|both` and `--slides-wish TEXT` set the job's slides (job.json
+"slides", tools/_job_slides.py; uploaded pages come from `tool job slides-import`). Like the
+target length they change what the plan contains: a plan made for other slides is planned
+again and needs a new approval (job.json "plan_slides"). The cut and overlay runs must keep
+the approved slides' content (work/slides.json against the approved work/plan.json).
 `--vocab "Term=variant,..."` gives a new job its transcript vocabulary (job.json
 "vocabulary", tools/vocab.py); transcribe applies it together with the brand's.
 The overlay stage runs when `--brand` is given or when the brand's overlays are not done for
@@ -69,7 +74,7 @@ from . import agent
 from . import redaction as red
 from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
-from .tools import _format, _length, _redact_style, _style
+from .tools import _format, _job_slides, _length, _redact_style, _style
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
     approve_job,
@@ -128,6 +133,10 @@ STYLE_NOTE = (
     "the audio {xfade_ms} ms at every cut. Human-facing text (plan, reports): {lang}."
 )
 TARGET_NOTE = ' Target length (job.json "target_s", a human sets it): {note}.'
+SLIDES_NOTE = (
+    ' Slides (job.json "slides", a human sets them): mode {mode}, {pages} uploaded page(s)'
+    "{wish}; `videocut tool job show` -> slides."
+)
 TARGET_CHANGED = (
     " The human changed the target length since this plan was made (it was made for "
     "{old}, now: {new}): fit the keep list to the new length (never pad; if the material "
@@ -725,7 +734,51 @@ def format_note(job: Path) -> str:
         FORMAT_NOTE.format(fmt=fmt, w=w, h=h)
         + STYLE_NOTE.format(name=resolved_style(data), splice=splice, lang=LANG_NAMES[lang], **st)
         + TARGET_NOTE.format(note=_length.describe(data))
+        + slides_note(job, data)
     )
+
+
+def slides_note(job: Path, data: dict) -> str:
+    sl = _job_slides.view(job, data)
+    if sl["mode"] == "none":
+        return ""
+    wish = " and a wish from the human" if sl["wish"] else ""
+    return SLIDES_NOTE.format(mode=sl["mode"], pages=len(sl["pages"]), wish=wish)
+
+
+def slides_kept(job: Path) -> str | None:
+    """Why work/slides.json does not show what the human approved (None: it does). The
+    approved work/plan.json lists each slide's template and content; every slide the EDL
+    shows must be one of them, unchanged. A plan approved as markdown only (no plan.json
+    the human saw) is not checked: there is nothing structured to compare."""
+    from .tools.job import approved_plan_json
+
+    if not approved_plan_json(job):
+        return None
+    try:
+        plan = json.loads((job / "work" / "plan.json").read_text())
+        edl = json.loads((job / "work" / "edl.json").read_text())
+    except (OSError, ValueError):
+        return None
+    used = {s.get("slide") for s in edl.get("segments") or [] if isinstance(s, dict)} - {None}
+    if not used:
+        return None
+    approved = {
+        s.get("id"): (s.get("template"), s.get("content"))
+        for s in plan.get("slides") or []
+        if isinstance(s, dict)
+    }
+    try:
+        have = json.loads((job / "work" / "slides.json").read_text()).get("slides") or []
+    except (OSError, ValueError, AttributeError):
+        return "work/slides.json is missing or unreadable"
+    have = {s.get("id"): (s.get("template"), s.get("content")) for s in have if isinstance(s, dict)}
+    for sid in sorted(map(str, used)):
+        if sid not in approved:
+            return f"the EDL shows slide {sid}, which is not in the approved plan"
+        if have.get(sid) != approved[sid]:
+            return f"slide {sid} in work/slides.json differs from the approved plan"
+    return None
 
 
 def stale_why(job: Path) -> str:
@@ -775,6 +828,7 @@ REVISION_FILES = [
     "work/project.md",
     "work/plan.json",
     "work/redaction.json",
+    "work/slides.json",
     "work/overlays.json",
     "work/overlay.mov",
     "work/overlay_boxes.json",
@@ -1242,24 +1296,33 @@ def run(
     target: str | None = None,
     vocab: list[str] | None = None,
     redact_style: str | None = None,
+    slides_mode: str | None = None,
+    slides_wish: str | None = None,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
-              format_, cut_style, target, vocab or None, redact_style)  # fmt: skip
+              format_, cut_style, target, vocab or None, redact_style, slides_mode,
+              slides_wish)  # fmt: skip
     if feedback is not None and any(v is not None for v in others):
         raise RunError(
             "--feedback revises the finished reel; it cannot be combined with --plan-feedback, "
             "--replan, --recut, --brand, --type, --brief, --asset, --screen, --format, "
-            "--cut-style, --target, --vocab or --redact-style"
+            "--cut-style, --target, --vocab, --redact-style, --slides-mode or --slides-wish"
         )
     if redact_style is not None:
         _check_redact_style(redact_style)
+    if slides_mode is not None:
+        _job_slides.parse_mode(slides_mode)  # before a job is made
+    if slides_wish is not None:
+        _job_slides.parse_wish(slides_wish)
     job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target, vocab)
     if redact_style is not None:
         set_redact_style(job, redact_style, say)  # a reel in another style goes stale
+    if slides_mode is not None or slides_wish is not None:
+        _job_slides.set_slides(job, slides_mode, slides_wish, say)  # a plan for others: stale
     say(f"job: {job}")
     if feedback is not None:
         return revise(job, feedback, at_s, max_turns, say)
@@ -1273,6 +1336,10 @@ def run(
     if target_changed and not replan:
         old = _length.label(plan_made_for(read_job(job)))
         say(f"plan: work/project.md was made for the target length {old}; planning again")
+        replan = True
+    slides_changed = _job_slides.plan_stale(job)
+    if slides_changed and not replan:
+        say("plan: work/project.md was made for other slides; planning again")
         replan = True
     if brand:
         update_job(job, brand=brand_id(brand))
@@ -1306,6 +1373,7 @@ def run(
                 request.unlink(missing_ok=True)  # never a stale request in a fresh plan run
             try:
                 planned_for = read_job(job).get("target_s")  # what the prompt asked for
+                slides_for = _job_slides.signature(job)
                 res = claude(job, "plan", prompt, max_turns, None, say)
             finally:
                 request.unlink(missing_ok=True)
@@ -1318,6 +1386,7 @@ def run(
             if _mtime(edl) != edl_before or _snapshot(job / "out") != out_before:
                 raise RunError("the plan run wrote an EDL or rendered; it must only plan")
             stamp_plan_target(job, planned_for)  # the target this plan run was asked for
+            _job_slides.stamp_plan(job, slides_for)  # and the slides
             if plan_target_stale(job):
                 say("plan: the target length changed during the plan run; plan again")
             plan_session, plan_sha = res.session_id, project_sha(job)
@@ -1349,12 +1418,15 @@ def run(
         claude(job, "cut", prompt, max_turns, resume, say)
         if project_sha(job) != approved_sha:
             raise RunError("work/project.md changed during the cut run; approve it again")
+        if why := slides_kept(job):
+            raise RunError(f"the cut run changed the approved slides: {why}")
         _final_verify(job, started, "cut")
         record_cut(job, approved_sha)
 
     job_brand = read_job(job).get("brand")
     if job_brand and (brand or not overlays_done(job, job_brand)):
         cut_sha = segments_sha(job)
+        slides_sha = _file_sha(job / "work" / "slides.json")
         started = _fs_now(job)
         pending = read_job(job).get("overlays_pending")
         same_plan = isinstance(pending, dict) and pending.get("project_sha256") == approved_sha
@@ -1390,6 +1462,8 @@ def run(
             raise RunError(
                 "the overlay run changed the cut (EDL segments); it may only add overlays"
             )
+        if _file_sha(job / "work" / "slides.json") != slides_sha:
+            raise RunError("the overlay run changed work/slides.json; it may only add overlays")
         verify = _final_verify(job, started, "overlay")
         render = json.loads((job / "out" / "render.json").read_text())
         if not render.get("overlay"):
@@ -1454,6 +1528,8 @@ def main(args) -> int:
             target=args.target_length,
             vocab=args.vocab,
             redact_style=args.redact_style,
+            slides_mode=args.slides_mode,
+            slides_wish=args.slides_wish,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

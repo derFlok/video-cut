@@ -1,8 +1,9 @@
 """`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style|target|duplicate|
-title|redact-style|vocab`: create a job folder, inspect it, approve its plan, decide which
-personal-data candidates are demo data (human only, src/videocut/redaction.py), set its brand,
-its screen recording, its output format, its cut style, its target length or how personal
-data is hidden, duplicate it, give it a display title, or edit its transcript vocabulary.
+title|redact-style|vocab|slides|slides-import`: create a job folder, inspect it, approve its
+plan, decide which personal-data candidates are demo data (human only,
+src/videocut/redaction.py), set its brand, its screen recording, its output format, its cut
+style, its target length or how personal data is hidden, duplicate it, give it a display
+title, edit its transcript vocabulary, or set its slides and import the human's own pages.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -24,9 +25,12 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                approval {at, project_sha256, target_s}: a display copy only, never trusted,
                title (optional display title set by the human; overrides the plan's title),
                copy_of (the id of the job this one was duplicated from),
+               slides (optional {mode: none|upload|auto|both, wish}; absent: none;
+               plan_slides records what the plan was made for; _job_slides.py),
                vocabulary (optional transcript vocabulary of this video, tools/vocab.py:
                [{term, variants, note?}]; merged with the brand's, the job wins),
-    input/     the recording (hard link or copy, never moved) and other uploads
+    input/     the recording (hard link or copy, never moved) and other uploads;
+               slides/page_NN.png: the human's own slide pages (job slides-import)
     work/      intermediate artefacts (probe.json, audio.wav, proxy.mp4, edl.json, ...)
     out/       finished renders
 
@@ -58,7 +62,7 @@ from pathlib import Path
 from .. import brand
 from .. import redaction as red
 from ..paths import state_dir
-from . import _format, _length, _redact_style, _style, vocab
+from . import _format, _job_slides, _length, _redact_style, _style, vocab
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -212,6 +216,10 @@ def approve_job(job: Path) -> dict:
             f"the plan was made for the target length {_length.label(plan_made_for(data))}, "
             f"the job now asks for {_length.label(data.get('target_s'))}: plan again "
             f"(`videocut run {job.name} --replan`)"
+        )
+    if _job_slides.plan_stale(job, data):
+        raise ToolError(
+            f"the plan was made for other slides: plan again (`videocut run {job.name} --replan`)"
         )
     try:
         cands = red.load(job) or []  # what the human saw; stays redacted (redaction.enforced)
@@ -682,6 +690,12 @@ def show(args) -> dict:
     except ToolError as e:  # show stays usable; render and verify refuse the job
         out |= {"redact_style": "invalid", "redact_style_error": str(e)}
     print(f"personal data shown as: {out['redact_style']}")
+    out["slides"] = _job_slides.view(job, data)
+    sl = out["slides"]
+    if sl["mode"] != "none":
+        print(f"slides: {sl['mode']}, {len(sl['pages'])} uploaded page(s)"
+              + (f"; wish: {sl['wish']}" if sl["wish"] else "")
+              + ("; the plan was made for other slides, stale" if sl["stale"] else ""))
     return out
 
 
@@ -959,6 +973,7 @@ def register(subparsers) -> None:
     ti.set_defaults(handler=run_tool("job title", title_cmd))
     vocab.register_job(sub)
     _register_redact_style(sub)
+    _job_slides.register(sub, job_parent)
 
 
 # --- redaction style (_redact_style.py) ----------------------------------------------------

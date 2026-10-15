@@ -1,4 +1,5 @@
-"""`videocut tool sheet contact|burst|timeline|screen`: the pictures Claude uses to "see".
+"""`videocut tool sheet contact|burst|timeline|screen|plan|assets|slides`: the pictures
+Claude uses to "see".
 
 contact:   3x3 contact sheets over work/proxy.mp4, one tile every N seconds
            -> work/sheets/contact_NN.jpg
@@ -20,6 +21,9 @@ plan:      one still per view row and per personal-data candidate of work/plan.j
 assets:    the job's images (job.json "assets", e.g. screenshots of a demo) as numbered
            thumbnails, ASSETS_PER_SHEET per sheet -> work/sheets/assets_NN.jpg; the summary
            maps each number to its file and size
+slides:    the human's uploaded slide pages (input/slides/page_NN.png) the same way ->
+           work/sheets/slides_NN.jpg; the summary adds the text on each page (local text
+           recognition, macOS Vision; null without it)
 
 Every tile carries its source time and frame number ("mm:ss.ss · f<frame>"). Sheets stay
 within the image budget of docs/BRIEF.md §6 (<= 1080x1920, never more than 2000 px a side).
@@ -490,9 +494,19 @@ def assets_sheet(args) -> dict:
             files.append((str(rel), p))
     if not files:
         raise ToolError('the job has no images (job.json "assets"; `job new --asset FILE...`)')
+    items, sheets, labels = _numbered_sheets(job, files, "assets")
+    print(f"{len(files)} images on {len(sheets)} sheet(s): " + ", ".join(sheets))
+    for it in items:
+        print(f"  {it['n']:>2}  {it['file']}  {it['size'][0]}x{it['size'][1]} {it['orientation']}")
+    return {"sheets": sheets, "images": items, "labels": labels}
+
+
+def _numbered_sheets(job: Path, files: list[tuple[str, Path]], prefix: str):
+    """Numbered thumbnails of `files` [(rel, path)], ASSETS_PER_SHEET per sheet, as
+    work/sheets/<prefix>_NN.jpg; (items, sheet paths, labels drawn)."""
     font = im.find_font()
     dest = _sheets_dir(job)
-    for old in dest.glob("assets_*.jpg"):
+    for old in dest.glob(f"{prefix}_*.jpg"):
         old.unlink()
     items, sheets = [], []
     for k0 in range(0, len(files), ASSETS_PER_SHEET):
@@ -521,13 +535,58 @@ def assets_sheet(args) -> dict:
             if n > 1
             else "[a0]null[out]"
         )
-        name = f"assets_{len(sheets) + 1:02d}.jpg"
+        name = f"{prefix}_{len(sheets) + 1:02d}.jpg"
         (f,) = im.render_jpegs(inputs, ";".join(chains) + ";" + stack, dest, [name])
         sheets.append(str(f.relative_to(job)))
-    print(f"{len(files)} images on {len(sheets)} sheet(s): " + ", ".join(sheets))
+    return items, sheets, font is not None
+
+
+SLIDE_TEXT_MAX = 600  # characters of recognised text per page in the summary
+
+
+def _page_text(path: Path) -> str | None:
+    """The text on an uploaded page (local text recognition), None without it."""
+    from . import _ocr
+    from .redact import image_rgb
+
+    if not _ocr.available():
+        return None
+    try:
+        lines = _ocr.recognize(image_rgb(path))
+    except (_ocr.OcrError, ToolError, ValueError, OSError):
+        return None
+    text = " / ".join(x["text"].strip() for x in lines if x.get("text", "").strip())
+    return text[:SLIDE_TEXT_MAX]
+
+
+def slides_sheet(args) -> dict:
+    """The human's uploaded slide pages (input/slides/page_NN.png) as numbered thumbnails
+    (work/sheets/slides_NN.jpg) plus the text on each page, read locally, so the plan can
+    match every page to the moment it belongs to with one image (or none)."""
+    from . import _job_slides
+
+    job = resolve_job(args.job)
+    rels = _job_slides.pages(job)
+    if not rels:
+        raise ToolError(
+            "the job has no uploaded slides (input/slides/; a human adds them with "
+            "`videocut tool job slides-import`)"
+        )
+    items, sheets, labels = _numbered_sheets(job, [(r, job / r) for r in rels], "slides")
+    texts = _ocr_pages(job, rels)
+    for it, text in zip(items, texts, strict=True):
+        it["page"] = it.pop("file")
+        it["text"] = text
+    print(f"{len(items)} slide page(s) on {len(sheets)} sheet(s): " + ", ".join(sheets))
     for it in items:
-        print(f"  {it['n']:>2}  {it['file']}  {it['size'][0]}x{it['size'][1]} {it['orientation']}")
-    return {"sheets": sheets, "images": items, "labels": font is not None}
+        print(f"  {it['n']:>2}  {it['page']}  {it['orientation']}  {it['text'] or ''}")
+    return {"sheets": sheets, "pages": items, "labels": labels, "text": texts[0] is not None}
+
+
+def _ocr_pages(job: Path, rels: list[str]) -> list[str | None]:
+    from . import _ocr
+
+    return _ocr.pmap(lambda r: _page_text(job / r), rels)
 
 
 # ---------------------------------------------------------------- plan stills
@@ -678,6 +737,11 @@ def register(subparsers) -> None:
         parents=[job_parent()],
     )  # fmt: skip
     a.set_defaults(handler=run_tool("sheet assets", assets_sheet))
+    sl = sub.add_parser(
+        "slides", help="numbered thumbnails and text of the human's uploaded slide pages",
+        parents=[job_parent()],
+    )  # fmt: skip
+    sl.set_defaults(handler=run_tool("sheet slides", slides_sheet))
     pl = sub.add_parser(
         "plan", help="stills of the plan's views and personal-data candidates",
         parents=[job_parent()],

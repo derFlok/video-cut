@@ -14,6 +14,9 @@ work/project.md that the plan run writes for the app.
      "overlays": [{"n": 1, "src": [t0, t1], "scene": "keyword", "text": "...", "why": "..."}],
      "personal_data": [{"id": 1, "kind": "email", "t0": t0, "t1": t1, "box": [...],
                         "reason": "...", "still": "work/plan_stills/pd_01.jpg"}],
+     "slides": [{"id": "s1", "template": "steps", "content": {...}, "t0": t0, "t1": t1,
+                 "layout": "slide", "why": "...", "source": "auto",
+                 "still": "work/slides/stills/s1.jpg"}],
      "risks": ["..."]}
 
 All times are source (camera) seconds. `views` is empty for a talking-head job.
@@ -22,7 +25,14 @@ after `videocut tool redact measure`); a screenshot candidate has "asset" instea
 Every e-mail, phone or name candidate names its "text" and every candidate with text is
 measured ("measured"), otherwise the check fails. `still`, `still_t` (camera s) and
 `still_boxes` (the boxes drawn on it: what will be covered) are filled in by
-`videocut tool sheet plan`. Prints one line per problem with its JSON path.
+`videocut tool sheet plan`.
+
+`slides` (optional; job.json "slides", tools/_job_slides.py) repeats work/slides.json (same
+ids, templates and content) with the source time of the words each slide illustrates
+(inside a kept range, no two at once) and its EDL layout; the job's slides mode limits what
+may be there (none: nothing; upload: only the human's pages, template "image"; auto: no
+"image"). `still` is the slide's preview (`videocut tool slides stills`). Prints one line
+per problem with its JSON path.
 """
 
 import json
@@ -30,7 +40,7 @@ from pathlib import Path
 
 from .. import redaction
 from ..edl import LAYOUTS
-from . import _format
+from . import _format, _job_slides, _slide_spec
 from .brand import SAMPLES
 from .common import ToolError, job_parent, read_job, resolve_job, run_tool
 
@@ -76,10 +86,12 @@ def _numbered(items: list, key: str) -> list[str]:
 
 def validate(
     data, fmt: str | None = None, duration: float | None = None, has_screen: bool = True,
-    candidates: list[dict] | None = None,
+    candidates: list[dict] | None = None, slides: dict | None = None,
 ) -> list[str]:  # fmt: skip
     """Problems in a plan.json dict; empty = valid. `fmt`: the job's output format;
-    `candidates`: work/redaction.json's list (None: no file) that personal_data must repeat."""
+    `candidates`: work/redaction.json's list (None: no file) that personal_data must repeat;
+    `slides`: {"mode", "pages", "file"} of the job (None: not checked against the job;
+    "file" = work/slides.json's data or None)."""
     if not isinstance(data, dict):
         return ["$: must be an object"]
     errs: list[str] = []
@@ -162,9 +174,94 @@ def validate(
         errs += _same_candidates(pd, candidates)
     errs += _unmeasured(candidates or [])
 
+    errs += _slide_errors(data, duration, slides)
+
     risks, e = _items(data, "risks")
     errs += e + [f"$.risks[{i}]: must be a string" for i, r in enumerate(risks) if not _text(r)]
     return errs
+
+
+SLIDES_FILE = "work/slides.json"
+
+
+def _slide_errors(data: dict, duration: float | None, job: dict | None) -> list[str]:
+    items, errs = _items(data, "slides")
+    mode = (job or {}).get("mode")
+    if items and mode == "none":
+        return ['$.slides: the job has no slides (job.json "slides" mode none); leave it empty']
+    keep = [it.get("src") for it in data.get("keep_list") or [] if isinstance(it, dict)]
+    keep = [k for k in keep if isinstance(k, list) and len(k) == 2 and all(map(_num, k))]
+    ids, spans = [], []
+    for i, it in enumerate(items):
+        p = f"$.slides[{i}]"
+        if not isinstance(it, dict):
+            errs.append(f"{p}: must be an object")
+            continue
+        sid = it.get("id")
+        if not (isinstance(sid, str) and _slide_spec.ID_RE.fullmatch(sid)):
+            errs.append(f'{p}.id: must be a short id like "s1"')
+        ids.append(sid)
+        errs += [f"{p}{m}" for m in _slide_spec.errors(it.get("template"), it.get("content"))]
+        if it.get("template") == "image":
+            asset = (it.get("content") or {}).get("asset")
+            if mode == "auto":
+                errs.append(f'{p}.template: "image" shows an uploaded page; the mode is auto')
+            elif job is not None and asset not in job.get("pages", []):
+                errs.append(f"{p}.content.asset: {asset!r} is not an uploaded page (input/slides/)")
+        elif mode == "upload":
+            errs.append(f'{p}.template: the mode is upload: only "image" (the human\'s pages)')
+        if it.get("source") is not None and it["source"] not in ("auto", "upload"):
+            errs.append(f'{p}.source: must be "auto" or "upload"')
+        src = [it.get("t0"), it.get("t1")]
+        e = _src_errors(src, f"{p}.t0/t1", duration)
+        errs += e
+        if not e:
+            spans.append((src[0], src[1], i))
+            if keep and not any(min(k[1], src[1]) - max(k[0], src[0]) > 0 for k in keep):
+                errs.append(f"{p}.t0/t1: the words it illustrates are not in the keep list")
+        if it.get("layout") not in _slide_spec.LAYOUTS:
+            errs.append(f"{p}.layout: must be one of {', '.join(_slide_spec.LAYOUTS)}")
+        if not _text(it.get("why")):
+            errs.append(f"{p}.why: must be a string")
+        if "still" in it and not isinstance(it["still"], str | None):
+            errs.append(f"{p}.still: must be a path")
+    if len(set(ids)) != len(ids):
+        errs.append("$.slides: ids must be unique")
+    spans.sort()
+    for (_, a1, i), (b0, _, j) in zip(spans, spans[1:], strict=False):
+        if b0 < a1:
+            errs.append(f"$.slides[{j}]: overlaps $.slides[{i}] (one slide at a time)")
+    if job is not None and items and not errs:
+        errs += _same_slides(items, job.get("file"))
+    return errs
+
+
+def _same_slides(items: list[dict], file: dict | None) -> list[str]:
+    """plan.json slides repeat work/slides.json (what is rendered is what was approved)."""
+    if not isinstance(file, dict) or not isinstance(file.get("slides"), list):
+        return [f"$.slides: lists {len(items)} slide(s) but {SLIDES_FILE} is missing or invalid"]
+    have = {s.get("id"): s for s in file["slides"] if isinstance(s, dict)}
+    errs = []
+    for i, it in enumerate(items):
+        s = have.get(it["id"])
+        if s is None:
+            errs.append(f"$.slides[{i}]: {it['id']} is not in {SLIDES_FILE}")
+        elif (s.get("template"), s.get("content")) != (it["template"], it["content"]):
+            errs.append(f"$.slides[{i}]: template/content differ from {SLIDES_FILE}")
+    return errs
+
+
+def slides_context(job: Path, meta: dict) -> dict:
+    """The job's slide settings for validate(): mode, uploaded pages, work/slides.json."""
+    try:
+        file = json.loads((job / SLIDES_FILE).read_text())
+    except (OSError, ValueError):
+        file = None
+    return {
+        "mode": _job_slides.stored(meta)["mode"],
+        "pages": _job_slides.pages(job),
+        "file": file,
+    }
 
 
 def _key(c: dict) -> tuple:
@@ -227,7 +324,7 @@ def check_job(job: Path, path: Path | None = None) -> tuple[dict, list[str]]:
         cands = redaction.load(job)
     except redaction.RedactionError as e:
         return data, [str(e)]
-    errs = validate(data, fmt, duration, bool(meta.get("screen")), cands)
+    errs = validate(data, fmt, duration, bool(meta.get("screen")), cands, slides_context(job, meta))
     return data, errs
 
 
@@ -249,6 +346,7 @@ def check(args) -> dict:
         "views": len(data.get("views") or []),
         "overlays": len(data.get("overlays") or []),
         "personal_data": len(data.get("personal_data") or []),
+        "slides": len(data.get("slides") or []),
         "stills": sum(
             1 for it in (data.get("views") or []) + (data.get("personal_data") or [])
             if isinstance(it, dict) and it.get("still")
