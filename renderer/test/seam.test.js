@@ -103,11 +103,12 @@ test("splitAtSeams: a caption group across the start or end of a seam view is cu
     { t0: 6.5, t1: 7.5, words: [w("f", 6.6), w("g", 6.8)] }, // across the end, no word after it
     { t0: 8.5, t1: 9.5, words: [w("h", 8.6), w("i", 9.2)] }, // a view without a seam: unchanged
     { t0: 6.8, t1: 8, words: [w("j", 6.85), w("k", 7.3), w("l", 7.6)] }, // 0.2 s before the end
+    { t0: 1, t1: 3.0004, words: [{ w: "m" }, w("n", 2)] }, // ends at the start (rounding)
   ];
   const out = splitAtSeams(caps, views);
   assert.deepEqual(
     out.map((c) => [c.t0, c.t1, c.words.map((x) => x.w).join("")]),
-    [[2, 3, "ab"], [3, 4, "cd"], [4, 5, "e"], [6.5, 7, "fg"], [8.5, 9.5, "hi"], [7, 8, "jkl"]],
+    [[2, 3, "ab"], [3, 4, "cd"], [4, 5, "e"], [6.5, 7, "fg"], [8.5, 9.5, "hi"], [7, 8, "jkl"], [1, 3.0004, "mn"]],
   );
   assert.equal(out[2], caps[1]);
 });

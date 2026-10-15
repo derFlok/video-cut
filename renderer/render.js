@@ -154,7 +154,7 @@ function pageMain(spec) {
     // The seam of a slide_split view on screen at some point in [t0, t1] (the first one):
     // {y, content (its hard boxes), parts (the slide parts it replaces as obstacles)}.
     seamDuring: (t0, t1) => {
-      const on = seams.filter((v) => v.t0 < t1 && v.t1 > t0);
+      const on = seams.filter((v) => v.t0 < t1 - 1e-3 && v.t1 > t0 + 1e-3); // not by rounding alone
       if (!on.length) return null;
       return { y: on[0].seam, content: on.map((v) => v.content), parts: on.map((v) => v.screen) };
     },

@@ -2,14 +2,17 @@
 // group on screen across that cut would sit on the seam in the other layout too (on the
 // face there), so each part is placed for its own layout. A word goes to the part its
 // start lies in; a part without words is dropped, a part shorter than MIN_PART gives its
-// words to the next part (the last one: to the one before) instead of flashing by.
+// words to the next part (the last one: to the one before) instead of flashing by (those
+// words show a moment late or end early: better than a block on the face). A word without
+// a time stays in the first part.
 const MIN_PART = 0.4; // s
+const EPS = 1e-3; // s: rounding of output times (a cut this close to an end is none)
 
 function splitAtSeams(captions, views) {
   const cuts = [...new Set(views.filter((v) => v.seam != null).flatMap((v) => [v.t0, v.t1]))].sort((a, b) => a - b);
   const out = [];
   for (const c of captions) {
-    const inner = cuts.filter((t) => t > c.t0 && t < c.t1);
+    const inner = cuts.filter((t) => t > c.t0 + EPS && t < c.t1 - EPS);
     if (!inner.length || !Array.isArray(c.words)) {
       out.push(c);
       continue;
@@ -19,7 +22,12 @@ function splitAtSeams(captions, views) {
     for (let k = 0; k + 1 < edges.length; k++) {
       const [a, b] = [edges[k], edges[k + 1]];
       const last = k + 2 === edges.length;
-      const words = c.words.filter((w) => (k === 0 || Number(w.t0) >= a) && (last || Number(w.t0) < b) && String(w.w || "").trim());
+      const words = c.words.filter((w) => {
+        const t = Number(w.t0);
+        if (!String(w.w || "").trim()) return false;
+        if (!Number.isFinite(t)) return k === 0;
+        return (k === 0 || t >= a) && (last || t < b);
+      });
       parts.push({ ...c, t0: a, t1: b, words });
     }
     for (let k = 0; k < parts.length && parts.length > 1; k++) {
