@@ -189,6 +189,11 @@ neuen Plan und eine neue Freigabe. Persönliche Daten auf deinen Seiten (ein Nam
 E-Mail-Adresse) stehen im Plan wie bei einem Screenshot; was markiert bleibt, wird im
 Video abgedeckt.
 
+Solange eine Folie zu sehen ist, liegt keine Karte und kein Stichwort darüber: die Folie
+trägt den Inhalt. Untertitel bleiben, wo du neben einer Folie sprichst: im Hoch- oder
+Quadratformat stehen sie auf der Linie zwischen Folie und dir, weg vom Folientext und von
+deinem Gesicht.
+
 ## Marken
 
 Video Cut bringt kein eigenes Branding mit. Du lädst deins hoch (Logo, Farben, Schriften, optional Brand-Guide und Beispielposts), und jedes Video passt sich daran an. Mehrere Marken nebeneinander sind möglich, pro Video wählst du eine.

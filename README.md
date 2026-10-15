@@ -205,6 +205,10 @@ the slides after planning needs a new plan and a new approval. Personal data on 
 an e-mail address) is listed in the plan like on a screenshot; what you leave marked is
 covered in the video.
 
+While a slide is on screen, no card or keyword is shown on top: the slide carries the
+content. Captions stay where you talk next to a slide: in a portrait or square video
+they sit on the line between the slide and you, clear of the slide's text and your face.
+
 ## Brands
 
 Video Cut ships without any branding. You upload your own (logo, colours, fonts, optionally a brand guide and example posts) and every video adapts to it. You can keep several brands side by side and pick one per video. See [`docs/BRIEF.md`](docs/BRIEF.md) §9.
