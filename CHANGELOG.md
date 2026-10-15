@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added — slides and animations (job flow, skills, app)
+- job.json `slides` {mode none|upload|auto|both, wish}: `videocut tool job slides`,
+  `videocut run --slides-mode --slides-wish`, the new-job form. Human only; a plan made
+  for other slides is stale (job.json `plan_slides`), the approval is revoked and `run`
+  plans again.
+- `videocut tool job slides-import <job> FILE... [--replace]`: the human's PDF pages and
+  images as `input/slides/page_NN.png` (1920 px long side), PDFs rasterised locally with
+  macOS CoreGraphics in a time-limited child process (`tools/_pdf.py`; no new download),
+  files judged by content. `videocut tool sheet slides`: numbered page sheets plus the
+  text of each page (local OCR).
+- `plan.json` `slides` validated by `plan check` (templates and text limits, keep rows,
+  one at a time, the job's mode, same as `work/slides.json`).
+- Skills: plan (when a slide helps, auto/both/upload, never invents content), cut (slide
+  segments, reveal times on the words), overlays (no card duplicating a slide), revise
+  (change, move, remove a slide), plan feedback on one slide.
+- Guards: a cut run may not show a slide outside the approved plan nor change its content;
+  an overlay run may not touch `work/slides.json`; revise backs it up.
+- API: `POST /api/jobs` takes `slides_mode`, `slides_wish` and `slides` files (≤ 30, ≤ 200 MB
+  each, PDF magic bytes or ffprobe); `plan/feedback` takes `slide`; job detail `slides`
+  with the slide moments of the reel; stills from `work/slides/stills/`.
+- App: "Folien & Animationen" in *Neues Video*, slide cards at the plan gate ("Folie
+  entfernen", a change per slide), slide marks under the result player (de/en).
+
 ### Added
 - Repository scaffold, Apache-2.0 licence, design brief (`docs/BRIEF.md`).
 - `start.sh`: installs pinned, checksum-verified tools into `./.tools` (uv, managed Python 3.12,

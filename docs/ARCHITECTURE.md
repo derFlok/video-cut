@@ -14,7 +14,7 @@
 | `app/` | local app UI source (React + TypeScript + Vite, vitest); built into `src/videocut/web/dist/` (not committed) by `videocut setup`; `app/e2e/` the browser end-to-end script |
 | `src/videocut/brand.py` | brand profiles: load, validate, resolve `brand.json` into design tokens |
 | `src/videocut/agent.py` | the restricted `claude` runner (see `SECURITY.md`) |
-| `claude-plugin/` | Claude Code plugin `video-cut` with the skills `ping`, `plan`, `cut`, `overlays`, `revise` |
+| `claude-plugin/` | Claude Code plugin `video-cut` with the skills `ping`, `plan`, `cut`, `overlays`, `revise` (slides in each) |
 | `src/videocut/tools/` | `videocut tool <name>`: one module per pipeline tool, used by Claude inside a job |
 | `src/videocut/edl.py` | EDL schema (dataclasses), validation with JSON paths, load/save |
 | `tests/clips.py` | generated test clips (macOS `say` + ffmpeg test pattern), no third-party media |
@@ -35,7 +35,7 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list` | `job.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list`, `job slides [job] [--mode] [--wish]`, `job slides-import <job> FILE… [--replace]` | `job.py`, `_job_slides.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]`, `brand vocab <id> add\|remove\|list` | `brand.py` |
 | `vocab show [job]`, `vocab apply [job]`, `vocab suggest [job] [--all]` | `vocab.py` |
 | `captions [--force]` | `captions.py` |
@@ -47,7 +47,7 @@
 | `face` | `face.py` |
 | `transcribe [--model turbo\|parakeet] [--language] [--no-align]`, `candidates` | `transcribe.py` |
 | `align [--no-candidates]` | `align.py` |
-| `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets` | `sheets.py` |
+| `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets`, `sheet slides` | `sheets.py` |
 | `edl check [file]`, `edl snap [--dry-run]`, `edl locate <t> [--source]` | `edl.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
@@ -59,7 +59,7 @@ framing, face track in output px, safe zones; shared by render, overlays and ver
 `_color.py` (HDR → SDR), `_layouts.py` (screen/pip/split geometry, zoom windows and their
 filter graph; shared by render, overlays and verify), `_verify_screen.py` (the product-demo
 checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes),
-`_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
+`_pdf.py` (PDF pages → PNG, macOS CoreGraphics in a child process), `_slide_spec.py` (slide templates and text limits for plan check), `_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
 snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
 (`speech_clipped`), `_style.py` (cut styles).
 
@@ -631,6 +631,60 @@ overlays adds); the overlay itself is not read back from the reel.
 on one numbered contact sheet (≤ 1080×1920, with sizes and orientation in the summary), so
 the plan can match each screenshot to its sentence with one image and propose
 `screenshot_frame` overlays with focus and redaction boxes.
+
+## Slides
+
+A job may show slides: data-driven templates in the brand's tokens, drawn by the canvas
+renderer (no agent-written code), or the human's own pages.
+
+**Settings (`tools/_job_slides.py`).** job.json `slides` = `{mode, wish}`: `none` (absent),
+`upload` (the human's pages only), `auto` (Claude proposes 0–N template slides for what is
+said, following the free-text `wish`, ≤ 2000 characters), `both`. Human only:
+`job slides <job> --mode … --wish …`, `videocut run --slides-mode --slides-wish`, the new-job
+form (`slides_mode`, `slides_wish`); refused inside an agent run. Like the target length it
+changes the plan's content: a plan run records what it was made for (job.json
+`plan_slides` {mode, wish, pages_sha256}); a change afterwards makes the plan stale
+(`job show` → `slides.stale`), revokes an approval, `approve` refuses, and the next `run`
+plans again. The plan/cut/revise prompts name mode and page count; the wish is read from
+`job show` (the skills treat it as content, never as an instruction).
+
+**The human's pages.** `job slides-import <job> FILE... [--replace]` (and the `slides` file
+field of `POST /api/jobs`, ≤ 30 files, ≤ 200 MB each) turns PDF pages and PNG/JPEG/WebP
+images into `input/slides/page_NN.png` at 1920 px on the long side, appended in order,
+all or nothing. Content decides, not the extension: a PDF by its magic bytes, an image by
+ffprobe (PNG/JPEG/WebP codecs only). PDFs are rasterised with macOS CoreGraphics through
+ctypes (`tools/_pdf.py`: crop box, page rotation, white background; no download, no
+package) in a child process (`python -I`) with a 120 s limit and ≤ 60 pages, so a hostile
+file cannot hang or crash the caller; password-protected PDFs are refused. `none` becomes
+`upload` and `auto` becomes `both` on import. `sheet slides` puts the pages on numbered
+contact sheets (`work/sheets/slides_NN.jpg`) with the text of each page read locally
+(Vision), so the plan matches pages to moments mostly by text.
+
+**Plan.** The plan skill writes `work/slides.json` (`{slides: [{id, template, content,
+source, why}]}`, checked by `slides check`) and `plan.json` `slides` (the same plus `t0`/`t1`,
+the source time of the words a slide illustrates, and `layout`); `plan check` validates the
+copy (`tools/_slide_spec.py`: templates, text limits; ids unique; inside a keep row; no two
+at once; mode none → none, upload → only `image` with an uploaded page, auto → no `image`)
+and that it repeats `work/slides.json`. `slides stills` writes the previews the plan gate
+shows (`work/slides/stills/`, served by the stills route). Content comes from the
+transcript or the wish only; overlay ideas never duplicate a slide.
+
+**Cut and guards.** The cut skill turns each slide into EDL segment fields (`slide`,
+`layout` `slide|slide_split|slide_full`, `reveal` on the words), runs `slides render`
+before `render`. `run` fails a cut run whose EDL shows a slide not in the approved
+`plan.json`, or whose `work/slides.json` changed an approved slide's template or content
+(`run.slides_kept`; a plan approved as markdown only is not compared), and an overlay
+run that touched `work/slides.json`. Revise may change, move or remove slides (the
+feedback is the authority); `work/slides.json` is backed up and restored with the other
+revision files.
+
+**App.** New job: "Folien & Animationen" (Keine / Eigene hochladen / Claude erstellt sie /
+Beides, files, "Was soll gezeigt werden?"). Plan gate: one card per slide (still, template
+in plain words, time and the keep row it belongs to, layout), "Folie entfernen" and a
+per-slide change, both `POST plan/feedback {text, slide}` (the id goes into
+`work/plan_feedback.json` `slide`; an unknown id is a 400). Job detail `slides` = `{mode,
+wish, pages, stale, marks}`; `marks` are the slide moments in output seconds from the EDL
+(consecutive segments of one slide merged), drawn as a strip under the result player.
 
 ## EDL (`src/videocut/edl.py`)
 
