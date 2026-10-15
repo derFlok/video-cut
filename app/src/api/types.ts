@@ -18,6 +18,35 @@ export const REDACT_STYLES: RedactStyle[] = ["auto", "blur", "crop", "block"];
 /** Target length of the video in seconds; null (or "auto" in requests) lets the server
  * decide: by type for talking heads, as long as needed for demos. */
 export type TargetChoice = number | null;
+
+/** Slides and animations of a job (job.json "slides"). */
+export type SlidesMode = "none" | "upload" | "auto" | "both";
+export const SLIDES_MODES: SlidesMode[] = ["none", "upload", "auto", "both"];
+export const SLIDE_WISH_MAX = 2000;
+export type SlideLayout = "slide" | "slide_split" | "slide_full";
+
+export interface PlanSlide {
+  id: string;
+  template: string;
+  content: Record<string, unknown>;
+  /** Source seconds of the words the slide illustrates. */
+  t0: number;
+  t1: number;
+  layout: SlideLayout | string;
+  why?: string;
+  source?: "auto" | "upload";
+  still?: string | null;
+}
+
+export interface JobSlides {
+  mode: SlidesMode;
+  wish: string;
+  pages: number;
+  /** The plan was made for other slide settings: plan again. */
+  stale: boolean;
+  /** Where the reel shows each slide (output seconds). */
+  marks: { id: string; t0: number; t1: number; layout?: string | null }[];
+}
 /** The range the plan aims for; null: no fixed length. */
 export interface TargetRange {
   min_s: number;
@@ -232,6 +261,7 @@ export interface JobDetail {
    * must be planned again before it can be approved. */
   plan_target_stale?: boolean;
   plan_target_s?: number | null;
+  slides?: JobSlides;
   /** Length of the camera recording (work/probe.json), for the duration hints. */
   source_duration_s?: number | null;
   has_screen?: boolean;
@@ -265,6 +295,7 @@ export interface PlanJson {
   views?: PlanView[];
   overlays?: { scene?: string; t0?: number; t1?: number; text?: string; [k: string]: unknown }[];
   personal_data?: PdCandidate[];
+  slides?: PlanSlide[];
   risks?: (string | { text?: string; [k: string]: unknown })[];
   change_note?: string;
   /** The target the plan was made for and its estimate of the output length (seconds). */

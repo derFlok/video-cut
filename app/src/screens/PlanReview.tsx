@@ -4,6 +4,7 @@ import type { PdCandidate, Plan, PlanJson, PlanKeep, RedactionDecision, RedactSt
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog } from "../components/LiveLog";
 import { Markdown } from "../components/Markdown";
+import { SlideCards } from "../components/Slides";
 import { TargetPanel } from "../components/TargetLength";
 import { clockFine, useI18n } from "../i18n";
 import type { Live } from "./JobPage";
@@ -69,7 +70,14 @@ export function PlanReview({ live }: { live: Live }) {
 
   const revising = asking || job.stage === "plan_revise";
   const approvable =
-    !job.approved && !live.running && !revising && plan !== null && job.status !== "running" && !job.plan_target_stale;
+    !job.approved &&
+    !live.running &&
+    !revising &&
+    plan !== null &&
+    job.status !== "running" &&
+    !job.plan_target_stale &&
+    !job.slides?.stale;
+  const canAsk = !job.approved && !revising && !live.running;
 
   const sendAsk = async (e: FormEvent) => {
     e.preventDefault();
@@ -77,7 +85,7 @@ export function PlanReview({ live }: { live: Live }) {
   };
 
   /** Plan feedback: Claude revises the plan (also "make the plan again" for a new target). */
-  const askClaude = async (text: string) => {
+  const askClaude = async (text: string, slide?: string) => {
     if (!text) return;
     setErr(null);
     setPrev(planRef.current?.plan ?? null);
@@ -85,7 +93,7 @@ export function PlanReview({ live }: { live: Live }) {
     setAsking(true);
     try {
       live.begin("plan_revise");
-      await api.planFeedback(job.id, text);
+      await api.planFeedback(job.id, text, slide);
       setAsk("");
     } catch (e2) {
       setAsking(false);
@@ -156,6 +164,12 @@ export function PlanReview({ live }: { live: Live }) {
 
       {plan && <TargetPanel live={live} plan={plan.plan} onReplan={(text) => void askClaude(text)} />}
 
+      {plan && job.slides?.stale && (
+        <p className="banner banner-warn" data-testid="slides-stale">
+          {t("slides.stale")}
+        </p>
+      )}
+
       {!plan && !revising && <p className="muted">{t("plan.none")}</p>}
 
       {plan && lastAsk && !revising && (
@@ -164,7 +178,19 @@ export function PlanReview({ live }: { live: Live }) {
         </div>
       )}
 
-      {plan && !editing && (plan.plan ? <StructuredPlan jobId={job.id} plan={plan.plan} changed={changed} /> : <Markdown source={plan.markdown} />)}
+      {plan &&
+        !editing &&
+        (plan.plan ? (
+          <StructuredPlan
+            jobId={job.id}
+            plan={plan.plan}
+            changed={changed}
+            canAsk={canAsk}
+            onSlide={(text, slide) => void askClaude(text, slide)}
+          />
+        ) : (
+          <Markdown source={plan.markdown} />
+        ))}
 
       {plan && plan.plan && !editing && (
         <details className="details" onToggle={(e) => setShowMd(e.currentTarget.open)}>
@@ -252,7 +278,19 @@ function riskText(r: PlanJson["risks"] extends (infer U)[] | undefined ? U : nev
   return typeof r === "string" ? r : (r?.text ?? JSON.stringify(r));
 }
 
-export function StructuredPlan({ jobId, plan, changed }: { jobId: string; plan: PlanJson; changed: Set<number> }) {
+export function StructuredPlan({
+  jobId,
+  plan,
+  changed,
+  canAsk = false,
+  onSlide = () => {},
+}: {
+  jobId: string;
+  plan: PlanJson;
+  changed: Set<number>;
+  canAsk?: boolean;
+  onSlide?: (text: string, slide: string) => void;
+}) {
   const { t } = useI18n();
   const core = plan.core_message ?? (plan as { core?: string }).core;
   const hook = typeof plan.hook === "string" ? plan.hook : plan.hook?.text;
@@ -323,6 +361,10 @@ export function StructuredPlan({ jobId, plan, changed }: { jobId: string; plan: 
             ))}
           </ul>
         </div>
+      )}
+
+      {plan.slides && plan.slides.length > 0 && (
+        <SlideCards jobId={jobId} slides={plan.slides} keep={plan.keep_list} canAsk={canAsk} onAsk={onSlide} />
       )}
 
       {plan.overlays && plan.overlays.length > 0 && (
