@@ -10,6 +10,12 @@
                     `redaction_missing` otherwise
                     (a block zoomed fully out of the view, or under a landscape/square
                     speaker bubble, has nothing to hide there; the bubble is left out)
+    text_cut        text a redaction cuts through: text recognition on output frames
+                    around each blocked or blurred box's planned position (before
+                    _redact_grow grew it) must read no line that overlaps it, and on the
+                    recording no line may cross an edge a crop cuts at (first, middle,
+                    last frame of the segment): flag `redaction_partial` (a failure:
+                    half a line stays readable next to or below the box)
     screen time     per screen segment one output frame (its middle) is compared with the
                     screen recording at the mapped screen time (camera time + offset_s)
                     and at +-0.5 s / +-1 s, through the same zoom window: flag
@@ -61,7 +67,7 @@ import numpy as np
 from .. import edl as edl_mod
 from .. import redaction as red_mod
 from ..paths import tool_env
-from . import _layouts, _ocr, _redact_blur
+from . import _layouts, _ocr, _redact_blur, _redact_grow
 from . import _render_plan as plan_mod
 from ._geometry import framed, sized
 from .common import ToolError, binary
@@ -74,6 +80,9 @@ REDACT_MIN_SHARE = 0.9
 REDACT_TOL = 28  # max per-channel difference to the background colour (yuv420 + H.264)
 REDACT_INSET = 3  # px left out at each edge (chroma bleeding)
 CROP_MARGIN = 3.0  # grey levels the cropped reference must beat the uncropped one by
+PARTIAL_SAMPLES = 3  # output frames read around a box's planned position
+PARTIAL_CUT = 0.25  # share of a read line's height over that position that is a cut line
+PARTIAL_PAD = 24  # output px read around it (at least; and the box's height)
 LEAK_SAMPLES = 5
 LEAK_CHUNK = 32  # reel frames decoded at once by the coverage check
 LEAK_MIN_SHARE = 0.98  # of the text region's px that must be the block colour
@@ -229,6 +238,110 @@ def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
         if not ok and "redaction_missing" not in doc["flags"]:
             doc["flags"].append("redaction_missing")
     return docs + _crop_docs(reel, ctx, size)
+
+
+def _over(line: list[float], rect: list[int], cut: float) -> bool:
+    """Whether a read `line` [x0, y0, x1, y1] (px) overlaps `rect` by `cut` of its height
+    (and half its height across: a character)."""
+    lh = line[3] - line[1]
+    oy = min(line[3], rect[3]) - max(line[1], rect[1])
+    ox = min(line[2], rect[2]) - max(line[0], rect[0])
+    return lh > 0 and oy >= cut * lh and ox >= 0.5 * lh
+
+
+def _read_lines(img: np.ndarray, region: list[int]) -> list[tuple[list[float], str]]:
+    """Readable lines (_redact_blur.MIN_CHARS) in `region` of `img`, boxes in img px."""
+    x0, y0, x1, y1 = region
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return []
+    out = []
+    for ln in _ocr.recognize(np.ascontiguousarray(img[y0:y1, x0:x1], dtype=np.uint8)):
+        if _redact_blur.readable_text(ln["text"]):
+            b = ln["box"]
+            out.append(([x0 + b[0] * (x1 - x0), y0 + b[1] * (y1 - y0),
+                         x0 + b[2] * (x1 - x0), y0 + b[3] * (y1 - y0)], ln["text"]))  # fmt: skip
+    return out
+
+
+def text_cut(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
+    """Text a redaction cut through (flag `redaction_partial`): per blocked or blurred box,
+    lines read on output frames around its planned position that overlap it; per crop,
+    lines on the recording that cross the edge it cuts at."""
+    plan = ctx["plan"]
+    todo, docs = [], []
+    for i, seg in ctx["segs"].items():
+        r = plan.ranges[i]
+        for n0, n1, x, y, w, h in seg.planned:
+            k = min(PARTIAL_SAMPLES, n1 - n0 + 1)
+            ns = sorted({round(n0 + (n1 - n0) * j / max(k - 1, 1)) for j in range(k)})
+            doc = {"segment": r.seg, "kind": "box",
+                   "t0": round(float((ctx["starts"][i] + n0) / plan.fps), 3),
+                   "t1": round(float((ctx["starts"][i] + n1 + 1) / plan.fps), 3),
+                   "samples": [], "flags": []}  # fmt: skip
+            docs.append(doc)
+            for n in ns:
+                rect = _out_rect(seg, n, x, y, w, h)
+                if rect is not None:
+                    todo.append((doc, ctx["starts"][i] + n, rect, seg.view))
+    frames = _frames(reel, [f for _, f, _, _ in todo], size)
+    for doc, f, rect, v in todo:
+        img = frames.get(f)
+        if img is None:
+            doc["flags"].append("redaction_partial")  # fail closed: nothing read
+            continue
+        pad = max(PARTIAL_PAD, rect[3] - rect[1])
+        region = [max(rect[0] - 3 * pad, v.x), max(rect[1] - pad, v.y),
+                  min(rect[2] + 3 * pad, v.x + v.w), min(rect[3] + pad, v.y + v.h)]  # fmt: skip
+        cut = [t for b, t in _read_lines(img, region) if _over(b, rect, PARTIAL_CUT)]
+        doc["samples"].append({"t": round(float(f / plan.fps), 3), "box": rect,
+                               **({"read": cut} if cut else {})})  # fmt: skip
+        if cut and "redaction_partial" not in doc["flags"]:
+            doc["flags"].append("redaction_partial")
+    return docs + _crop_cut_docs(ctx)
+
+
+def _crop_cut_docs(ctx: dict) -> list[dict]:
+    """Per segment that cuts a band off: text lines on the recording (first, middle, last
+    frame) that cross an edge the crop cuts at; flag `redaction_partial`."""
+    plan, sinfo = ctx["plan"], ctx["info"]
+    docs = []
+    for i, seg in ctx["segs"].items():
+        if seg.full_screen in (None, seg.screen):
+            continue
+        (ox, oy), (sw, sh), (fw, fh) = seg.origin, seg.screen, seg.full_screen
+        pad = math.ceil(_redact_grow.SEARCH * _redact_grow._text_px(seg.full_screen))
+        strips = []  # (rect read on the recording, the cut: axis, position)
+        if oy > 0:
+            strips.append(([0, max(oy - pad, 0), fw, min(oy + pad, fh)], 1, oy))
+        if oy + sh < fh:
+            strips.append(([0, max(oy + sh - pad, 0), fw, min(oy + sh + pad, fh)], 1, oy + sh))
+        if ox > 0:
+            strips.append(([max(ox - pad, 0), 0, min(ox + pad, fw), fh], 0, ox))
+        if ox + sw < fw:
+            strips.append(([max(ox + sw - pad, 0), 0, min(ox + sw + pad, fw), fh], 0, ox + sw))
+        doc = {"segment": plan.ranges[i].seg, "kind": "crop",
+               "t0": round(float(ctx["starts"][i] / plan.fps), 3),
+               "t1": round(float((ctx["starts"][i] + seg.frames) / plan.fps), 3),
+               "cuts": [c for _, _, c in strips], "samples": [], "flags": []}  # fmt: skip
+        docs.append(doc)
+        for n in sorted({0, seg.frames // 2, seg.frames - 1}):
+            t = float((seg.screen_frame + n) / plan.fps)
+            img = grab_screen(ctx["screen"], sinfo, t, float(plan.fps))
+            if img is None:
+                if 0 <= t <= sinfo["duration"]:
+                    doc["flags"].append("redaction_partial")  # fail closed
+                continue
+            cut = []
+            for region, axis, at in strips:
+                for b, text in _read_lines(img, region):
+                    lo, hi = b[axis + 0], b[axis + 2]
+                    m = _redact_grow.LINE_CUT * (hi - lo)
+                    if lo < at - m and hi > at + m:
+                        cut.append(text)
+            doc["samples"].append({"t": round(t, 3), **({"read": cut} if cut else {})})
+            if cut and "redaction_partial" not in doc["flags"]:
+                doc["flags"].append("redaction_partial")
+    return docs
 
 
 def _crop_docs(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
@@ -687,9 +800,9 @@ def readability(ctx: dict) -> list[dict]:
 
 
 def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]) -> dict:
-    """All product-demo checks: {"coverage", "redaction", "screen_time", "clamped", "readability",
-    "overlap", "spans", "decision"}; only "decision" and the screenshot part of "coverage"
-    for a face-only EDL."""
+    """All product-demo checks: {"coverage", "redaction", "text_cut", "screen_time",
+    "clamped", "readability", "overlap", "spans", "decision"}; only "decision" and the
+    screenshot part of "coverage" for a face-only EDL."""
     try:
         gaps = decision_gaps(job, data)
         ctx = context(job, data, size)
@@ -701,6 +814,7 @@ def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]
         if ctx is None:
             return {k: v for k, v in (("decision", gaps), ("coverage", shots)) if v}
         red_docs, time_docs = redaction(reel, ctx, size), screen_time(reel, ctx, size)
+        cut_docs = text_cut(reel, ctx, size)
         cover = coverage(reel, ctx, size, cands) + shots
     except (ToolError, ValueError, _ocr.OcrError) as e:  # fail closed: unchecked is not ok
         return {"error": f"screen checks failed: {e}"}
@@ -708,6 +822,7 @@ def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]
         "decision": gaps,
         "coverage": cover,
         "redaction": red_docs,
+        "text_cut": cut_docs,
         "screen_time": time_docs,
         "clamped": clamped_info(render),
         "readability": readability(ctx),

@@ -392,3 +392,96 @@ def test_the_new_job_form_stores_a_style_auto_means_the_brand(client, portrait_c
         assert data.get("redact_style") == stored
     r = post(9, "smear")
     assert r.status_code == 400 and "redact" in r.text
+
+
+# ---------------------------------------------------------------- grown boxes
+
+
+def test_a_box_grows_over_the_lines_it_cuts_and_never_shrinks():
+    from videocut.tools import _redact_grow as grow
+
+    box = [0.0, 0.0, 1.0, 0.075]
+    cut = [0.02, 0.07, 0.3, 0.09]  # a tab title, its upper quarter under the band
+    below = [0.02, 0.12, 0.3, 0.14]  # the next line: not touched
+    inside = [0.02, 0.01, 0.3, 0.03]
+    assert grow.cuts(cut, box) and not grow.cuts(below, box) and not grow.cuts(inside, box)
+    # a line that only grazes the box (less than LINE_CUT of its height) is not cut
+    assert not grow.cuts([0.02, 0.0745, 0.3, 0.0945], box)
+    out = grow._over_text(box, [cut, below, inside])
+    assert out[3] == pytest.approx(0.09 + grow.MARGIN * 0.02) and out[:3] == box[:3]
+    # a name box that cuts a line across grows over the whole line, on every side
+    name = [0.4, 0.5, 0.5, 0.52]
+    line = [0.3, 0.505, 0.7, 0.525]
+    out = grow._over_text(name, [line])
+    m = grow.MARGIN * 0.02
+    assert out == pytest.approx([0.3 - m, 0.505 - m, 0.7 + m, 0.525 + m])
+
+
+def _chrome(h=1600, w=2560, bar=150, step=40):
+    """A frame: a browser chrome `bar` px high (grey 40), the page below (grey 40 + step)."""
+    f = np.full((h, w, 3), 40 + step, np.uint8)
+    f[:bar] = 40
+    return f
+
+
+def test_a_band_snaps_to_the_next_ui_boundary_within_the_limit(monkeypatch):
+    from videocut.tools import _redact_grow as grow
+
+    monkeypatch.setattr(grow, "_lines", lambda *a: [])  # no text: only the boundary
+    screen = (2560, 1600)  # 2x: text 26 px, the limit 78 px
+    box, why = grow.grow([0.0, 0.0, 1.0, 120 / 1600], [_chrome(bar=150)], screen)
+    assert box[3] == pytest.approx(150 / 1600, abs=1e-4) and why == ["band"]
+    # the boundary out of reach (or a step too small): the band stays
+    assert grow.grow([0.0, 0.0, 1.0, 50 / 1600], [_chrome(bar=150)], screen)[1] == []
+    assert grow.grow([0.0, 0.0, 1.0, 120 / 1600], [_chrome(step=4)], screen)[1] == []
+    # a bottom band moves up, a box that is not a band never snaps
+    f = _chrome()[::-1].copy()
+    box, _ = grow.grow([0.0, 1 - 120 / 1600, 1.0, 1.0], [f], screen)
+    assert box[1] == pytest.approx(1 - 150 / 1600, abs=1e-4)
+    assert grow.grow([0.3, 0.0, 0.6, 120 / 1600], [_chrome()], screen)[1] == []
+
+
+def _band_frame(text: str, top: int, size: int = 26, shape=(1080, 1920)) -> np.ndarray:
+    """A light screen with one line of `text` whose image starts `top` px down."""
+    img = _text_image(text, size, w=shape[1])
+    f = np.full((*shape, 3), 0xF2, np.uint8)
+    f[top : top + img.shape[0]] = img
+    return f
+
+
+@ocr
+@pytest.mark.media
+def test_grow_pulls_a_band_over_the_text_line_it_cuts():
+    from videocut.tools import _redact_grow as grow
+
+    f = _band_frame("Zentrovia Kundentermin Montag  Angebot Nordlicht", 60)
+    ink = np.flatnonzero((f.min(axis=2) < 128).any(axis=1))
+    mid = (ink[0] + ink[-1]) / 2
+    box, why = grow.grow([0.0, 0.0, 1.0, mid / 1080], [f], (1920, 1080))
+    assert "text" in why and box[3] * 1080 >= ink[-1] + 1, (box, ink[-1])
+    assert _redact_blur.readable(f[int(np.ceil(box[3] * 1080)) :]) == []
+
+
+@ocr
+@pytest.mark.media
+def test_verify_flags_a_line_a_crop_cuts_through(monkeypatch):
+    from types import SimpleNamespace
+
+    from videocut.tools import _verify_screen
+
+    f = _band_frame("Zentrovia Kundentermin Montag  Angebot Nordlicht", 60)
+    ink = np.flatnonzero((f.min(axis=2) < 128).any(axis=1))
+    seg = _plan([], "auto")
+    plan = SimpleNamespace(ranges=[SimpleNamespace(seg=1)], fps=FPS)
+    info = {"duration": 10.0, "size": [1920, 1080]}
+    monkeypatch.setattr(_verify_screen, "grab_screen", lambda *a: f)
+
+    def docs(cut_y: int) -> list[dict]:
+        seg.full_screen, seg.origin, seg.screen = (1920, 1080), (0, cut_y), (1920, 1080 - cut_y)
+        ctx = {"segs": {0: seg}, "plan": plan, "starts": [0], "info": info, "screen": None}
+        return _verify_screen._crop_cut_docs(ctx)
+
+    through = docs(int((ink[0] + ink[-1]) / 2) // 2 * 2)
+    assert through[0]["flags"] == ["redaction_partial"] and through[0]["samples"][0]["read"]
+    below = docs(int(ink[-1]) + 12)
+    assert below[0]["flags"] == [] and len(below[0]["samples"]) >= 1

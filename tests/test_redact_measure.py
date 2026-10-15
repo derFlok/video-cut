@@ -476,3 +476,46 @@ def test_screenshot_box_off_the_text_is_a_leak(capsys, material, tmp_path, video
         p["box"] = [p["box"][0], p["box"][1] - line, p["box"][2], p["box"][3] - line]
     docs = vs.asset_coverage(job, {"overlays": [item]}, [c])
     assert any(d["flags"] == ["redaction_leak"] and d["overlay"] == 0 for d in docs), docs
+
+
+@ocr
+@pytest.mark.parametrize("grow", [False, True])
+def test_a_box_that_cuts_the_name_line_grows_or_fails_verify(
+    capsys, material, measured, monkeypatch, grow
+):
+    """A box over only the upper half of the name: the lower half of the line stays
+    readable. Render grows it over the whole line (render.json "planned"); without the
+    growth verify fails with `redaction_partial`."""
+    from videocut.tools import _redact_grow
+
+    if not grow:  # what render drew before boxes grew
+        monkeypatch.setattr(
+            _redact_grow, "apply", lambda job, blocks, *a: [{"box": b["box"]} for b in blocks]
+        )
+    job = _job(capsys, material, f"half-line-{grow}", size=(1920, 1080))
+    meta = json.loads((job / "job.json").read_text())
+    (job / "job.json").write_text(json.dumps({**meta, "redact_style": "block"}))
+    data = json.loads((measured[0] / red.FILE).read_text())
+    for c in data["candidates"]:
+        for p in c.get("track", []):
+            if c["id"] == 1:  # the name: the box ends in the middle of its line
+                y0, y1 = p["text_box"][1], p["text_box"][3]
+                p["box"] = [p["box"][0], (y0 + y1) / 2 - 0.025, p["box"][2], (y0 + y1) / 2]
+    data["candidates"] = [c for c in data["candidates"] if c["id"] == 1]
+    (job / red.FILE).write_text(json.dumps(data))
+    _cut(job)
+    code, s, out = run_tool(capsys, "render", "--job", str(job))
+    assert code == 0, (s, out)
+    grown = [b for b in s["redaction"]["blocks"] if "planned" in b]
+    code, v, out = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0, out
+    partial = [d for d in v["screen_flagged"] if "redaction_partial" in d["flags"]]
+    if grow:
+        assert grown and all(b["grown"] == ["text"] and b["box"][3] > b["planned"][3]
+                             for b in grown), s["redaction"]  # fmt: skip
+        assert v["screen_flagged"] == [], v["screen_flagged"]
+        doc = json.loads((job / "out" / "verify.json").read_text())
+        assert doc["screen"]["text_cut"] and all(d["samples"] for d in doc["screen"]["text_cut"])
+    else:
+        assert not grown and not v["ok"]
+        assert partial and {d["check"] for d in partial} == {"text_cut"}, v["screen_flagged"]

@@ -808,7 +808,7 @@ def verify(args) -> dict:
     screen_flagged = [
         {"check": kind, **{k: d[k] for k in ("id", "where", "segment", "t0", "t1", "t") if k in d},
          "flags": d["flags"]}
-        for kind in ("coverage", "redaction", "screen_time")
+        for kind in ("coverage", "redaction", "text_cut", "screen_time")
         for d in demo.get(kind, [])
         if d["flags"]
     ] + demo.get("decision", [])  # fmt: skip
@@ -827,7 +827,7 @@ def verify(args) -> dict:
         "overlay_flagged": overlay_flagged,
         "screen": {
             k: demo[k]
-            for k in ("coverage", "redaction", "screen_time", "clamped", "readability")
+            for k in ("coverage", "redaction", "text_cut", "screen_time", "clamped", "readability")
             if k in demo
         },
         "screen_flagged": screen_flagged,
