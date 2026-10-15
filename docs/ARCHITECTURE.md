@@ -270,9 +270,11 @@ control characters, whitespace collapsed. Human only (`VIDEOCUT_AGENT` refuses).
   the human's words again); then `overlays`, `render`, `verify` and the overlay record (no
   longer stale). A failure puts edl.json back as it was, so the refresh can be retried. It refuses before anything runs when `edl snap --dry-run` would move a
   cut point (a reel cut before snapping; render would change the cut) and fails when the
-  segments changed anyway. Measured on a copy of a 27 s 9:16 demo job (2 words): 164 s
-  wall at load average ~70 (overlays 72 s, render 68 s, verify 23 s), verify result
-  identical to the reel before, exactly the 2 caption words changed.
+  segments changed anyway. Measured on a copy of a 27 s 9:16 demo job (2 words): 61 s
+  wall at load average ~17 (164 s at ~70: overlays 72 s, render 68 s, verify 23 s);
+  verify flags identical to the reel before, exactly the 2 caption words changed, the
+  cut unchanged. That job was cut before cut-point snapping: refresh refused it (0.8 s,
+  "would move 17 cut points") until its cut was brought up to date.
 - **Read:** `GET /api/jobs/{id}/transcript[?offset&limit]` returns every word with its
   source time and, when the finished reel keeps it, its reel time (the captions' mapping
   rule, one pass), plus `edits`, `can_undo`, `edits_at`, `drift`, `captions_stale`.
