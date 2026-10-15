@@ -308,3 +308,20 @@ def test_sheet_slides_numbers_the_pages(tmp_path, capsys):
     assert code == 0 and s["sheets"] == ["work/sheets/slides_01.jpg"]
     assert [p["page"] for p in s["pages"]] == _job_slides.pages(job)
     assert (job / "work" / "sheets" / "slides_01.jpg").is_file()
+
+
+def test_skills_cover_slides():
+    from videocut import agent
+
+    skill = {n: (agent.PLUGIN / "skills" / n / "SKILL.md").read_text()
+             for n in ("plan", "cut", "overlays", "revise")}  # fmt: skip
+    plan = skill["plan"]
+    assert "## Slides" in plan and "never invent" in plan.lower()
+    for cmd in ("slides check", "slides stills", "sheet slides"):
+        assert f"videocut tool {cmd}" in plan
+    for tpl in _slide_spec.TEMPLATES:
+        assert f"`{tpl}`" in plan
+    for layout in _slide_spec.LAYOUTS:
+        assert f"`{layout}`" in plan and f"`{layout}`" in skill["cut"]
+    assert "videocut tool slides render" in skill["cut"] and '"reveal"' in skill["cut"]
+    assert "work/slides.json" in skill["overlays"] and "slides render" in skill["revise"]
