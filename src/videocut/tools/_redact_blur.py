@@ -73,7 +73,12 @@ def readable(rgb: np.ndarray) -> list[str]:
     if rgb.shape[0] < 4 or rgb.shape[1] < 4:
         return []
     lines = _ocr.recognize(np.ascontiguousarray(rgb, dtype=np.uint8))
-    return [x["text"] for x in lines if len(re.findall(r"\w", x["text"])) >= MIN_CHARS]
+    return [x["text"] for x in lines if readable_text(x["text"])]
+
+
+def readable_text(text: str) -> bool:
+    """Whether a recognised line has at least MIN_CHARS letters or digits."""
+    return len(re.findall(r"\w", text)) >= MIN_CHARS
 
 
 def edge_share(rgb: np.ndarray) -> float:

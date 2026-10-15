@@ -209,7 +209,12 @@ def _overlay_size(path: Path) -> tuple[int, int] | None:
 
 def _style_doc(b: dict) -> dict:
     """A render.json "redaction" "blocks" entry: segment, camera times, box, style used."""
-    doc = {k: b[k] for k in ("segment", "t0", "t1", "style", "edge", "cell", "note") if k in b}
+    keys = ("segment", "t0", "t1", "style", "edge", "cell", "note", "grown")
+    doc = {k: b[k] for k in keys if k in b}
+    # "box" as drawn; "planned" the box before it grew over the text lines it cut
+    # (_redact_grow)
+    if "planned" in b:
+        doc["planned"] = [round(v, 4) for v in b["planned"]]
     return {**doc, "box": [round(v, 4) for v in b["box"]]}
 
 

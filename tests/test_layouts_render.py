@@ -270,6 +270,8 @@ def test_layouts_verify(capsys, material):
     doc = json.loads((job / "out" / "verify.json").read_text())
     red = doc["screen"]["redaction"]
     assert [r["segment"] for r in red] == [1, 2]
+    cut = doc["screen"]["text_cut"]
+    assert [r["segment"] for r in cut] == [1, 2] and all(r["samples"] for r in cut)
     assert all(x["bg_share"] >= 0.9 for r in red for x in r["samples"]) and red[1]["samples"]
     assert len(doc["screen"]["screen_time"]) == 4 and doc["checks"]["screen_overlap"]["ok"]
     # No frozen flag for the still screen, no visual_jump at the view changes.

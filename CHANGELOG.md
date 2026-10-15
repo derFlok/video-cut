@@ -665,3 +665,15 @@
   blurred at a 78 px cell, which local text recognition could not read. Verify: 0 screen
   flags; each cropped segment matched the recording without the bar (mean difference 2-13
   grey levels) clearly better than the uncropped view (5-26). Render 133 s, verify 184 s.
+- Redact boxes grow so they never cut through text or a UI bar (every style; a measured box
+  ending in the middle of the browser tab titles left their lower half readable, with
+  `block` as well): text recognition reads the screen frames around each box, a line the
+  box cuts pulls it over the whole line plus a margin, and a band along a screen edge
+  then moves on to the next UI boundary (the bottom of the browser chrome) within three
+  text heights. render.json `redaction.blocks[]` `planned` / `grown`. Verify `text_cut`:
+  a line read on the reel over a box's planned position, or on the recording across the
+  edge a crop cuts at, is `redaction_partial` (a failure).
+  Real check again (fresh copy of the same job): the top bar grew from 7.5 % to 9.2-9.3 %
+  of the height (199 -> 246/248 px of 2648: the tab title line plus the chrome's edge),
+  the dialog box over the lines it cut; 0 screen flags, `text_cut` clean on 40 boxes and
+  39 crop edges. Growth adds OCR at render (render 292 s, verify 235 s on 126 s of reel).

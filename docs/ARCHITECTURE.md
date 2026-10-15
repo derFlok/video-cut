@@ -424,7 +424,16 @@ window is a plain crop + scale; a moving one goes through `perspective` (sense=s
 eval=frame) with the same piecewise function of the frame number that `window_at`
 computes in Python. (A per-frame `scale` followed by `crop` does not work: crop clamps to
 its input link size, fixed at configuration, so every zoom ended in the top-left corner.)
-`redact` blocks are drawn onto the screen frames before any scaling, on every frame that
+`redact` blocks first **grow** so they never cut through text or a UI bar
+(`_redact_grow.py`, in `plan_all`, so render, overlays and verify share the boxes): local
+text recognition reads up to 5 distinct screen frames of each block's range around the
+box; a line the box cuts (≥ 10 % of its height inside, not wholly inside) pulls the box
+over the whole line plus 35 % of the line height; a band along a screen edge then moves
+its inner edge on to the next strong UI boundary (row/column median step ≥ 8 grey
+levels) within three text heights, e.g. the bottom of a browser's chrome; both repeat
+until nothing moves. Never smaller; cached in `work/redact_grown.json`; render.json
+`redaction.blocks[]` has `planned` (the box before) and `grown` (`text`, `band`). They are
+then drawn onto the screen frames before any scaling, on every frame that
 overlaps their range, snapped outward to even pixels, in the job's **redaction style**
 (`_redact_style.py`, see *Personal data*): `block` a solid block in `colors.bg`; `blur`
 the box pixelated into cells of the UI text height, or a quarter of its short side up to
@@ -473,7 +482,11 @@ its range through the drawn zoom window; ≥ 90 % of a solid block's pixels must
 background, a blurred box must show no sharp edges (≤ 0.5 % px with a grey step ≥ 40,
 seams where two blurred boxes meet left out) and text recognition must read nothing there
 (`redaction_missing`). A segment that cuts a band off must show, on its middle frame, the
-recording without the band clearly better (3 grey levels) than the uncropped window. `coverage` checks the personal data itself (see *Personal data*
+recording without the band clearly better (3 grey levels) than the uncropped window.
+`text_cut`: text recognition on output frames around each blocked or blurred box's
+planned position (before it grew) must read no line overlapping it (≥ 25 % of the line's
+height), and on the recording (first, middle, last frame) no line may cross an edge a
+crop cuts at: `redaction_partial`, a failure. `coverage` checks the personal data itself (see *Personal data*
 below): `redaction_leak`. The middle frame of each screen segment is compared with the screen
 recording at the mapped time and at ±0.5 s / ±1 s (`screen_time_mismatch` when another time
 matches clearly better). `screen_overlap` repeats the overlap rule of `edl check`. A cut

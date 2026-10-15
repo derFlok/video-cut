@@ -87,7 +87,7 @@ width) blurs those bands instead (noted per block in Segment.redaction, render.j
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 
@@ -173,6 +173,8 @@ class Segment:
     blur: list[tuple[int, int, int, int, int, int, int]] = field(default_factory=list)
     # ^ blurred boxes (n0, n1, x, y, w, h, cell): source px of `screen`, like `redact`
     redaction: list[dict] = field(default_factory=list)  # per redact block: style used
+    planned: list[tuple[int, int, int, int, int, int]] = field(default_factory=list)
+    # ^ the boxes before _redact_grow (n0, n1, x, y, w, h) of the blocked and blurred ones
 
 
 # --- job inputs ---------------------------------------------------------------------------
@@ -554,23 +556,21 @@ def plan_segment(
         moves.append(Move(start, f, win))
         prev_end = f
 
-    redact, blur, log = [], [], []
-    fw, fh = full_screen
+    redact, blur, log, planned = [], [], [], []
     for j, (n0, n1, r) in enumerate(blocks):
         b = r["box"]
-        entry = {"t0": r["t0"], "t1": r["t1"], "box": list(b)}
+        entry = {"t0": r["t0"], "t1": r["t1"], "box": list(b),
+                 **{k: r[k] for k in ("planned", "grown") if k in r}}  # fmt: skip
         if j in edges:
             log.append({**entry, "style": "crop", "edge": edges[j]})
             continue
-        # snapped outward on the recording, then into the screen shown (a crop's offset is
-        # even); a block wholly inside a cropped band is not shown at all
-        x0, y0 = math.floor(b[0] * fw / 2) * 2 - ox, math.floor(b[1] * fh / 2) * 2 - oy
-        x1 = min(math.ceil(b[2] * fw / 2) * 2, fw) - ox
-        y1 = min(math.ceil(b[3] * fh / 2) * 2, fh) - oy
-        x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, sw), min(y1, sh)
+        x0, y0, x1, y1 = _shown_px(b, full_screen, (ox, oy), screen)
         if x1 <= x0 or y1 <= y0:
             log.append({**entry, "style": "crop", "note": "inside the cropped band"})
             continue
+        p0, q0, p1, q1 = _shown_px(r.get("planned", b), full_screen, (ox, oy), screen)
+        if p1 > p0 and q1 > q0:
+            planned.append((n0, n1, p0, q0, p1 - p0, q1 - q0))
         if redact_style == "block":
             redact.append((n0, n1, x0, y0, x1 - x0, y1 - y0))
             log.append({**entry, "style": "block"})
@@ -594,7 +594,7 @@ def plan_segment(
     # from the start of the move towards each target (the box is on its way there)
     s.focus_at = [max(f - ease, 0) for f, _, _ in keys]
     s.screen, s.origin, s.blur, s.redaction = screen, (ox, oy), blur, log
-    s.full_screen = full_screen
+    s.full_screen, s.planned = full_screen, planned
     crop = seg.crop
     cx, cy = (crop.cx, crop.cy) if crop else (0.5, 0.5)
     box = segment_box(face, seg.start, seg.end) if face else None
@@ -643,11 +643,38 @@ def speaker_crop(
     return crop_window(camera, part, fx, fy, largest.h / h)
 
 
+def _shown_px(b, full_screen, origin, screen) -> tuple[int, int, int, int]:
+    """Normalised box of the recording -> [x0, y0, x1, y1] px of the screen shown: snapped
+    outward on the recording, then into the screen shown (a crop's offset is even). Empty
+    (x1 <= x0 or y1 <= y0) when it lies wholly inside a cropped band."""
+    (fw, fh), (ox, oy), (sw, sh) = full_screen, origin, screen
+    x0, y0 = math.floor(b[0] * fw / 2) * 2 - ox, math.floor(b[1] * fh / 2) * 2 - oy
+    x1 = min(math.ceil(b[2] * fw / 2) * 2, fw) - ox
+    y1 = min(math.ceil(b[3] * fh / 2) * 2, fh) - oy
+    return max(x0, 0), max(y0, 0), min(x1, sw), min(y1, sh)
+
+
+def grown_redaction(job: Path, edl, plan, sync_doc: dict, src: Path, info: dict) -> dict:
+    """{EDL segment index: its redact list with every box grown by _redact_grow} for the
+    non-face segments of `plan` that have redact blocks."""
+    from . import _redact_grow
+
+    todo = []  # (segment index, block index, block with offset)
+    for si in sorted({r.seg for r in plan.ranges if r.layout != "face"}):
+        seg = edl.segments[si]
+        off, _ = segment_offset(sync_doc, seg.start, seg.duration, plan.fps)
+        todo += [(si, j, {**r, "offset": off}) for j, r in enumerate(seg.redact)]
+    grown = _redact_grow.apply(job, [b for _, _, b in todo], src, info, float(plan.fps))
+    out: dict[int, list] = {}
+    for (si, j, _), g in zip(todo, grown, strict=True):
+        reds = out.setdefault(si, [dict(r) for r in edl.segments[si].redact])
+        reds[j] = {**reds[j], **g}
+    return out
+
+
 def with_redaction(edl, cands: list[dict]):
     """`edl` (edl.Edl) whose non-face segments also carry a redact block for every screen
     candidate of redaction.enforced that overlaps them (the safe default: render, verify)."""
-    from dataclasses import replace
-
     from .. import redaction
 
     segs = []
@@ -695,10 +722,13 @@ def plan_all(
     info = probe_screen(src)
     screen_frames = math.floor(info["duration"] * plan.fps)
     segs, clamped, speaker, warnings, redaction = {}, [], [], [], []
+    grown = grown_redaction(job, edl, plan, sync_doc, src, info)
     for i, r in enumerate(plan.ranges):
         if r.layout == "face":
             continue
         seg_in = edl.segments[r.seg]
+        if r.seg in grown:
+            seg_in = replace(seg_in, redact=grown[r.seg])
         offset, slack = segment_offset(sync_doc, seg_in.start, seg_in.duration, plan.fps)
         seg, cl = plan_segment(
             seg_in, r.frames, plan.fps, offset=offset, screen=tuple(info["size"]),
