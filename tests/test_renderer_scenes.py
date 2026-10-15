@@ -11,6 +11,7 @@ from clips import ffmpeg
 from test_renderer import FACE, FPS, SAFE, SIZE, needs_renderer, probe, resolved_tokens
 
 from videocut.paths import BIN, RENDERER, ROOT, tool_env
+from videocut.tools import _ocr
 
 pytestmark = pytest.mark.media
 
@@ -237,3 +238,53 @@ def test_screenshot_outside_job_folder_is_refused(tmp_path, monkeypatch, videocu
     code, out = render(s, job, "--still", "6.0", str(job / "work" / "s.png"))
     assert code == 1 and out["ok"] is False
     assert "outside the job folder" in out["error"]
+
+
+@needs_renderer
+@pytest.mark.skipif(not _ocr.available(), reason="needs macOS text recognition")
+def test_blurred_screenshot_text_is_unreadable(tmp_path, monkeypatch, videocut_home):
+    """props.redact_style "blur": the text in the box is gone for text recognition, the box
+    keeps the screenshot's colours (no solid fill); the same still without redaction reads."""
+    import clips
+    import numpy as np
+
+    if not clips.font():
+        pytest.skip("needs a system font")
+    tokens = resolved_tokens(ROOT / "brands" / "_example", monkeypatch)
+    job, _ = make_job(tmp_path, videocut_home)
+    w, h = 1600, 1000
+    x0, y0, x1, y1 = SECRET
+    text = tmp_path / "secret.txt"
+    text.write_text("mara.zentrovia@example.org")
+    subprocess.run(
+        [ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", f"color=c=0xE8EEF4:s={w}x{h}",
+         "-vf", f"drawtext=fontfile={clips.font()}:textfile={text}:x={int(x0 * w) + 20}"
+         f":y={int(y0 * h) + 40}:fontsize=64:fontcolor=0x1A2433",
+         "-frames:v", "1", str(job / "input" / "shot.png")],
+        check=True,
+    )  # fmt: skip
+
+    def still(redact_style: str | None) -> np.ndarray:
+        s = spec(tokens, None, redact=redact_style is not None)
+        shot = next(o for o in s["overlays"] if o["scene"] == "screenshot_frame")
+        shot["props"].pop("focus")  # the whole image, the box at its largest
+        if redact_style:
+            shot["props"]["redact_style"] = redact_style
+        out = job / "work" / f"still-{redact_style}.png"
+        code, res = render(s, job, "--still", "6.0", str(out))
+        assert code == 0, res
+        raw = subprocess.run(
+            [ffmpeg(), "-v", "error", "-i", str(out), "-f", "rawvideo", "-pix_fmt", "rgba", "-"],
+            capture_output=True, check=True,
+        ).stdout  # fmt: skip
+        return np.frombuffer(raw, np.uint8).reshape(SIZE[1], SIZE[0], 4)
+
+    needle = "zentrovia@example.org"
+    rgb = lambda img: np.ascontiguousarray(img[..., :3])  # noqa: E731
+    assert _ocr.find(rgb(still(None)), needle), "control: the text is readable unredacted"
+    blurred = still("blur")
+    assert not _ocr.find(rgb(blurred), needle)
+    assert not [x for x in _ocr.recognize(rgb(blurred)) if "zentrovia" in x["text"].lower()]
+    # the blur keeps the light screenshot colours; the block is a dark solid fill
+    dark = lambda img: int(((img[..., 3] > 200) & (img[..., :3].max(axis=2) < 60)).sum())  # noqa: E731
+    assert dark(still("block")) > 20 * dark(blurred) + 1000

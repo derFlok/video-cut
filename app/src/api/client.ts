@@ -7,6 +7,7 @@ import type {
   Brand,
   BrandSummary,
   CutStyleChoice,
+  RedactStyle,
   Format,
   FormatChoice,
   JobDetail,
@@ -176,6 +177,7 @@ export const api = {
       format?: FormatChoice;
       brief?: string;
       cut_style?: CutStyleChoice;
+      redact_style?: RedactStyle;
       /** Seconds, or null for automatic (sent as "auto"). */
       target_s?: TargetChoice;
     },
@@ -188,6 +190,7 @@ export const api = {
     if (fields.format) form.append("format", fields.format);
     if (fields.brief) form.append("brief", fields.brief);
     if (fields.cut_style) form.append("cut_style", fields.cut_style);
+    if (fields.redact_style) form.append("redact_style", fields.redact_style);
     if (fields.target_s !== undefined) form.append("target_s", fields.target_s === null ? "auto" : String(fields.target_s));
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
@@ -213,6 +216,9 @@ export const api = {
   approve: (id: string, plan_sha: string, redaction: RedactionDecision | null) =>
     call<unknown>("POST", `${J(id)}/approve`, redaction ? { plan_sha, redaction } : { plan_sha }),
   setCutStyle: (id: string, cut_style: CutStyleChoice) => call<JobDetail>("PUT", `${J(id)}/cut-style`, { cut_style }),
+  /** How personal data is hidden; a reel that hid it otherwise goes stale (recut). */
+  setRedactStyle: (id: string, redact_style: RedactStyle) =>
+    call<{ redact_style: RedactStyle; cut_stale: boolean }>("PUT", `${J(id)}/redact-style`, { redact_style }),
   recut: (id: string) => call<unknown>("POST", `${J(id)}/recut`),
   /** Store the target length; a plan made for another one goes stale (plan again). */
   setTarget: (id: string, target_s: TargetChoice) =>

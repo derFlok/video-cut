@@ -38,6 +38,7 @@ ENUMS = {
     "motion.character": ("ruhig", "federnd", "knackig"),
     "motion.transitions": ("blur", "slide", "cut"),
     "voice.address": ("du", "sie"),
+    "redaction.style": ("auto", "blur", "crop", "block"),
 }
 # Fields where the enum is only a hint: an unknown value warns instead of failing.
 SOFT_ENUMS = {"icons": ("lucide", "phosphor", "none")}
@@ -52,13 +53,16 @@ DEFAULTS = {
     "motion.character": "ruhig",
     "motion.transitions": "blur",
     "voice.address": "du",
+    "redaction.style": "auto",
 }
 REQUIRED_COLORS = ("bg", "text", "accent")
 OPTIONAL_COLORS = ("surface", "muted")
 LOGO_KEYS = ("light", "dark", "icon_light", "icon_dark")
 DEFAULT_SPRING = {"w": 13, "z": 0.8}  # BRIEF §8, also renderer/lib/spring.js
 WEIGHT_RE = re.compile(r"[1-9][0-9]{0,3}")
-SECTIONS = ("colors", "fonts", "logo", "captions", "motion", "voice", "music", "legal")
+SECTIONS = (
+    "colors", "fonts", "logo", "captions", "motion", "voice", "music", "legal", "redaction",
+)  # fmt: skip
 
 
 class BrandError(Exception):

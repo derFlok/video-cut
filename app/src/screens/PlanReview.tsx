@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { ApiError, api } from "../api/client";
-import type { PdCandidate, Plan, PlanJson, PlanKeep, RedactionDecision } from "../api/types";
+import type { PdCandidate, Plan, PlanJson, PlanKeep, RedactionDecision, RedactStyle } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog } from "../components/LiveLog";
 import { Markdown } from "../components/Markdown";
@@ -109,11 +109,12 @@ export function PlanReview({ live }: { live: Live }) {
     }
   };
 
-  const approve = async (redaction: RedactionDecision | null) => {
+  const approve = async (redaction: RedactionDecision | null, style?: RedactStyle) => {
     if (!plan) return;
     setApproving(true);
     setErr(null);
     try {
+      if (style && style !== (job.redact_style ?? "auto")) await api.setRedactStyle(job.id, style);
       await api.approve(job.id, plan.sha, redaction);
       setPdOpen(false);
       live.begin("cut");
@@ -238,8 +239,9 @@ export function PlanReview({ live }: { live: Live }) {
           jobId={job.id}
           candidates={candidates}
           busy={approving}
+          redactStyle={job.redact_style ?? "auto"}
           onCancel={() => setPdOpen(false)}
-          onConfirm={(d) => void approve(d)}
+          onConfirm={(d, style) => void approve(d, style)}
         />
       )}
     </section>

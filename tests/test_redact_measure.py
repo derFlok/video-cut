@@ -288,9 +288,12 @@ def _render_verify(capsys, job: Path) -> tuple[dict, dict]:
 
 
 @ocr
-@pytest.mark.parametrize("size", [(1080, 1920), (1920, 1080)])
-def test_rendered_reel_has_no_leak(capsys, material, measured, size):
+@pytest.mark.parametrize(("size", "style"), [((1080, 1920), "auto"), ((1920, 1080), "block")])
+def test_rendered_reel_has_no_leak(capsys, material, measured, size, style):
+    """auto blurs the card's text (not an edge band), block covers it: both hide it."""
     job = _job(capsys, material, f"no-leak-{size[0]}")
+    meta = json.loads((job / "job.json").read_text())
+    (job / "job.json").write_text(json.dumps({**meta, "redact_style": style}))
     # the measured candidates (measured once, shared)
     shutil.copy(measured[0] / red.FILE, job / red.FILE)
     _cut(job)
@@ -301,6 +304,8 @@ def test_rendered_reel_has_no_leak(capsys, material, measured, size):
     assert {d["id"] for d in checked} == {1, 2, 3} and all(d["share"] >= 0.98 for d in checked)
     assert {d["segment"] for d in checked} == {1, 2, 3}
     assert not [d for d in cov if d["source"] == "reel_ocr"]
+    drawn = {b["style"] for b in doc["screen"]["redaction"]}
+    assert drawn == {"blur" if style == "auto" else "block"}, drawn
 
 
 @ocr

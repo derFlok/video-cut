@@ -10,6 +10,11 @@ export type CutStyle = "calm" | "standard" | "tight";
 export type CutStyleChoice = "auto" | CutStyle;
 export const CUT_STYLES: CutStyleChoice[] = ["auto", "calm", "standard", "tight"];
 
+/** How personal data on the screen is hidden: auto (cut off full-width bars at the top or
+ * bottom of the screen, blur the rest), blur, crop (cut off bands along an edge) or block. */
+export type RedactStyle = "auto" | "blur" | "crop" | "block";
+export const REDACT_STYLES: RedactStyle[] = ["auto", "blur", "crop", "block"];
+
 /** Target length of the video in seconds; null (or "auto" in requests) lets the server
  * decide: by type for talking heads, as long as needed for demos. */
 export type TargetChoice = number | null;
@@ -177,6 +182,9 @@ export interface JobDetail {
   /** The stored choice (absent: automatic) and what it resolves to. */
   cut_style?: CutStyle | "auto" | null;
   cut_style_resolved?: CutStyle | null;
+  /** How personal data is hidden (resolved: the job's choice or the brand's default). */
+  redact_style?: RedactStyle | null;
+  redact_style_default?: boolean;
   /** The current reel was cut with another style or format than the resolved one. */
   cut_stale?: boolean;
   /** The chosen target length (null: automatic) and the range the plan aims for (null: no

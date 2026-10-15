@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { PdCandidate, RedactionDecision } from "../api/types";
+import type { PdCandidate, RedactionDecision, RedactStyle } from "../api/types";
+import { RedactStyleSelect } from "../components/RedactStyle";
 import { clockFine, useI18n } from "../i18n";
 
 type Mode = RedactionDecision["mode"];
@@ -16,19 +17,23 @@ export function PersonalDataDialog({
   jobId,
   candidates,
   busy,
+  redactStyle = "auto",
   onCancel,
   onConfirm,
 }: {
   jobId: string;
   candidates: PdCandidate[];
   busy?: boolean;
+  /** The job's current way of hiding personal data (preselected). */
+  redactStyle?: RedactStyle;
   onCancel: () => void;
-  onConfirm: (d: RedactionDecision) => void;
+  onConfirm: (d: RedactionDecision, style: RedactStyle) => void;
 }) {
   const { t } = useI18n();
   // Safe default: everything is redacted until the human says otherwise.
   const [mode, setMode] = useState<Mode>("redact_all");
   const [picked, setPicked] = useState<Set<number>>(() => new Set(candidates.map((c) => c.id)));
+  const [style, setStyle] = useState<RedactStyle>(redactStyle);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -120,11 +125,12 @@ export function PersonalDataDialog({
           ))}
         </ul>
         <p className="muted">{t("pd.count", { n: d.ids.length, total: candidates.length })}</p>
+        {d.ids.length > 0 && <RedactStyleSelect id="pd-redact-style" value={style} onChange={setStyle} />}
         <div className="actions actions-end">
           <button type="button" className="btn" onClick={onCancel}>
             {t("common.cancel")}
           </button>
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onConfirm(d)}>
+          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => onConfirm(d, style)}>
             {t("pd.confirm")}
           </button>
         </div>

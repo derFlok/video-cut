@@ -106,17 +106,17 @@ describe("personal-data dialog", () => {
     boxes.forEach((b) => expect(b).toBeChecked());
 
     await user.click(screen.getByRole("button", { name: t("pd.confirm") }));
-    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact_all", ids: [1, 2, 3] });
+    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact_all", ids: [1, 2, 3] }, "auto");
 
     await user.click(boxes[1]);
     expect(screen.getByRole("radio", { name: t("pd.mode.redact") })).toBeChecked();
     await user.click(screen.getByRole("button", { name: t("pd.confirm") }));
-    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact", ids: [1, 3] });
+    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact", ids: [1, 3] }, "auto");
 
     await user.click(screen.getByRole("radio", { name: t("pd.mode.demo") }));
     boxes.forEach((b) => expect(b).not.toBeChecked());
     await user.click(screen.getByRole("button", { name: t("pd.confirm") }));
-    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "demo", ids: [] });
+    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "demo", ids: [] }, "auto");
   });
 
   it("shows the measured boxes and says when the whole area is covered", () => {

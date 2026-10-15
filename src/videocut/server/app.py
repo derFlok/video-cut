@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, agent, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format, _length, _style
+from ..tools import _format, _length, _redact_style, _style
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
@@ -33,6 +33,7 @@ from ..tools.job import (
     read_approval,
     revoke_approval,
     set_cut_style,
+    set_redact_style,
     set_target,
 )
 from . import brands, state
@@ -205,6 +206,10 @@ class CutStyleBody(BaseModel):
     cut_style: str = Field(pattern="^(" + "|".join(CUT_STYLES) + ")$")
 
 
+class RedactStyleBody(BaseModel):
+    redact_style: str = Field(pattern="^(" + "|".join(_redact_style.STYLES) + ")$")
+
+
 class TargetBody(BaseModel):
     """Seconds, "auto" or null (the default rule); strings like "5m" or "2:30" too."""
 
@@ -304,7 +309,16 @@ def create_app(
             form = await read_form(
                 request,
                 {"camera": VIDEO_EXT, "screen": VIDEO_EXT, "assets": ASSET_EXT},
-                {"type", "brand", "format", "brief", "cut_style", "lang", "target_s"},
+                {
+                    "type",
+                    "brand",
+                    "format",
+                    "brief",
+                    "cut_style",
+                    "lang",
+                    "target_s",
+                    "redact_style",
+                },  # fmt: skip
             )
         except UploadError as e:
             raise HTTPException(e.status, str(e)) from None
@@ -510,6 +524,22 @@ def create_app(
             "cut_stale": state.cut_stale(job),
         }
 
+    # -------------------------------------------------------------- redaction style
+
+    @app.put("/api/jobs/{job_id}/redact-style")
+    @decision
+    def put_redact_style(job_id: str, body: RedactStyleBody) -> dict:
+        """Store how personal data is hidden; a reel that hid it in another style goes
+        stale (cut_stale), the app then offers /recut. Plan and approval stay."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = set_redact_style(job, body.redact_style, say=lambda _: None)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        return {"id": job.name, "redact_style": res["redact_style"],
+                "previous": res["previous"], "cut_stale": state.cut_stale(job)}  # fmt: skip
+
     # -------------------------------------------------------------- target length
 
     @app.put("/api/jobs/{job_id}/target")
@@ -630,6 +660,8 @@ def _new_job(form) -> dict:
     cut_style = (f.get("cut_style") or _style.AUTO).strip().lower()
     if cut_style not in CUT_STYLES:
         raise HTTPException(400, f"cut_style must be one of {', '.join(CUT_STYLES)}")
+    if (f.get("redact_style") or _redact_style.AUTO).strip().lower() not in _redact_style.STYLES:
+        raise HTTPException(400, f"redact_style must be one of {', '.join(_redact_style.STYLES)}")
     try:
         target = _length.parse_target(f.get("target_s"))
     except _length.LengthError as e:
@@ -670,4 +702,13 @@ def _new_job(form) -> dict:
         raise HTTPException(400, str(e)) from None
     if brand_ref:
         update_job(job, brand=brand_ref)
+    _new_job_redact_style(job, f.get("redact_style"))
     return {"id": job.name}
+
+
+def _new_job_redact_style(job, value) -> None:
+    """The redaction style picked in the new-job form; "auto" or none: the brand's default
+    (not stored). An unknown value was refused before the job was made."""
+    value = (value or "").strip().lower()
+    if value and value != _redact_style.AUTO:
+        set_redact_style(job, value, say=lambda _: None)

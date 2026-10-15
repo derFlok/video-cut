@@ -56,7 +56,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from ..edl import EdlError, load, read_sync, validate
-from . import _audio_env, _layouts, _plates, _snap
+from . import _audio_env, _layouts, _plates, _redact_blur, _redact_style, _snap
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed, sized
@@ -207,10 +207,18 @@ def _overlay_size(path: Path) -> tuple[int, int] | None:
         return None
 
 
+def _style_doc(b: dict) -> dict:
+    """A render.json "redaction" "blocks" entry: segment, camera times, box, style used."""
+    doc = {k: b[k] for k in ("segment", "t0", "t1", "style", "edge", "cell", "note") if k in b}
+    return {**doc, "box": [round(v, 4) for v in b["box"]]}
+
+
 def _layout_video(job, plan, edl, info, face, video_in, inputs):
     """Video lines of a render with screen layouts (the screen is the next input after
     `inputs`) and the _layouts.plan_all doc (screen, clamped, speaker, warnings)."""
     drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
+    # a blur text recognition still reads is made stronger (or a solid block) first
+    drawn["blur_raised"] = _redact_blur.calibrate(drawn, plan.fps)
     video = _layouts.video_chain(
         plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in,
         f"{len(inputs) // 2}:v:0", bg=_layouts.background(job), matrix=overlay_matrix(info),
@@ -262,6 +270,7 @@ def render(args) -> dict:
     # when the EDL forgot one (redaction.enforced; no decision = all of them).
     cands, red_source = redaction_enforced(job)
     edl = _layouts.with_redaction(edl, cands)
+    redact_style = _redact_style.resolved(read_job(job))  # ToolError for an invalid one
     layouts = [s.layout for s in edl.segments]
     use_layouts = any(lay != "face" for lay in layouts)
 
@@ -311,6 +320,7 @@ def render(args) -> dict:
     elif preview:
         measured = None  # single pass
     warnings, v_out, video, clamped, screen_rel, speaker = [], "[v]", None, [], None, []
+    styles = []  # how each redact block of the screen segments was drawn
     if size_note:
         warnings.append(size_note)
     if snapped and snapped["unresolved"]:
@@ -322,6 +332,10 @@ def render(args) -> dict:
         video, drawn = _layout_video(job, plan, edl, info, face, video_in, inputs)
         clamped, speaker = drawn["clamped"], drawn["speaker"]
         warnings += drawn["warnings"]
+        styles = [_style_doc(b) for b in drawn["redaction"]]
+        warnings += [
+            f"segment {b['segment']}: redaction {b['note']}" for b in styles if "note" in b
+        ]
         screen_rel = str(drawn["screen"].relative_to(job))
         inputs += ["-i", str(drawn["screen"])]
         for c in clamped:
@@ -429,8 +443,11 @@ def render(args) -> dict:
     if use_layouts:
         report["layouts"] = {k: layouts.count(k) for k in _layouts.LAYOUTS if k in layouts}
         report["screen_zoom_clamped"] = clamped
-    if red_source != "none":
-        report["redaction"] = {"source": red_source, "candidates": [c["id"] for c in cands]}
+    if red_source != "none" or styles:
+        report["redaction"] = {
+            "source": red_source, "candidates": [c["id"] for c in cands],
+            "style": redact_style, "blocks": styles,
+        }  # fmt: skip
     if plan.tail:
         report["tail_s"] = round(float(plan.tail / plan.fps), 3)
     if loud["integrated_lufs"] is None:

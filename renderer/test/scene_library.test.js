@@ -172,6 +172,44 @@ test("screenshot redaction is burnt in before the first visible frame", () => {
   assert.ok(images.every((o) => o[1] === prepared), "frames draw only the redacted copy");
 });
 
+test("screenshot blur draws the averaged cells over the fill, never the original", () => {
+  const env = makeEnv(tokensFor("blur", { w: 13, z: 0.9 }), FACES.centre, { "shot.png": SHOT });
+  const mod = scene("screenshot_frame");
+  const props = { ...SAMPLES.screenshot_frame, redact_style: "blur" };
+  const item = { scene: "screenshot_frame", t0: 0, t1: 3, props };
+  const L = mod.layout(fakeCtx(), item, env);
+  const ops = L.src.canvas.ctx.log;
+  const fill = ops.findIndex((o) => o[0] === "fillRect");
+  const clear = ops.findIndex((o) => o[0] === "clearRect");
+  assert.ok(clear >= 0 && clear < fill, "cleared, then filled solid first");
+  const draws = ops.filter((o) => o[0] === "drawImage");
+  assert.equal(draws.length, 2); // the original copy, then the blurred cells
+  const [, tiny, sx, sy, tw, th, x, y, w, h] = draws[1];
+  assert.ok(ops.indexOf(draws[1]) > fill, "the blur goes over the fill");
+  assert.notEqual(tiny, SHOT);
+  assert.equal(tiny.width, tw);
+  assert.equal(tiny.height, th);
+  assert.deepEqual([sx, sy], [0, 0]);
+  // the cells were averaged from the ORIGINAL image's box, a few px per cell
+  const cell = mod.blurCell(SHOT, 1, w, h);
+  assert.equal(tw, Math.ceil(w / cell));
+  assert.equal(th, Math.ceil(h / cell));
+  assert.ok(cell >= 13 && th <= 12, `cell ${cell}, ${tw}x${th}`);
+  const [, src, ox, oy, ow, oh] = tiny.ctx.log.find((o) => o[0] === "drawImage");
+  assert.equal(src, SHOT);
+  assert.deepEqual([ox, oy, ow, oh], [x, y, w, h]); // copy scale 1: the same px
+  // the default stays the solid block
+  const plain = mod.layout(fakeCtx(), { ...item, props: SAMPLES.screenshot_frame }, env);
+  assert.equal(plain.src.canvas.ctx.log.filter((o) => o[0] === "drawImage").length, 1);
+});
+
+test("an unknown redaction style fails instead of drawing nothing", () => {
+  const env = makeEnv(tokensFor("blur", { w: 13, z: 0.9 }), null, { "shot.png": SHOT });
+  const props = { ...SAMPLES.screenshot_frame, redact_style: "crop" };
+  const item = { scene: "screenshot_frame", t0: 0, t1: 3, props };
+  assert.throws(() => scene("screenshot_frame").layout(fakeCtx(), item, env), /redact_style/);
+});
+
 test("bad redaction boxes fail instead of being skipped", () => {
   const env = makeEnv(tokensFor("blur", { w: 13, z: 0.9 }), null, { "shot.png": SHOT });
   const item = { scene: "screenshot_frame", t0: 0, t1: 3, props: { file: "shot.png", redact: [[0.5, 0.5, 0.2, 0.9]] } };
