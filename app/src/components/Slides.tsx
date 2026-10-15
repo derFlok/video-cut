@@ -184,8 +184,8 @@ function SlideCard({
       <div className="viewcard-meta stack-sm">
         <span className="badges">
           <span className="badge badge-accent">{templateName(slide.template, t)}</span>
-          <span className="badge">{layoutName(String(slide.layout), t)}</span>
         </span>
+        <span>{layoutName(String(slide.layout), t)}</span>
         <span className="muted">
           {t("slides.plan.at")} {clockFine(slide.t0)} – {clockFine(slide.t1)}
         </span>
