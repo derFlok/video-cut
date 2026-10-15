@@ -634,7 +634,7 @@ def _is_area(c: dict, p: dict) -> bool:
 
 
 def plan_stills(args) -> dict:
-    from ..edl import read_sync, screen_time
+    from ..edl import is_screen, read_sync, screen_time
     from ..redaction import asset_file
     from .plan import FILE, STILLS, check_job
 
@@ -670,7 +670,7 @@ def plan_stills(args) -> dict:
     for v in data.get("views") or []:
         t = v["src"][0] if v.get("zoom_t") is None else v["zoom_t"]
         name = f"view_{v['n']:02d}.jpg"
-        got = camera_frame(t) if v["layout"] == "face" else screen_frame(t)
+        got = screen_frame(t) if is_screen(v["layout"]) else camera_frame(t)
         if got is None:
             warnings.append(f"view {v['n']}: no valid work/sync.json, no screen still")
             v["still"] = None

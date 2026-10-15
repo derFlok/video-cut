@@ -11,8 +11,10 @@ import pytest
 from helpers import run_tool
 
 from videocut import run as pipeline
-from videocut.tools import _job_slides, _pdf, _slide_spec
+from videocut.edl import SLIDE_LAYOUTS
+from videocut.tools import _job_slides, _pdf
 from videocut.tools import plan as plan_tool
+from videocut.tools import slides as slides_tool
 from videocut.tools.common import jobs_root
 from videocut.tools.job import approve_job, is_approved, read_approval
 
@@ -219,6 +221,7 @@ def test_plan_slides_valid_in_both_modes():
         ([STEPS, STEPS], None, "ids must be unique"),
         ([{**STEPS, "content": {"steps": ["nur einer"]}}], None, ".content.steps"),
         ([{**STEPS, "template": "hologram"}], None, ".template"),
+        ([{**STEPS, "content": {**STEPS["content"], "extra": 1}}], None, "unknown field"),
         ([{**STEPS, "why": ""}], None, ".why"),
         ([STEPS], ctx("auto", (), []), "is not in work/slides.json"),
         ([STEPS], ctx("auto", (), [{**STEPS, "content": {"steps": ["a", "b"]}}]), "differ"),
@@ -256,10 +259,11 @@ def test_plan_slides_problems(slides, context, msg):
         ("quote", {"text": "x" * 160, "author": "Zentrovia"}, True),
         ("cta", {"title": "Jetzt testen", "url": "example.com"}, True),
         ("image", {"asset": "../../etc/passwd"}, False),
+        ("bar_chart", {"bars": [{"label": "A", "value": 3}, {"label": "B", "value": 4}]}, True),
     ],
 )
 def test_slide_content_limits(template, content, ok):
-    assert (_slide_spec.errors(template, content) == []) is ok
+    assert (slides_tool.content_errors(template, content, "$") == []) is ok
 
 
 # ---------------------------------------------------------------- run guards
@@ -319,9 +323,17 @@ def test_skills_cover_slides():
     assert "## Slides" in plan and "never invent" in plan.lower()
     for cmd in ("slides check", "slides stills", "sheet slides"):
         assert f"videocut tool {cmd}" in plan
-    for tpl in _slide_spec.TEMPLATES:
+    for tpl in slides_tool.TEMPLATES:
         assert f"`{tpl}`" in plan
-    for layout in _slide_spec.LAYOUTS:
+    for layout in SLIDE_LAYOUTS:
         assert f"`{layout}`" in plan and f"`{layout}`" in skill["cut"]
     assert "videocut tool slides render" in skill["cut"] and '"reveal"' in skill["cut"]
     assert "work/slides.json" in skill["overlays"] and "slides render" in skill["revise"]
+
+
+def test_views_never_take_a_slide_layout():
+    view = {"n": 1, "src": [0.0, 2.0], "layout": "slide", "why": "x"}
+    errs = plan_tool.validate(plan(views=[view]), "9:16", 30.0, False)
+    assert any("slide layout; slides go in $.slides" in e for e in errs), errs
+    face = {**view, "layout": "face"}
+    assert plan_tool.validate(plan(views=[face]), "9:16", 30.0, False) == []

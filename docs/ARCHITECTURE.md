@@ -60,7 +60,7 @@ framing, face track in output px, safe zones; shared by render, overlays and ver
 `_color.py` (HDR → SDR), `_layouts.py` (screen/pip/split and slide geometry, zoom windows and
 their filter graph; shared by render, overlays and verify), `_verify_screen.py` (the
 product-demo checks of verify), `_verify_slides.py` (the slide checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes),
-`_pdf.py` (PDF pages → PNG, macOS CoreGraphics in a child process), `_job_slides.py` (job slide settings, page import), `_slide_spec.py` (slide templates and text limits for plan check),
+`_pdf.py` (PDF pages → PNG, macOS CoreGraphics in a child process), `_job_slides.py` (job slide settings, page import),
 `_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
 snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
 (`speech_clipped`), `_style.py` (cut styles).

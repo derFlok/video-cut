@@ -39,8 +39,9 @@ import json
 from pathlib import Path
 
 from .. import redaction
-from ..edl import LAYOUTS
-from . import _format, _job_slides, _slide_spec
+from ..edl import SCREEN_LAYOUTS, SLIDE_ID_RE, SLIDE_LAYOUTS
+from . import _format, _job_slides
+from . import slides as slides_tool
 from .brand import SAMPLES
 from .common import ToolError, job_parent, read_job, resolve_job, run_tool
 
@@ -132,8 +133,10 @@ def validate(
             continue
         errs += _src_errors(it.get("src"), f"{p}.src", duration)
         layout = it.get("layout")
-        if layout not in LAYOUTS:
-            errs.append(f"{p}.layout: must be one of {', '.join(LAYOUTS)}")
+        if layout in SLIDE_LAYOUTS:
+            errs.append(f"{p}.layout: {layout} is a slide layout; slides go in $.slides")
+        elif layout not in ("face", *SCREEN_LAYOUTS):
+            errs.append(f"{p}.layout: must be one of {', '.join(('face', *SCREEN_LAYOUTS))}")
         elif layout != "face" and not has_screen:
             errs.append(f"{p}.layout: {layout} needs a screen recording (job.json has none)")
         if it.get("zoom_box") is not None:
@@ -198,10 +201,13 @@ def _slide_errors(data: dict, duration: float | None, job: dict | None) -> list[
             errs.append(f"{p}: must be an object")
             continue
         sid = it.get("id")
-        if not (isinstance(sid, str) and _slide_spec.ID_RE.fullmatch(sid)):
+        if not (isinstance(sid, str) and SLIDE_ID_RE.fullmatch(sid)):
             errs.append(f'{p}.id: must be a short id like "s1"')
         ids.append(sid)
-        errs += [f"{p}{m}" for m in _slide_spec.errors(it.get("template"), it.get("content"))]
+        if it.get("template") not in slides_tool.TEMPLATES:
+            errs.append(f"{p}.template: must be one of {', '.join(slides_tool.TEMPLATES)}")
+        else:
+            errs += slides_tool.content_errors(it["template"], it.get("content"), f"{p}.content")
         if it.get("template") == "image":
             asset = (it.get("content") or {}).get("asset")
             if mode == "auto":
@@ -219,8 +225,8 @@ def _slide_errors(data: dict, duration: float | None, job: dict | None) -> list[
             spans.append((src[0], src[1], i))
             if keep and not any(min(k[1], src[1]) - max(k[0], src[0]) > 0 for k in keep):
                 errs.append(f"{p}.t0/t1: the words it illustrates are not in the keep list")
-        if it.get("layout") not in _slide_spec.LAYOUTS:
-            errs.append(f"{p}.layout: must be one of {', '.join(_slide_spec.LAYOUTS)}")
+        if it.get("layout") not in SLIDE_LAYOUTS:
+            errs.append(f"{p}.layout: must be one of {', '.join(SLIDE_LAYOUTS)}")
         if not _text(it.get("why")):
             errs.append(f"{p}.why: must be a string")
         if "still" in it and not isinstance(it["still"], str | None):

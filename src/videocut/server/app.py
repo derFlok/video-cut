@@ -217,7 +217,7 @@ class TextBody(BaseModel):
 
 
 class PlanFeedbackBody(TextBody):
-    slide: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,19}$")
+    slide: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
 
 
 class FeedbackBody(TextBody):
@@ -490,6 +490,8 @@ def create_app(
         plan = state.plan_json(job)
         if plan is not None and is_approved(job) and not approved_plan_json(job):
             plan = None
+        if plan is not None:
+            plan = state.with_slide_stills(job, plan)
         return {
             "markdown": project.read_text(errors="replace"),
             "plan": plan,

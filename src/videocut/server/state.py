@@ -347,6 +347,22 @@ def detail(job: Path, ch: Channel | None) -> dict:
     }
 
 
+def with_slide_stills(job: Path, plan: dict) -> dict:
+    """plan.json with each slide's preview (`slides stills`: work/slides/stills/<id>_sm.jpg,
+    the downscaled one) where the plan names none; the file itself is not changed."""
+    slides = plan.get("slides")
+    if not isinstance(slides, list):
+        return plan
+    out = []
+    for s in slides:
+        if isinstance(s, dict) and not s.get("still") and isinstance(s.get("id"), str):
+            rel = f"work/slides/stills/{s['id']}_sm.jpg"
+            if SAFE_PART.fullmatch(f"{s['id']}_sm.jpg") and (job / rel).is_file():
+                s = {**s, "still": rel}
+        out.append(s)
+    return {**plan, "slides": out}
+
+
 def slides_view(job: Path, data: dict) -> dict:
     """The job's slide settings and, once cut, where the reel shows each slide (output
     seconds, for the result timeline)."""

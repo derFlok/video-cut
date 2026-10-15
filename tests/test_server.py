@@ -1200,6 +1200,17 @@ def test_slide_marks_follow_the_edl_and_stills_are_served(client):
     assert client.get("/api/jobs/j1/stills/input/slides/page_01.png").status_code == 404
 
 
+def test_plan_shows_the_slide_stills(client):
+    job = planned_job()
+    plan = {"title": "T", "slides": [{"id": "s1", "template": "title"}, {"id": "s2"}]}
+    (job / "work" / "plan.json").write_text(json.dumps(plan))
+    (job / "work" / "slides" / "stills").mkdir(parents=True)
+    (job / "work" / "slides" / "stills" / "s1_sm.jpg").write_bytes(b"\xff\xd8\xff")
+    got = client.get("/api/jobs/j1/plan").json()["plan"]["slides"]
+    assert got[0]["still"] == "work/slides/stills/s1_sm.jpg" and "still" not in got[1]
+    assert json.loads((job / "work" / "plan.json").read_text()) == plan
+
+
 @pytest.mark.media
 def test_job_create_removes_the_job_when_slides_fail_unexpectedly(
     client, portrait_clip, monkeypatch
