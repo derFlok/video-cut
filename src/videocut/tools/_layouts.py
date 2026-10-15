@@ -58,9 +58,13 @@ Slides (every job type, tools/slides.py renders one opaque clip per slide id):
     slide_full   the slide clip fills the frame (the voice goes on)
 
 The content area keeps inside the safe zones and SLIDE_GAP of the short side away from the
-speaker (`slide_geometry`). A slide on several segments shows its clip continuously: each
-range starts at the clip frame where the previous range of that slide ended (its clock
-runs on in output time, no restart at the cut).
+speaker (`slide_geometry`). A stacked slide_split (portrait/square) keeps SLIDE_SEAM of the
+short side free above the speaker part instead: the captions sit on the seam between the
+two parts (`slide_seam`; their upper half over that empty margin, the lower half over the
+top of the speaker part), so they never cover the slide's content nor the speaker's mouth.
+A slide on several segments shows its clip continuously: each range starts at the clip
+frame where the previous range of that slide ended (its clock runs on in output time, no
+restart at the cut).
 
 Time: segment in/out stay CAMERA time; the screen frame shown at camera time t is screen
 time t + work/sync.json offset_s (+ drift_ppm applied at the segment start). Screen time 0
@@ -144,6 +148,9 @@ BLUR_MAX_TEXT = 3  # ... that part at most this many text heights (a panel stays
 DEFAULT_BRAND = brand.EXAMPLE_ID
 SLIDE_LAYOUTS = edl_mod.SLIDE_LAYOUTS
 SLIDE_GAP = 0.03  # slide content keeps this share of the short side off the speaker
+# Stacked slide_split: the free margin above the seam (captions there), share of the short
+# side in tall frames (h/w >= 1.6, renderer style.frame `tall`: larger captions) / others.
+SLIDE_SEAM = (0.12, 0.09)
 PIP_TOKEN_SIZE = (0.15, 0.45)  # brand pip.size is clamped to this range
 
 
@@ -431,11 +438,20 @@ def slide_geometry(layout: str, out: tuple[int, int], tokens: dict | None = None
     part = speaker_rect(out)
     if _stacked("split", out):
         rect = Rect(0, 0, ow, part.y)
-        area = [z["side"], z["top"], ow - z["side"], part.y - gap]
+        seam = SLIDE_SEAM[0] if oh / ow >= 1.6 else SLIDE_SEAM[1]
+        area = [z["side"], z["top"], ow - z["side"], part.y - _even(min(out) * seam)]
     else:
         rect = Rect(0, 0, part.x, oh)
         area = [z["side"], z["top"], part.x - gap, oh - z["bottom"]]
     return SlideGeo(layout, rect, area, part)
+
+
+def slide_seam(layout: str, out: tuple[int, int]) -> int | None:
+    """Output y of the seam between the slide part and the speaker part of a stacked
+    slide_split (where its captions go), else None."""
+    if layout != "slide_split" or not _stacked("split", out):
+        return None
+    return speaker_rect(out).y
 
 
 def view_aspect(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> float:

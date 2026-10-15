@@ -44,6 +44,9 @@ track are in the output px of work/overlays.json)
     covers more than 2 % of the face box at any face sample (output time) while it is
     visible; flag `overlay_overlap` when an overlay and a caption on screen at the same time
     share more than 10 % of the smaller box (one hides the other: there was no free room).
+    A caption on the seam of a stacked slide_split may cover the slide part's empty margin
+    and the forehead: flag `overlay_on_slide_content` when a box touches the slide's content
+    box, and judge that caption on the face below the brow line only.
     A full-frame end card (`cta_end`) is exempt from these and from the frozen check: it
     hides the video on purpose and keeps its own content inside the safe area. But flag
     `caption_on_plate` when a caption was drawn while the end card was on screen, and
@@ -114,6 +117,7 @@ BASE_AUDIBLE_DB = -70.0  # baseline blocks quieter than this (digital silence) a
 FLOOR = 1e-3  # -60 dBFS: the smallest baseline step, so ratios stay sane next to silence
 STRIP_TILES, TILE_W, WAVE_H = 5, 216, 140
 FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
+FOREHEAD = 0.25  # top share of the face box a seam caption may cover (renderer lib/layout.js)
 CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
 BLOCK_OVERLAP_MAX = 0.1  # share of the smaller box an overlay and a caption may share
 FULL_FRAME_SCENES = _plates.PLATE_SCENES  # the end card: an opaque full-frame plate, by design
@@ -353,7 +357,12 @@ def overlay_checks(
     BLOCK_OVERLAP_MAX of the box lies on the screen view of a product-demo stretch,
     overlays.json `views`), the worst face overlap (share of the face box) and when it
     happens (output s). A portrait `screenshot_frame` (box taller than wide) is the
-    picture of the moment and may cover the speaker (`stage`, never `overlay_on_face`)."""
+    picture of the moment and may cover the speaker (`stage`, never `overlay_on_face`).
+    A caption on the seam of a stacked slide_split view (its box crosses the view's `seam`)
+    may lie on the slide part's empty margin and on the hair and forehead (the top FOREHEAD
+    of the face box): it is judged on the slide's `content` box (`overlay_on_slide_content`
+    when it touches it) and on the face from the brow line down. Any other box on such a
+    view gets `overlay_on_slide_content` too when it touches the content box."""
     w, h = size
     safe = safe_zones(size)
     lo_x, hi_x, lo_y, hi_y = safe["side"], w - safe["side"], safe["top"], h - safe["bottom"]
@@ -371,11 +380,19 @@ def overlay_checks(
             c0, c1 = _drawn(b)
             if any(c0 <= p1 and c1 >= p0 for p0, p1 in plates):
                 flags.append("caption_on_plate")
+        seams = [
+            v for v in views or []
+            if "seam" in v and v["t0"] < b["t1"] and v["t1"] > b["t0"]
+            and b.get("scene") not in FULL_FRAME_SCENES
+        ]  # fmt: skip
+        on_seam = [v for v in seams if b.get("scene") == "caption" and y0 < v["seam"] < y1]
         worst, at = 0.0, None
         for f in face:
             if b["t0"] <= f["t"] <= b["t1"]:
                 fb = f["box"]
                 area = (fb[2] - fb[0]) * (fb[3] - fb[1])
+                if any(v["t0"] <= f["t"] <= v["t1"] for v in on_seam):
+                    fb = [fb[0], fb[1] + (fb[3] - fb[1]) * FOREHEAD, fb[2], fb[3]]
                 share = overlap(b["box"], fb) / area if area > 0 else 0.0
                 if share > worst:
                     worst, at = share, f["t"]
@@ -383,11 +400,13 @@ def overlay_checks(
         if worst > FACE_OVERLAP_MAX and b.get("scene") not in FULL_FRAME_SCENES and not stage:
             flags.append("overlay_on_face")
         if b.get("scene") not in FULL_FRAME_SCENES and any(
-            v["t0"] < b["t1"] and v["t1"] > b["t0"]
+            v["t0"] < b["t1"] and v["t1"] > b["t0"] and v not in on_seam
             and overlap(b["box"], v["screen"]) > BLOCK_OVERLAP_MAX * _area(b["box"])
             for v in views or []
         ):  # fmt: skip
             flags.append("overlay_on_screen")
+        if any(overlap(b["box"], v["content"]) > 0 for v in seams):
+            flags.append("overlay_on_slide_content")
         if b.get("scene") not in ("caption", *FULL_FRAME_SCENES) and any(
             c.get("scene") == "caption"
             and c["t0"] < b["t1"]

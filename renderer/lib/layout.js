@@ -116,12 +116,22 @@ function allowedArea(size, safe, inset = 0) {
 // other blocks, then lies in the better band, then closest to that band's own spot.
 // `hard` boxes (also in `avoid`: the slide part of a slide_split view) weigh more than
 // the face: a block covers the face before it covers one of them.
+// `seam` (output y; position "seam"): a caption of a stacked slide_split view sits on the
+// boundary between the slide part and the speaker part, centred on it, else just below
+// the lowest `hard` box above it (the slide's content box); the face then counts from the
+// brow line down (FOREHEAD: hair and forehead may be covered, the eyes and mouth not).
 // `inset` keeps that much extra distance from the safe zones (room for transitions that
 // draw outside the box). Returns {box, overlapsFace, overlapsBlock, band}.
 const SCAN_STEP = 8; // px between candidate positions of the vertical scan
 const LOWER_AT = 0.72; // spot of the lower band without a face (share of the allowed height)
+const FOREHEAD = 0.25; // top share of a face box above the brow line (a seam caption may cover it)
 
-function placeBlock({ size, safe, w, h, face, avoid = [], hard = [], position = "center", anchor = "center", margin = 24, inset = 0 }) {
+// The face box from the brow line down.
+function faceCore(face) {
+  return face ? [face[0], face[1] + (face[3] - face[1]) * FOREHEAD, face[2], face[3]] : null;
+}
+
+function placeBlock({ size, safe, w, h, face, avoid = [], hard = [], position = "center", anchor = "center", margin = 24, inset = 0, seam = null }) {
   const [ax0, ay0, ax1, ay1] = allowedArea(size, safe, inset);
   const x0 = Math.round(Math.max(ax0, Math.min(ax1 - w, (size[0] - w) / 2)));
   const clampX = (x) => Math.round(Math.max(ax0, Math.min(ax1 - w, x)));
@@ -136,7 +146,8 @@ function placeBlock({ size, safe, w, h, face, avoid = [], hard = [], position = 
   const clampY = (y) => Math.round(Math.max(ay0, Math.min(ay1 - h, y)));
   const at = (y, x = xs[0]) => [x, y, x + w, y + h];
   const grow = (b) => [b[0] - margin, b[1] - margin, b[2] + margin, b[3] + margin];
-  const faceG = face ? grow(face) : null;
+  const onSeam = position === "seam" && Number.isFinite(seam);
+  const faceG = face ? grow(onSeam ? faceCore(face) : face) : null;
   const others = avoid.map(grow);
   const hards = hard.map(grow);
   const ah = ay1 - ay0;
@@ -153,8 +164,14 @@ function placeBlock({ size, safe, w, h, face, avoid = [], hard = [], position = 
     // The foot of the allowed area (landscape captions and lower thirds).
     bottom: { has: (y) => y + h >= ay1 - SCAN_STEP, spot: clampY(ay1 - h) },
   };
-  const order =
-    position === "top"
+  if (onSeam) {
+    // Centred on the seam, pushed down below the content box when that reaches lower.
+    const above = hards.filter((b) => b[1] < seam).map((b) => Math.ceil(b[3]));
+    bands.seam = { has: (y) => y < seam && y + h > seam, spot: clampY(Math.max(seam - h / 2, ...above)) };
+  }
+  const order = onSeam
+    ? ["seam", "lower", "center"]
+    : position === "top"
       ? ["top", "center", "lower"]
       : position === "bottom"
         ? ["bottom", "lower", "center"]
@@ -195,4 +212,4 @@ function placeBlock({ size, safe, w, h, face, avoid = [], hard = [], position = 
   };
 }
 
-module.exports = { breakLines, fitText, faceAt, faceDuring, overlapArea, allowedArea, placeBlock };
+module.exports = { FOREHEAD, breakLines, fitText, faceAt, faceDuring, overlapArea, allowedArea, faceCore, placeBlock };

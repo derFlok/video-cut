@@ -757,7 +757,8 @@ def clamped_info(render: dict) -> list[dict]:
 def load_views(job: Path) -> list[dict]:
     """The areas overlays keep clear in a product demo, from overlays.json "views":
     [{"t0", "t1", "screen": box}], a screen view that does not fill the frame and every
-    zoom target ("focus")."""
+    zoom target ("focus"); the slide part of a stacked slide_split also carries its "seam"
+    (y) and "content" box (verify.overlay_checks: captions on the seam)."""
     try:
         doc = json.loads((job / "work" / "overlays.json").read_text())
     except (OSError, ValueError):
@@ -772,6 +773,12 @@ def load_views(job: Path) -> list[dict]:
             box = b.get("screen", b.get("box"))
             if isinstance(box, list) and len(box) == 4 and _num(b.get("t0"), b.get("t1"), *box):
                 out.append({"t0": b["t0"], "t1": b["t1"], "screen": box})
+                content = b.get("content")
+                if (
+                    b is v and v.get("layout") == "slide_split" and _num(v.get("seam"))
+                    and isinstance(content, list) and len(content) == 4 and _num(*content)
+                ):  # fmt: skip
+                    out[-1].update(seam=v["seam"], content=content)
     return out
 
 

@@ -719,8 +719,11 @@ the pip inset) above the bottom safe zone, with two candidate content boxes (abo
 the bubble; the renderer takes the one with the larger scale); `slide_split` puts the slide
 beside (16:9) or above (portrait, square) the speaker part from the split geometry, face
 tracked like `split`. Captions: overlays.json `views` carry `hide: true` for slide and
-slide_full stretches (the renderer draws no captions or overlays there); in slide_split the
-slide part is a block, so captions and keywords stay in the speaker part. Slides never
+slide_full stretches (the renderer draws no captions or overlays there); no overlay item
+(card, keyword, number, list, screenshot) shows during any slide layout, slide_split too
+(`overlays.off_slides`: an item keeps its longest part outside the slides, or is dropped
+below 0.5 s; overlays.json `slide_hidden` lists the cuts; the end card stays); in
+slide_split captions sit on the seam (portrait, square) or in the speaker part (16:9). Slides never
 replace a personal-data redaction: redaction applies to screen layouts only and a slide
 segment shows no screen.
 
@@ -763,10 +766,25 @@ gets `env.canvas` for it). Verify rebuilds the spec with the same boxes, so a cl
 before a candidate existed is `slide_stale`.
 
 **Captions around slides.** `slide` and `slide_full` views are `hide` (no caption, no
-item). In `slide_split` the view's `screen` (the slide part) is a hard block in the
-renderer (`render.js` `hardDuring`, `layout.placeBlock` `hard`): a caption or card covers
-the face before it covers the slide. In 9:16 the speaker part lies mostly in the bottom
-safe zone, so a caption there usually overlaps the face (verify: `overlay_on_face`).
+item), and `overlays` keeps every overlay item off all slide stretches (see above), so
+only captions show during a `slide_split`. Its view's `screen` (the slide part) is a hard
+block in the renderer (`render.js` `hardDuring`, `layout.placeBlock` `hard`). Stacked (9:16, 4:5, 1:1) the speaker part lies mostly in the
+bottom safe zone, so a caption in it would land on the mouth: captions go on the seam
+instead. The view carries `seam` (output y of the boundary, `_layouts.slide_seam`) and
+`content` (the slide's content box); the caption scene asks for `seamDuring` and
+`placeBlock` position "seam" centres the block on that y (pushed down below the content
+box if it reaches lower), with only the content box hard and the face counted from the
+brow line down (`FOREHEAD` = top 25 % of the face box: hair and forehead may be covered,
+eyes and mouth not); when the face still gets in the way it falls back to below the face.
+A caption group on screen across the start or end of such a view is cut there by its word
+times (`lib/seams.js` `splitAtSeams`; a part under 0.4 s gives its words to its neighbour),
+so the part in the face layout is not left on the seam over the face.
+`slide_geometry` keeps `SLIDE_SEAM` of the short side (12 % in tall frames, 9 % in 4:5
+and 1:1) free above the seam for the block's upper half; every template still fits its
+smaller box at >= 60 % (renderer tests). Verify judges a caption whose box crosses a
+view's seam on the content box (`overlay_on_slide_content`, which also flags any other
+item touching it) and on the face below the brow line, not on the whole slide part
+(`overlay_on_screen` stays for cards there). Side by side (16:9) nothing changes.
 
 **Plan.** The plan skill writes `work/slides.json` (`{slides: [{id, template, content,
 source, why}]}`, checked by `slides check`) and `plan.json` `slides` (the same plus `t0`/`t1`,
