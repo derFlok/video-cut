@@ -71,10 +71,18 @@ Sharpness: a window narrower than the view's width at the EDL size would upscale
 screen (< 1 source px per output px); such a key is widened to that width and reported
 (render.json "screen_zoom_clamped").
 
-Redaction: "redact" [{"t0", "t1": camera_s, "box"}] are solid blocks in the brand's
-colors.bg drawn on the screen frames BEFORE scaling, on every output frame that overlaps
-[t0, t1] plus one frame (and the drift over the segment) on each side, snapped outward to
-even source px.
+Redaction: "redact" [{"t0", "t1": camera_s, "box"}] are drawn on the screen frames BEFORE
+scaling, on every output frame that overlaps [t0, t1] plus one frame (and the drift over
+the segment) on each side, snapped outward to even source px, in the job's redact style
+(_redact_style.py): "block" a solid block in the brand's colors.bg; "blur" the box
+pixelated (cells of `blur_cell` source px, at least the UI text height) and blurred
+(gaussian, sigma half a cell), so it keeps its colours and no text can be read; "crop" a
+band along a screen edge (`band_edge`: touching it within EDGE_TOL, spanning FULL_SPAN of
+the other side; "auto" only top/bottom bands) is left out of the screen for the whole
+segment: the segment's screen is the rest of the recording (Segment.origin, Segment.screen)
+and the view is laid out for that, so zoom windows, targets and the other blocks are in
+its coordinates. A crop that would remove more than CROP_MAX of the screen's height (or
+width) blurs those bands instead (noted per block in Segment.redaction, render.json).
 """
 
 import json
@@ -85,6 +93,7 @@ from pathlib import Path
 
 from .. import brand
 from .. import edl as edl_mod
+from . import _redact_style
 from ._format import safe_zones
 from ._geometry import Window, crop_window, overlap
 from .common import ToolError, binary, read_job, run
@@ -110,6 +119,11 @@ LETTERBOX = 0.25  # landscape/square: a screen whose aspect differs from the vie
 # more than this (larger / smaller - 1) is fitted with bars instead of filling the area
 LETTERBOX_SPLIT = 0.5  # the same for the narrower screen part of a landscape split
 HIDPI_MIN = 2700  # recordings with a long side this large count as 2x (HiDPI) screens
+EDGE_TOL = 0.01  # a redact box this close to a screen edge touches it (crop)
+FULL_SPAN = 0.9  # ... and is a band when it spans this share of the other side
+CROP_MAX = 0.2  # a segment's crop removes at most this share of the screen height (width)
+BLUR_DIV = 4  # blur cells are at least the box's short side / this (and the text height),
+BLUR_MAX_TEXT = 3  # ... that part at most this many text heights (a panel stays a blur)
 DEFAULT_BRAND = brand.EXAMPLE_ID
 
 
@@ -144,7 +158,7 @@ class Segment:
     screen_frame: int  # screen frame (on the output grid) of local frame 0; may be < 0
     initial: Win
     moves: list[Move]
-    redact: list[tuple[int, int, int, int, int, int]]  # (n0, n1, x, y, w, h) source px
+    redact: list[tuple[int, int, int, int, int, int]]  # solid blocks (n0, n1, x, y, w, h)
     view: Rect
     inset: Rect | None = None
     face: Rect | None = None  # split: where the speaker goes
@@ -153,7 +167,12 @@ class Segment:
     speaker_px: float | None = None  # camera source px per output px of the speaker part
     focus: list[list[float]] = field(default_factory=list)  # zoom targets, output px
     focus_at: list[int] = field(default_factory=list)  # local frame each target is reached
-    screen: tuple[int, int] = (0, 0)  # size of the screen recording
+    screen: tuple[int, int] = (0, 0)  # size of the screen shown (the recording minus a crop)
+    origin: tuple[int, int] = (0, 0)  # where that screen starts in the recording (crop)
+    full_screen: tuple[int, int] | None = None  # size of the recording (None: `screen`)
+    blur: list[tuple[int, int, int, int, int, int, int]] = field(default_factory=list)
+    # ^ blurred boxes (n0, n1, x, y, w, h, cell): source px of `screen`, like `redact`
+    redaction: list[dict] = field(default_factory=list)  # per redact block: style used
 
 
 # --- job inputs ---------------------------------------------------------------------------
@@ -400,6 +419,69 @@ def window_expr(seg: Segment, i: int, frame: str) -> str:
 # --- planning -----------------------------------------------------------------------------
 
 
+def band_edge(box: list[float], style: str) -> str | None:
+    """The screen edge a redact `box` (normalised) is a band along, for redact `style`:
+    "top"/"bottom" (touches it, spans FULL_SPAN of the width) for auto and crop,
+    "left"/"right" for crop only; None when it is not cut off but blurred or blocked."""
+    if style not in ("auto", "crop"):
+        return None
+    x0, y0, x1, y1 = box
+    if x1 - x0 >= FULL_SPAN:
+        if y0 <= EDGE_TOL:
+            return "top"
+        if y1 >= 1 - EDGE_TOL:
+            return "bottom"
+    if style == "crop" and y1 - y0 >= FULL_SPAN:
+        if x0 <= EDGE_TOL:
+            return "left"
+        if x1 >= 1 - EDGE_TOL:
+            return "right"
+    return None
+
+
+def crop_plan(
+    boxes: list[list[float]], screen: tuple[int, int], style: str
+) -> tuple[tuple[int, int, int, int], dict[int, str], dict[int, str]]:
+    """((x, y, w, h) of the recording a segment shows, {box index: edge} of the boxes cut
+    off, {box index: note} of bands blurred instead because the crop would remove more
+    than CROP_MAX of the screen's height or width). The kept area is snapped inward to
+    even px, so every band is gone completely."""
+    cut = {"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}
+    edges = {}
+    for j, b in enumerate(boxes):
+        e = band_edge(b, style)
+        if e:
+            edges[j] = e
+            far = {"top": b[3], "bottom": 1 - b[1], "left": b[2], "right": 1 - b[0]}[e]
+            cut[e] = max(cut[e], far)
+    notes = {}
+    for side, pair in (("height", ("top", "bottom")), ("width", ("left", "right"))):
+        share = cut[pair[0]] + cut[pair[1]]
+        if share > CROP_MAX:
+            for j in [j for j, e in edges.items() if e in pair]:
+                notes[j] = (
+                    f"cropping would remove {share:.0%} of the screen {side} "
+                    f"(more than {CROP_MAX:.0%}): blurred instead"
+                )
+                del edges[j]
+            cut[pair[0]] = cut[pair[1]] = 0.0
+    sw, sh = screen
+    x0, y0 = math.ceil(cut["left"] * sw / 2) * 2, math.ceil(cut["top"] * sh / 2) * 2
+    x1 = math.floor((1 - cut["right"]) * sw / 2) * 2 if cut["right"] else sw
+    y1 = math.floor((1 - cut["bottom"]) * sh / 2) * 2 if cut["bottom"] else sh
+    return (x0, y0, x1 - x0, y1 - y0), edges, notes
+
+
+def blur_cell(w: int, h: int, screen: tuple[int, int]) -> int:
+    """Pixelation cell (source px, even) of a blurred w x h box: the UI text height of the
+    recording (TEXT_PT x ui_scale), or the box's short side / BLUR_DIV up to BLUR_MAX_TEXT
+    text heights when that is more (large text in a box sized to it). Render's calibration
+    makes it larger where text recognition still reads something."""
+    text = TEXT_PT * ui_scale(screen)
+    cell = max(text, min(min(w, h) / BLUR_DIV, BLUR_MAX_TEXT * text))
+    return max(2, math.ceil(cell / 2) * 2)
+
+
 def plan_segment(
     seg,
     frames: int,
@@ -412,24 +494,50 @@ def plan_segment(
     full_out: tuple[int, int],
     face: dict | None,
     redact_slack: int = 1,
+    redact_style: str = "block",
 ) -> tuple[Segment, list[dict]]:
     """The drawn form of one non-face EDL segment `seg` (edl.Segment, already framed: its
-    layout, screen_zoom and redact were validated by edl.py) and its clamped zoom keys."""
+    layout, screen_zoom and redact were validated by edl.py) and its clamped zoom keys.
+    `redact_style`: how its redact blocks are drawn (_redact_style.STYLES)."""
     layout = seg.layout
+    blocks = []  # (n0, n1, block) of the redact blocks shown in this segment
+    for r in seg.redact:
+        n0 = math.floor((r["t0"] - seg.start) * fps) - redact_slack
+        n1 = math.ceil((r["t1"] - seg.start) * fps) - 1 + redact_slack
+        if n1 >= 0 and n0 < frames:
+            blocks.append((max(n0, 0), min(n1, frames - 1), r))
+    full_screen = screen
+    kept, edges, notes = crop_plan([r["box"] for _, _, r in blocks], screen, redact_style)
+    ox, oy, sw, sh = kept
+    screen = (sw, sh)
+
+    def inside(b: list[float]) -> list[float]:
+        """Normalised box of the recording -> of the screen shown (clamped, not empty)."""
+        out = []
+        for a, b2, o, n, size in ((b[0], b[2], ox, sw, full_screen[0]),
+                                  (b[1], b[3], oy, sh, full_screen[1])):  # fmt: skip
+            lo, hi = (min(max((v * size - o) / n, 0.0), 1.0) for v in (a, b2))
+            if hi - lo < 1e-3:  # wholly in the cropped band: a sliver at its edge
+                lo = min(lo, 1 - 1e-3)
+                hi = lo + 1e-3
+            out.append((lo, hi))
+        return [out[0][0], out[1][0], out[0][1], out[1][1]]
+
+    zoom = [{**k, "box": inside(k["box"])} for k in seg.screen_zoom] if edges else seg.screen_zoom
     view = view_rect(layout, out, screen)
     sharp_w = view_rect(layout, full_out, screen).w  # >= 1 source px per output px
     aspect = view_aspect(layout, out, screen)  # the view is this aspect up to even rounding
     sw, sh = screen
     full = full_width(screen, aspect)
     initial: Win = ((sw - full) / 2, (sh - full / aspect) / 2, full)
-    if seg.screen_zoom and filled(layout, out, screen):  # no zoom, around the first target
-        first = min(seg.screen_zoom, key=lambda k: k["t"])
+    if zoom and filled(layout, out, screen):  # no zoom, around the first target
+        first = min(zoom, key=lambda k: k["t"])
         initial = window_for(first["box"], screen, aspect, full)[0]
     min_w = min(float(sharp_w), full)
 
     moves, clamped, keys = [], [], []
     ease = max(1, round(EASE_S * fps))
-    for k in sorted(seg.screen_zoom, key=lambda k: k["t"]):
+    for k in sorted(zoom, key=lambda k: k["t"]):
         win, zoom, was = window_for(k["box"], screen, aspect, min_w)
         if was:
             clamped.append(
@@ -446,16 +554,32 @@ def plan_segment(
         moves.append(Move(start, f, win))
         prev_end = f
 
-    redact = []
-    for r in seg.redact:
-        n0 = math.floor((r["t0"] - seg.start) * fps) - redact_slack
-        n1 = math.ceil((r["t1"] - seg.start) * fps) - 1 + redact_slack
-        if n1 < 0 or n0 >= frames:
-            continue
+    redact, blur, log = [], [], []
+    fw, fh = full_screen
+    for j, (n0, n1, r) in enumerate(blocks):
         b = r["box"]
-        x0, y0 = math.floor(b[0] * sw / 2) * 2, math.floor(b[1] * sh / 2) * 2
-        x1, y1 = min(math.ceil(b[2] * sw / 2) * 2, sw), min(math.ceil(b[3] * sh / 2) * 2, sh)
-        redact.append((max(n0, 0), min(n1, frames - 1), x0, y0, x1 - x0, y1 - y0))
+        entry = {"t0": r["t0"], "t1": r["t1"], "box": list(b)}
+        if j in edges:
+            log.append({**entry, "style": "crop", "edge": edges[j]})
+            continue
+        # snapped outward on the recording, then into the screen shown (a crop's offset is
+        # even); a block wholly inside a cropped band is not shown at all
+        x0, y0 = math.floor(b[0] * fw / 2) * 2 - ox, math.floor(b[1] * fh / 2) * 2 - oy
+        x1 = min(math.ceil(b[2] * fw / 2) * 2, fw) - ox
+        y1 = min(math.ceil(b[3] * fh / 2) * 2, fh) - oy
+        x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, sw), min(y1, sh)
+        if x1 <= x0 or y1 <= y0:
+            log.append({**entry, "style": "crop", "note": "inside the cropped band"})
+            continue
+        if redact_style == "block":
+            redact.append((n0, n1, x0, y0, x1 - x0, y1 - y0))
+            log.append({**entry, "style": "block"})
+            continue
+        cell = blur_cell(x1 - x0, y1 - y0, full_screen)
+        blur.append((n0, n1, x0, y0, x1 - x0, y1 - y0, cell))
+        log.append(
+            {**entry, "style": "blur", "cell": cell, **({"note": notes[j]} if j in notes else {})}
+        )
 
     # Zoom targets in output px (for keeping the inset off them).
     focus = []
@@ -469,7 +593,8 @@ def plan_segment(
     s.focus = focus
     # from the start of the move towards each target (the box is on its way there)
     s.focus_at = [max(f - ease, 0) for f, _, _ in keys]
-    s.screen = screen
+    s.screen, s.origin, s.blur, s.redaction = screen, (ox, oy), blur, log
+    s.full_screen = full_screen
     crop = seg.crop
     cx, cy = (crop.cx, crop.cy) if crop else (0.5, 0.5)
     box = segment_box(face, seg.start, seg.end) if face else None
@@ -557,16 +682,19 @@ def plan_all(
     """Every non-face range of `plan` (a _render_plan.Plan of the framed `edl`) drawn:
     {"segs": {range index: Segment}, "clamped": [{"segment", "t", "zoom", "max_zoom"}],
     "speaker": [{"segment", "layout", "px_ratio"}], "warnings": [str] (upscaled speaker
-    crops), "screen": the recording, "info": probe_screen, "sync": work/sync.json}. Shared
+    crops), "screen": the recording, "info": probe_screen, "sync": work/sync.json,
+    "redact_style": the job's, "redaction": [{"segment", "t0", "t1", "box", "style",
+    ...}] how each redact block is drawn}. Shared
     by render, overlays (where the screen view and the speaker are) and verify. `full_out`
     is the job's output size (the geometry follows the job format; `plan` may be a preview
     at a smaller size); default edl.size."""
     full_out = tuple(full_out or edl.size)
+    style = _redact_style.resolved(read_job(job))
     src = screen_source(job)
     sync_doc = sync(job)
     info = probe_screen(src)
     screen_frames = math.floor(info["duration"] * plan.fps)
-    segs, clamped, speaker, warnings = {}, [], [], []
+    segs, clamped, speaker, warnings, redaction = {}, [], [], [], []
     for i, r in enumerate(plan.ranges):
         if r.layout == "face":
             continue
@@ -575,7 +703,7 @@ def plan_all(
         seg, cl = plan_segment(
             seg_in, r.frames, plan.fps, offset=offset, screen=tuple(info["size"]),
             camera=camera, out=plan.out_size, full_out=full_out, face=face,
-            redact_slack=slack,
+            redact_slack=slack, redact_style=style,
         )  # fmt: skip
         if seg.screen_frame + seg.frames <= 0 or seg.screen_frame >= screen_frames:
             raise ToolError(
@@ -583,6 +711,9 @@ def plan_all(
                 f"(offset_s {offset})"
             )
         segs[i] = seg
+        for b in seg.redaction:  # the same dicts: render's blur calibration updates them
+            b["segment"] = r.seg
+            redaction.append(b)
         clamped += [{"segment": r.seg, **c} for c in cl]
         if seg.speaker_px is not None:
             speaker.append({"segment": r.seg, "layout": r.layout, "px_ratio": seg.speaker_px})
@@ -594,6 +725,7 @@ def plan_all(
     return {
         "segs": segs, "clamped": clamped, "speaker": speaker, "warnings": warnings,
         "screen": src, "info": info, "sync": sync_doc,
+        "redact_style": style, "redaction": redaction,
     }  # fmt: skip
 
 
@@ -666,7 +798,51 @@ def _t(v: float) -> str:
 
 def screen_view(seg: Segment, fps: Fraction, bg: str, matrix: str, to_sdr: str) -> list[str]:
     """Filters (no labels) that turn the grid-aligned screen stream into this segment's
-    view: cut by frame, padded/held, HDR -> SDR, redacted, zoomed, `view`-sized."""
+    view: cut by frame, padded/held, HDR -> SDR, cropped, redacted with solid blocks,
+    zoomed, `view`-sized. Blurred boxes need a branch: `screen_lines`."""
+    if seg.blur:
+        raise ValueError("a segment with blurred boxes is drawn by screen_lines")
+    return [*_screen_in(seg, fps, bg, to_sdr), *_screen_out(seg, fps, bg, matrix)]
+
+
+def blur_chain(w: int, h: int, cell: int) -> str:
+    """Filters (no labels) that pixelate and blur a w x h picture: area-average into cells
+    of `cell` px, back to full size without smoothing, then a gaussian of half a cell."""
+    cw, ch = max(1, math.ceil(w / cell)), max(1, math.ceil(h / cell))
+    return (
+        f"scale={cw}:{ch}:flags=area,scale={w}:{h}:flags=neighbor,"
+        f"gblur=sigma={_num(cell / 2)}:steps=2"
+    )
+
+
+def screen_lines(
+    i: int, seg: Segment, fps: Fraction, bg: str, matrix: str, to_sdr: str, label: str
+) -> list[str]:
+    """Filter lines that draw the screen view of segment i from [label] as [sv{i}]: like
+    screen_view, with every blurred box (`seg.blur`) cut out, pixelated, blurred and put
+    back over its frames before the blocks and the zoom."""
+    pre, post = _screen_in(seg, fps, bg, to_sdr), _screen_out(seg, fps, bg, matrix)
+    if not seg.blur:
+        return [f"[{label}]" + ",".join([*pre, *post]) + f"[sv{i}];"]
+    k = len(seg.blur)
+    lines = [
+        f"[{label}]" + ",".join(pre) + f",split={k + 1}[rm{i}]"
+        + "".join(f"[rc{i}_{j}]" for j in range(k)) + ";"
+    ]  # fmt: skip
+    cur = f"rm{i}"
+    for j, (n0, n1, x, y, w, h, cell) in enumerate(seg.blur):
+        a, b = (n0 - 0.5) / fps, (n1 + 0.5) / fps
+        lines += [
+            f"[rc{i}_{j}]crop={w}:{h}:{x}:{y},{blur_chain(w, h, cell)}[rb{i}_{j}];",
+            f"[{cur}][rb{i}_{j}]overlay=x={x}:y={y}:format=auto"
+            f":enable='between(t,{_t(a)},{_t(b)})'[ro{i}_{j}];",
+        ]
+        cur = f"ro{i}_{j}"
+    return [*lines, f"[{cur}]" + ",".join(post) + f"[sv{i}];"]
+
+
+def _screen_in(seg: Segment, fps: Fraction, bg: str, to_sdr: str) -> list[str]:
+    """Cut by frame, padded/held, HDR -> SDR, cropped to the screen shown."""
     f0, n = seg.screen_frame, seg.frames
     lead = min(max(-f0, 0), n)
     first = max(f0, 0)
@@ -679,6 +855,14 @@ def screen_view(seg: Segment, fps: Fraction, bg: str, matrix: str, to_sdr: str) 
     f += ["tpad=stop_mode=clone:stop=-1", f"trim=end_frame={n}"]
     if to_sdr:
         f.append(to_sdr)
+    if seg.full_screen not in (None, seg.screen):  # a band cut off (crop style)
+        f.append(f"crop={seg.screen[0]}:{seg.screen[1]}:{seg.origin[0]}:{seg.origin[1]}")
+    return f
+
+
+def _screen_out(seg: Segment, fps: Fraction, bg: str, matrix: str) -> list[str]:
+    """Solid blocks, then the zoom window scaled to the view."""
+    f = []
     for n0, n1, x, y, w, h in seg.redact:
         a, b = (n0 - 0.5) / fps, (n1 + 0.5) / fps
         f.append(
@@ -749,7 +933,7 @@ def compose(
     lines = [
         f"color=c={bg}:s={ow}x{oh}:r={fps},trim=end_frame={n},format=rgb24,"
         f"scale=out_color_matrix={matrix}:out_range=tv,format=yuv420p[bg{i}];",
-        f"[{screen_label}]" + ",".join(screen_view(seg, fps, bg, matrix, screen_sdr)) + f"[sv{i}];",
+        *screen_lines(i, seg, fps, bg, matrix, screen_sdr, screen_label),
     ]
     v = seg.view
     base = f"[bg{i}][sv{i}]overlay=x={v.x}:y={v.y}"

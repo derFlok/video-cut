@@ -42,7 +42,10 @@ Einmal-Link; Terminalfenster schließen beendet sie. Deutsch ist voreingestellt,
    Anrufen weglassen, dafür das Beispiel länger“*. Den Plantext kannst du auch direkt
    bearbeiten.
 4. **Persönliche Daten:** Hat der Plan Namen, E-Mail-Adressen oder Nummern im Bild gefunden,
-   entscheidest du je Fund, was geschwärzt wird (voreingestellt: alles). Dann **freigeben**:
+   entscheidest du je Fund, was verdeckt wird (voreingestellt: alles) und wie: unscharf,
+   abgeschnitten (eine Browserleiste oder Seitenleiste am Bildschirmrand) oder als volle
+   Fläche; „automatisch“ schneidet durchgehende Leisten ab und macht den Rest unscharf.
+   Dann **freigeben**:
    erst jetzt schneidet Claude, ergänzt Untertitel und Einblendungen, rendert und prüft das
    eigene Ergebnis.
 5. **Ergebnis:** Reel abspielen, die automatische Prüfung in Klartext lesen und an der
@@ -51,6 +54,10 @@ Einmal-Link; Terminalfenster schließen beendet sie. Deutsch ist voreingestellt,
    weglassen“*. Nur die betroffenen Stellen ändern sich; jede Version bleibt gelistet (die
    letzten fünf lassen sich wieder abspielen).
 6. **Herunterladen:** MP4 und Cover.
+
+Auf der Videoseite kannst du ein Video umbenennen und **duplizieren** (Menü „⋯“), z. B. um
+einen anderen Schnittstil oder ein anderes Format auszuprobieren, ohne das erste Ergebnis zu
+verlieren; die Kopie braucht eine eigene Freigabe, außer du übernimmst die Freigabe.
 
 **Marken** (oben in der Navigation): Vorschaubögen je Format, Farben, Schriften,
 Untertiteltempo und Anrede, Logo- und Schrift-Upload; neue Marken starten mit dem neutralen
@@ -143,7 +150,9 @@ braucht einen neuen Plan und eine neue Freigabe.
    klein unter dem Bildschirm, oder Bildschirm oben und du unten), wohin gezoomt wird und welche Stellen persönliche Daten
    zeigen könnten (E-Mail-Adressen, Telefonnummern, Namen). **Demodaten?** Du wirst bei der
    Freigabe gefragt: alles Demo, alles abdecken oder Nummern wählen (oder `--demo-data`).
-   Ohne Antwort wird alles Gelistete mit vollen Flächen abgedeckt. Wo der Text steht, misst
+   Ohne Antwort wird alles Gelistete im Verdeckungsstil des Videos verdeckt
+   (`--redact-style auto|blur|crop|block`, voreingestellt auto: Browserleisten oben oder unten
+   werden abgeschnitten, der Rest unscharf). Wo der Text steht, misst
    die Texterkennung des Macs auf der Aufnahme (lokal), und die Prüfung liest das fertige
    Reel, um sicherzugehen, dass er abgedeckt ist.
 5. Ist die Synchronisierung unsicher, hält der Lauf an und erklärt, wie du sie von Hand

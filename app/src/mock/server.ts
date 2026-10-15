@@ -156,6 +156,8 @@ function baseDetail(id: string, over: Partial<JobDetail>): JobDetail {
     revisions: [],
     cut_style: "auto",
     cut_style_resolved: over.has_screen ? "calm" : "standard",
+    redact_style: "auto",
+    redact_style_default: true,
     cut_stale: false,
     source_duration_s: 64.2,
     has_screen: false,
@@ -539,6 +541,14 @@ export function createMock(opts: MockOptions = {}) {
         d.cut_stale = !!d.outputs?.reel && d.approved && job.cutWith !== d.cut_style_resolved;
         return json(200, d);
       }
+      if (b === "redact-style" && method === "PUT") {
+        const v = String((body as { redact_style?: string })?.redact_style ?? "");
+        if (!["auto", "blur", "crop", "block"].includes(v)) return json(422, { detail: `unknown redact style '${v}'` });
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        d.redact_style = v as JobDetail["redact_style"];
+        d.redact_style_default = false;
+        return json(200, { id, redact_style: d.redact_style, cut_stale: !!d.cut_stale });
+      }
       if (b === "target" && method === "PUT") {
         const raw = (body as { target_s?: unknown })?.target_s;
         const v = raw === null || raw === undefined || raw === "auto" ? null : Number(raw);
@@ -654,6 +664,7 @@ export function createMock(opts: MockOptions = {}) {
       const fmt = String(form.get("format") ?? "auto");
       const title = camera.name.replace(/\.[^.]+$/, "");
       const style = String(form.get("cut_style") ?? "auto");
+      const redact = String(form.get("redact_style") ?? "auto");
       const target = String(form.get("target_s") ?? "auto");
       const words = JSON.parse(String(form.get("vocabulary") ?? "[]")) as VocabEntry[];
       const wordErrors = vocabErrors(words, "$.vocabulary");
@@ -663,6 +674,8 @@ export function createMock(opts: MockOptions = {}) {
           has_screen: withScreen,
           target_s: target === "auto" ? null : Number(target),
           cut_style: style as JobDetail["cut_style"],
+          redact_style: redact as JobDetail["redact_style"],
+          redact_style_default: redact === "auto",
           cut_style_resolved: (style === "auto" ? (withScreen ? "calm" : "standard") : style) as JobDetail["cut_style_resolved"],
           type: String(form.get("type")),
           brand: (form.get("brand") as string) || null,

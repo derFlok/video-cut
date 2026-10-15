@@ -217,7 +217,8 @@ Das Branding ist das zentrale Anpassungsmerkmal. Ziel: Nutzer lädt seine Marke 
   "icons": "lucide|phosphor|none",
   "voice": { "address": "du|sie", "tone": "…", "forbidden_words": [], "cta": "…" },
   "music": { "mood": "…", "max_bpm": 120 },
-  "legal": { "footer": "…" }
+  "legal": { "footer": "…" },
+  "redaction": { "style": "auto|blur|crop|block" }
 }
 ```
 

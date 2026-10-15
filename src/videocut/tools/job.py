@@ -1,8 +1,8 @@
 """`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style|target|duplicate|
-title`: create a job folder, inspect it, approve its plan, decide which personal-data
-candidates are demo data (human only, src/videocut/redaction.py), set its brand, its screen
-recording, its output format, its cut style or its target length, duplicate it or give it a
-display title.
+title|redact-style|vocab`: create a job folder, inspect it, approve its plan, decide which
+personal-data candidates are demo data (human only, src/videocut/redaction.py), set its brand,
+its screen recording, its output format, its cut style, its target length or how personal
+data is hidden, duplicate it, give it a display title, or edit its transcript vocabulary.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -17,6 +17,8 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                for a talking head, no fixed length for a demo; resolved when read),
                plan_target {target_s}: the target the current plan was made for (written
                by `run` after every plan run; another target makes the plan stale),
+               redact_style (optional, _redact_style.STYLES: "auto" | "blur" | "crop" |
+               "block"; absent: the brand's default, "auto"),
                lang (optional language of the plan's and reports' human-facing text:
                "de" | "en"; absent: "de"),
                approval {at, project_sha256, target_s}: a display copy only, never trusted,
@@ -56,7 +58,7 @@ from pathlib import Path
 from .. import brand
 from .. import redaction as red
 from ..paths import state_dir
-from . import _format, _length, _style, vocab
+from . import _format, _length, _redact_style, _style, vocab
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -675,6 +677,11 @@ def show(args) -> dict:
     personal = red.summary(job)
     if personal is not None:
         out["redaction"] = personal
+    try:
+        out |= redact_style_view(data)
+    except ToolError as e:  # show stays usable; render and verify refuse the job
+        out |= {"redact_style": "invalid", "redact_style_error": str(e)}
+    print(f"personal data shown as: {out['redact_style']}")
     return out
 
 
@@ -951,3 +958,69 @@ def register(subparsers) -> None:
     ti.add_argument("title", help="the new title")
     ti.set_defaults(handler=run_tool("job title", title_cmd))
     vocab.register_job(sub)
+    _register_redact_style(sub)
+
+
+# --- redaction style (_redact_style.py) ----------------------------------------------------
+
+
+def redact_style_view(data: dict) -> dict:
+    """redact_style (resolved) and whether it is the brand's default, for show / the app."""
+    return {
+        "redact_style": _redact_style.resolved(data),
+        "redact_style_default": data.get("redact_style") is None,
+    }
+
+
+def set_redact_style(job: Path, value: str, say=print) -> dict:
+    """Set how personal data is hidden (_redact_style.STYLES). A reel rendered before with
+    redactions in another style goes stale (run.cut_done compares the cut record's
+    "redact_style"); approval and plan stay."""
+    new_style = _redact_style.parse(value)
+    data = read_job(job)
+    try:
+        old = _redact_style.resolved(data)
+    except ToolError:  # an invalid value is what this command repairs
+        old = None
+    rec = data.get("cut")
+    try:
+        hides = bool(redaction_enforced(job)[0])
+    except ToolError:
+        hides = True
+    old_blocks = "block" if hides and data.get("redact_style") in (None, "block") else None
+    if isinstance(rec, dict) and "redact_style" not in rec:
+        # a cut from before redaction styles drew solid blocks (when it redacted anything)
+        data["cut"] = {**rec, "redact_style": "block" if rec.get("redaction_sha256") else None}
+    data["redact_style"] = new_style
+    write_json(job / JOB_FILE, data)
+    say(f"{job.name}: personal data shown as {new_style}")
+    rec = data.get("cut")
+    # no cut record: a reel approved before records existed drew solid blocks (run.cut_done)
+    drawn = rec.get("redact_style") if isinstance(rec, dict) else old_blocks
+    stale = drawn is not None and drawn != new_style and (job / "out" / "reel.mp4").is_file()
+    if stale:
+        say(
+            f"The reel hides personal data as {drawn}. Render it again as {new_style} "
+            f"(the approved plan stays): `videocut run {job.name}`"
+        )
+    return {"job": str(job), "id": job.name, "redact_style": new_style, "previous": old,
+            "stale": stale}  # fmt: skip
+
+
+def redact_style_cmd(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError(
+            "only a human picks how personal data is hidden (not available inside an agent run)"
+        )
+    return set_redact_style(resolve_job(args.job_ref or args.job), args.redact_style)
+
+
+def _register_redact_style(sub) -> None:
+    rs = sub.add_parser(
+        "redact-style",
+        help="set how personal data is hidden; a finished reel goes stale (human only)",
+        parents=[job_parent()],
+    )
+    rs.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    rs.add_argument("redact_style", help=_redact_style.HELP)
+    rs.set_defaults(handler=run_tool("job redact-style", redact_style_cmd))

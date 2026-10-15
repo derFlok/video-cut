@@ -13,6 +13,7 @@ from ..tools.job import (
     plan_made_for,
     plan_target_stale,
     project_sha,
+    redact_style_view,
     resolved_format,
     resolved_range,
     resolved_style,
@@ -169,6 +170,15 @@ def _cut_style(data: dict) -> tuple[str, str | None]:
     return data.get("cut_style") or "auto", resolved
 
 
+def _redact_style(data: dict) -> dict:
+    """How personal data is hidden: redact_style (the resolved one, null when job.json has
+    an invalid value) and whether it is the brand's default."""
+    try:
+        return redact_style_view(data)
+    except ToolError:
+        return {"redact_style": None, "redact_style_default": False}
+
+
 def _target(job: Path, data: dict) -> dict:
     """The target length as the API shows it: target_s (null: auto), target_resolved
     ({min_s, max_s} or null: no fixed range, also for an invalid value), and whether the
@@ -309,6 +319,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "cut_stale": cut_stale(job),
         "overlays_stale": overlays_stale(job),
         **_target(job, data),
+        **_redact_style(data),
         "source_duration_s": source_duration(job),
         "lang": job_lang(data),
         "title": title(job, data),

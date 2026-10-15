@@ -1,6 +1,9 @@
 // Screenshot frame: an image from the job folder (props.file) fitted into a rounded,
 // device-less frame; optional animated zoom to props.focus ([x0, y0, x1, y1], 0..1 of
-// the image) and redaction boxes (props.redact: [[x0, y0, x1, y1], ...]).
+// the image) and redaction boxes (props.redact: [[x0, y0, x1, y1], ...]) drawn as
+// props.redact_style: "block" (solid, the default) or "blur" (pixelated into cells at
+// least the UI text height, then smoothed back up: the box keeps its colours, no text
+// stays readable).
 // The renderer loads the file (only from inside the job folder) before the first
 // frame. Redactions are burnt into a private copy of the image while the item is laid
 // out, before any frame is drawn; frames only ever draw that copy, so no frame can
@@ -16,6 +19,14 @@ const MAX_SIDE = 4096;
 const MAX_ZOOM = 4;
 const LANDSCAPE_H = 0.42; // landscape image height, share of the usable height
 const CAPTION_ROOM = 0.27; // portrait: share of the usable height left for a caption block
+const STYLES = ["block", "blur"];
+// Blur cells (image px): the UI text height (13 logical px, 2x on images with a long side
+// >= HIDPI_MIN), or a quarter of the box's short side up to BLUR_MAX_TEXT text heights,
+// as render's screen blur (_layouts.blur_cell).
+const TEXT_PT = 13;
+const HIDPI_MIN = 2700;
+const BLUR_DIV = 4;
+const BLUR_MAX_TEXT = 3;
 
 const fileOf = (item) => String((item.props && item.props.file) || "").trim();
 
@@ -33,8 +44,10 @@ function normBox(b, what) {
 }
 
 // The image scaled to at most MAX_SIDE, with every redaction box cleared and filled
-// solid. Clearing first means even a translucent token colour hides the pixels.
-function redacted(env, img, boxes, color) {
+// solid. Clearing first means even a translucent token colour hides the pixels. "blur"
+// then draws the box's cells (an area-averaged copy, a few px per cell) smoothed back
+// up over that fill: what shows is the blur, and the fill stays if drawing it fails.
+function redacted(env, img, boxes, color, mode = "block") {
   const s = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));
   const w = Math.max(1, Math.round(img.width * s));
   const h = Math.max(1, Math.round(img.height * s));
@@ -51,8 +64,34 @@ function redacted(env, img, boxes, color) {
     const y1 = Math.min(h, Math.ceil(b[3] * h) + grow);
     c.clearRect(x0, y0, x1 - x0, y1 - y0);
     c.fillRect(x0, y0, x1 - x0, y1 - y0);
+    if (mode === "blur") blurBox(env, c, img, s, [x0, y0, x1, y1]);
   }
   return { canvas: cv, w, h };
+}
+
+// Cell size (copy px) of a blurred box bw x bh in a copy scaled by s from `img`.
+function blurCell(img, s, bw, bh) {
+  const text = TEXT_PT * (Math.max(img.width, img.height) >= HIDPI_MIN ? 2 : 1) * s;
+  return Math.max(2, Math.ceil(Math.max(text, Math.min(Math.min(bw, bh) / BLUR_DIV, BLUR_MAX_TEXT * text))));
+}
+
+// Box r = [x0, y0, x1, y1] (copy px) of the copy drawn as its blurred original: the
+// original's pixels averaged into one px per cell, drawn back up with smoothing.
+function blurBox(env, c, img, s, r) {
+  const [x0, y0, x1, y1] = r;
+  const bw = x1 - x0;
+  const bh = y1 - y0;
+  const cell = blurCell(img, s, bw, bh);
+  const tw = Math.max(1, Math.ceil(bw / cell));
+  const th = Math.max(1, Math.ceil(bh / cell));
+  const tiny = env.canvas(tw, th);
+  const t = tiny.getContext("2d");
+  t.imageSmoothingEnabled = true;
+  t.imageSmoothingQuality = "high";
+  t.drawImage(img, x0 / s, y0 / s, bw / s, bh / s, 0, 0, tw, th);
+  c.imageSmoothingEnabled = true;
+  c.imageSmoothingQuality = "high";
+  c.drawImage(tiny, 0, 0, tw, th, x0, y0, bw, bh);
 }
 
 // Source rectangle (in the copy's pixels) for the zoom target: the focus box grown to
@@ -91,8 +130,10 @@ function layout(ctx, item, env) {
     // Fail closed: anything but a list of boxes is an error, never "no redaction".
     if (p.redact != null && !Array.isArray(p.redact)) throw new Error(`${name}: redact must be a list of [x0, y0, x1, y1] boxes`);
     const boxes = (p.redact || []).map((b, i) => normBox(b, `redact[${i}]`));
+    const mode = p.redact_style == null ? "block" : p.redact_style;
+    if (!STYLES.includes(mode)) throw new Error(`${name}: redact_style must be one of ${STYLES.join(", ")}`);
     const focus = p.focus == null ? null : normBox(p.focus, "focus");
-    const src = redacted(env, img, boxes, card.palette(env.tokens).text);
+    const src = redacted(env, img, boxes, card.palette(env.tokens).text, mode);
     const ar = src.w / src.h;
     const { safe } = env;
     const f = style.frame(env);
@@ -159,4 +200,4 @@ function draw(ctx, t, item, env) {
   });
 }
 
-module.exports = { name, assets, layout, layoutFirst, draw, focusRect };
+module.exports = { name, assets, layout, layoutFirst, draw, focusRect, blurCell };

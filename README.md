@@ -65,13 +65,19 @@ close the terminal window to stop it. German by default, English via the switch 
    example *"make the ending shorter, the last sentence is enough"* or *"drop the question
    about the calls, keep the example longer"*. You can also edit the plan text directly.
 4. **Personal data:** if the plan found names, e-mail addresses or numbers on screen, you
-   decide per item what is redacted (default: everything). Then **approve**: only now
+   decide per item what is redacted (default: everything) and how: blurred, cut off (a
+   browser bar or sidebar along the edge of the screen) or a solid block; "auto" cuts off
+   full-width bars and blurs the rest. Then **approve**: only now
    Claude cuts, adds captions and overlays, renders and checks its own result.
 5. **Result:** play the reel, read the automatic check in plain words, and give feedback at
    the current player position, for example *"zoom out less here"*, *"the caption at 0:12
    says the wrong word"* or *"drop the question about the calls"*. Only the affected parts
    change; every version stays listed (the last five can be played again).
 6. **Download** the MP4 and the cover.
+
+On the job page you can rename a video and **duplicate** it (the "⋯" menu), e.g. to try
+another cut style or format without losing the first result; the copy needs its own
+approval unless you take the approval over.
 
 **Brands** (top navigation): preview sheets per format, colours, fonts, caption pace and
 form of address, logo and font upload, new brands start from the neutral example. The
@@ -162,8 +168,9 @@ new approval.
    screen beside you; in 9:16: a small picture of you below the screen, or screen on top
    and you below), where to zoom in, and which places may show personal data (e-mail addresses, phone numbers,
    names). **Demo data?** You are asked at approval: all demo, redact all, or pick numbers
-   (or pass `--demo-data`). Without an answer everything listed is covered with solid
-   blocks. Their position is measured on the recording with the Mac's own text
+   (or pass `--demo-data`). Without an answer everything listed is hidden in the job's
+   redaction style (`--redact-style auto|blur|crop|block`, default auto: browser bars at
+   the top or bottom are cut off, the rest is blurred). Their position is measured on the recording with the Mac's own text
    recognition (on this machine), and the check reads the finished reel to confirm the
    text is covered.
 5. If the sync is unsure, the run stops and tells you how to set it by hand:

@@ -1,8 +1,18 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api/client";
-import { FORMATS, type BrandSummary, type CutStyleChoice, type FormatChoice, type TargetChoice, type VideoType, type VocabEntry } from "../api/types";
+import {
+  FORMATS,
+  type BrandSummary,
+  type CutStyleChoice,
+  type FormatChoice,
+  type RedactStyle,
+  type TargetChoice,
+  type VideoType,
+  type VocabEntry,
+} from "../api/types";
 import { AspectIcon } from "../components/AspectIcon";
 import { CutStyleSelect } from "../components/CutStyle";
+import { RedactStyleSelect } from "../components/RedactStyle";
 import { TargetSelect } from "../components/TargetLength";
 import { DropZone, formatBytes, hasExt, IMAGE_EXT, VIDEO_EXT } from "../components/DropZone";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -47,6 +57,7 @@ export function NewJob() {
   const [format, setFormat] = useState<FormatChoice>("auto");
   const [brief, setBrief] = useState("");
   const [cutStyle, setCutStyle] = useState<CutStyleChoice>("auto");
+  const [redactStyle, setRedactStyle] = useState<RedactStyle>("auto");
   // undefined: a custom length that is not valid yet (blocks the upload)
   const [target, setTarget] = useState<TargetChoice | undefined>(null);
   const [vocabulary, setVocabulary] = useState<VocabEntry[]>([]);
@@ -88,6 +99,7 @@ export function NewJob() {
           format,
           brief: brief.trim() || undefined,
           cut_style: cutStyle,
+          redact_style: redactStyle,
           target_s: target,
           vocabulary: cleanVocabulary(vocabulary),
         },
@@ -244,6 +256,8 @@ export function NewJob() {
         </label>
         <CutStyleSelect id="cut-style" value={cutStyle} resolved={withScreen ? "calm" : "standard"} onChange={setCutStyle} />
       </div>
+
+      {withScreen && <RedactStyleSelect id="redact-style" value={redactStyle} onChange={setRedactStyle} />}
 
       <div className="field target-pick">
         <label htmlFor="target" className="h2">

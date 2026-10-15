@@ -94,6 +94,13 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     r.add_argument(
+        "--redact-style",
+        metavar="STYLE",
+        help="how personal data on the screen is hidden: auto (default: cut off full-width "
+        "bars at the screen's top/bottom, blur the rest), blur, crop or block; for an "
+        "existing job a finished reel is rendered again",
+    )
+    r.add_argument(
         "--feedback",
         metavar="TEXT",
         help="revise the finished reel: what to change, in plain words (no new approval)",

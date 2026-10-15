@@ -69,7 +69,7 @@ from . import agent
 from . import redaction as red
 from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
-from .tools import _format, _length, _style
+from .tools import _format, _length, _redact_style, _style
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
     approve_job,
@@ -87,6 +87,7 @@ from .tools.job import (
     revoke_approval,
     set_cut_style,
     set_format,
+    set_redact_style,
     set_target,
     stamp_plan_target,
 )
@@ -491,6 +492,9 @@ def cut_done(job: Path) -> bool:
             and rec.get("cut_style", style_now := resolved_style(data)) == style_now
             # (a record from before target lengths: a changed target revokes the approval)
             and rec.get("target_s", data.get("target_s")) == data.get("target_s")
+            # (a record from before redaction styles: it stays until the style is changed,
+            # which stamps the record, tools/job.set_redact_style)
+            and rec.get("redact_style", drawn_now := _redact_style_used(job)) == drawn_now
         )
     vfile = job / "out" / "verify.json"
     try:
@@ -506,11 +510,32 @@ def cut_done(job: Path) -> bool:
         # a cut from before cut styles was cut the way "tight" cuts now: a style the
         # human set since makes it stale (absent: it stays, like an old record)
         data.get("cut_style") in (None, "tight")
+        # ... and drew personal data as solid blocks: likewise for a redaction style
+        and (data.get("redact_style") in (None, "block") or _redact_style_used(job) is None)
         and verify.get("reel") == "out/reel.mp4"
         and not verify.get("preview")
         and edl_t is not None
         and verify_t >= max(edl_t, approved_t)
     )
+
+
+def _check_redact_style(value: str) -> None:
+    """--redact-style before a job is made from it: RunError for an unknown style."""
+    try:
+        _redact_style.parse(value)
+    except ToolError as e:
+        raise RunError(str(e)) from None
+
+
+def _redact_style_used(job: Path) -> str | None:
+    """How the reel hides personal data (_redact_style), None when there is none to hide:
+    a changed style means a new render only then."""
+    if _redaction_sha(job) is None:
+        return None
+    try:
+        return _redact_style.resolved(read_job(job))
+    except ToolError:
+        return "invalid"
 
 
 def _redaction_sha(job: Path) -> str | None:
@@ -533,6 +558,7 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "format": resolved_format(read_job(job)),
             "cut_style": resolved_style(read_job(job)),
             "target_s": read_job(job).get("target_s"),
+            "redact_style": _redact_style_used(job),
             "verify_ok": bool(verify.get("ok")),
         },
         overlays=None,  # a new cut has no overlays yet
@@ -684,6 +710,8 @@ def stale_why(job: Path) -> str:
         why.append("the output format changed")
     if rec.get("cut_style", style := resolved_style(data)) != style:
         why.append(f"the cut style changed from {rec.get('cut_style')} to {style}")
+    if rec.get("redact_style", drawn := _redact_style_used(job)) != drawn:
+        why.append(f"personal data is now shown as {drawn}, not {rec.get('redact_style')}")
     if rec.get("target_s", target := data.get("target_s")) != target:
         why.append(
             f"the target length changed from {_length.label(rec.get('target_s'))} to "
@@ -1179,20 +1207,25 @@ def run(
     cut_style: str | None = None,
     target: str | None = None,
     vocab: list[str] | None = None,
+    redact_style: str | None = None,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
-              format_, cut_style, target, vocab or None)  # fmt: skip
+              format_, cut_style, target, vocab or None, redact_style)  # fmt: skip
     if feedback is not None and any(v is not None for v in others):
         raise RunError(
             "--feedback revises the finished reel; it cannot be combined with --plan-feedback, "
             "--replan, --recut, --brand, --type, --brief, --asset, --screen, --format, "
-            "--cut-style, --target or --vocab"
+            "--cut-style, --target, --vocab or --redact-style"
         )
+    if redact_style is not None:
+        _check_redact_style(redact_style)
     job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target, vocab)
+    if redact_style is not None:
+        set_redact_style(job, redact_style, say)  # a reel in another style goes stale
     say(f"job: {job}")
     if feedback is not None:
         return revise(job, feedback, at_s, max_turns, say)
@@ -1363,6 +1396,7 @@ def main(args) -> int:
             cut_style=args.cut_style,
             target=args.target_length,
             vocab=args.vocab,
+            redact_style=args.redact_style,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

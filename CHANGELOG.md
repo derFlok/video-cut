@@ -696,3 +696,38 @@
   1 caption word (edl.json and overlays.json) and marked the overlays stale; `vocab suggest`
   with the term alone found the misspelling (2×, lowest conf 0.44) and nothing else. The copies
   were deleted afterwards.
+
+### Added — Redaction styles: blur, crop, block
+- Personal data on the screen is no longer only covered by a solid block in the brand
+  background (a white bar over the browser's tabs and address bar in a real demo). job.json
+  `redact_style`: `blur` (pixelated into cells of the UI text height, or a quarter of the
+  box up to three text heights, then a gaussian of half a cell: the box keeps its colours),
+  `crop` (a band along a screen edge — touching it, spanning 90 % of the other side — is cut
+  off for the whole segment; the rest of the screen is laid out by the normal view rules,
+  zoom windows and targets in its coordinates; more than 20 % of the height or width blurs
+  instead, noted in render.json), `block` (as before) and the default `auto` (crop full-width
+  bars at the top/bottom, blur the rest). Absent, the brand's new `redaction.style` decides.
+- Render reads every blurred box on its middle frame with local text recognition and makes
+  the blur stronger while anything is readable (a solid block when even one cell reads):
+  never weaker. render.json `redaction.style` and `redaction.blocks` (per block: segment,
+  times, box, style, edge or cell, note).
+- Verify: a blurred box must show no sharp edges and no readable text (seams where two
+  blurred boxes meet are left out); a cropped segment must match the recording without the
+  band clearly better than the uncropped view; the coverage check counts a blurred box
+  without edges as hidden and maps text in a cropped band outside the view.
+- `videocut tool job redact-style [job] <auto|blur|crop|block>` and `videocut run
+  --redact-style` (human only); a reel that hid personal data in another style is stale
+  (job.json `cut.redact_style`; a cut from before styles counts as `block`). API: field
+  `redact_style` on `POST /api/jobs`, `PUT /api/jobs/{id}/redact-style`, `redact_style` in
+  the job detail. App: select "Schwärzen als: Automatisch / Unscharf / Abschneiden /
+  Fläche" in the personal-data step of the approval and in the new-job form (with a screen
+  recording or screenshots).
+- Screenshots (`screenshot_frame` `props.redact`): `blur` or `block` (`props.redact_style`,
+  set by overlays; crop and auto blur there). The renderer averages the box into cells and
+  draws them smoothed back up over the solid fill.
+- Real check (a copy of a 4096x2648 screen-recording job, 1920x1080 reel, both personal-data
+  candidates enforced): the top bar (candidate 1, `[0, 0, 1, 0.075]`) was cut off in all 39
+  segments that show it; the second candidate (a dialog box, shown in one added segment) was
+  blurred at a 78 px cell, which local text recognition could not read. Verify: 0 screen
+  flags; each cropped segment matched the recording without the bar (mean difference 2-13
+  grey levels) clearly better than the uncropped view (5-26). Render 133 s, verify 184 s.

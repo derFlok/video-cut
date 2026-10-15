@@ -35,7 +35,7 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list` | `job.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list` | `job.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]`, `brand vocab <id> add\|remove\|list` | `brand.py` |
 | `vocab show [job]`, `vocab apply [job]`, `vocab suggest [job] [--all]` | `vocab.py` |
 | `captions [--force]` | `captions.py` |
@@ -70,6 +70,8 @@ job.json   id, created, source (relative), type, brief, status, approval, brand,
            format (optional output format; absent = the default rule, resolved on read),
            cut_style (optional; absent = the default rule), lang (de|en, default de),
            vocabulary (optional, the video's own terms; see Transcript vocabulary),
+           redact_style (optional auto|blur|crop|block; absent = the brand's
+           redaction.style, default auto),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
            format and cut style of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
@@ -477,9 +479,23 @@ window is a plain crop + scale; a moving one goes through `perspective` (sense=s
 eval=frame) with the same piecewise function of the frame number that `window_at`
 computes in Python. (A per-frame `scale` followed by `crop` does not work: crop clamps to
 its input link size, fixed at configuration, so every zoom ended in the top-left corner.)
-`redact` blocks are drawn in `colors.bg` onto the screen frames before any scaling, on
-every frame that overlaps their range, snapped outward to even pixels. HDR cameras are
-tonemapped per branch (inset, split part) like the face path.
+`redact` blocks are drawn onto the screen frames before any scaling, on every frame that
+overlaps their range, snapped outward to even pixels, in the job's **redaction style**
+(`_redact_style.py`, see *Personal data*): `block` a solid block in `colors.bg`; `blur`
+the box pixelated into cells of the UI text height, or a quarter of its short side up to
+three text heights (`blur_cell`), nearest-neighbour back up and a gaussian of half a cell (split →
+crop → scale → overlay with `enable`, so it keeps its colours); `crop` a band along a
+screen edge (touches it within 1 %, spans 90 % of the other side; `auto` only top and
+bottom bands: browser tabs, address and bookmark bar) is cut off for the whole segment:
+the segment's screen is the rest of the recording (`Segment.origin`/`screen`), laid out
+by the same view rules, so zoom windows, targets and other boxes are in its coordinates.
+A crop that would remove more than 20 % of the screen height (or width) blurs those
+bands instead (render.json `redaction.blocks[].note`). Before the graph is built render
+reads every blurred box on its middle frame with local text recognition; while anything
+is readable the cell doubles (never smaller), and a box still readable as one cell is
+drawn as a block (fail closed). render.json `redaction` lists per block the segment,
+camera times, box, style used, edge (crop) and cell (blur). HDR cameras are tonemapped
+per branch (inset, split part) like the face path.
 
 **Sharpness rule.** A zoom window narrower than the view's width at the job's output size
 would upscale the screen (< 1 source px per output px); render widens it to that width,
@@ -508,8 +524,11 @@ demos) is drawn as tall as the safe area allows minus room for one caption block
 cover the speaker (`stage`: verify does not flag `overlay_on_face` for it).
 
 **Verify** (`_verify_screen.py`): every redact block is sampled on up to 5 output frames of
-its range through the drawn zoom window; ≥ 90 % of its pixels must be the brand background
-(`redaction_missing`). `coverage` checks the personal data itself (see *Personal data*
+its range through the drawn zoom window; ≥ 90 % of a solid block's pixels must be the brand
+background, a blurred box must show no sharp edges (≤ 0.5 % px with a grey step ≥ 40,
+seams where two blurred boxes meet left out) and text recognition must read nothing there
+(`redaction_missing`). A segment that cuts a band off must show, on its middle frame, the
+recording without the band clearly better (3 grey levels) than the uncropped window. `coverage` checks the personal data itself (see *Personal data*
 below): `redaction_leak`. The middle frame of each screen segment is compared with the screen
 recording at the mapped time and at ±0.5 s / ±1 s (`screen_time_mismatch` when another time
 matches clearly better). `screen_overlap` repeats the overlap rule of `edl check`. A cut
@@ -534,7 +553,14 @@ the screen segments it overlaps (render.json `redaction`: source `decision` or `
 overlays add enforced screenshot boxes to `screenshot_frame` items, and `edl check` /
 verify flag `redaction_missing` when the EDL itself lacks one (the cut must be explicit;
 `edl check` prints the exact block to add). An unreadable redaction.json fails closed (no
-approval, no render).
+approval, no render). How it is hidden is the human's choice too: job.json `redact_style`
+(`job redact-style`, `videocut run --redact-style`, the app's select "Schwärzen als" in the
+personal-data step and in the new-job form, `PUT /api/jobs/{id}/redact-style`; absent: the
+brand's `redaction.style`, default `auto`). A reel that hid personal data in another
+style is stale (job.json `cut.redact_style`; a record from before styles counts as
+`block` once the style is set). Screenshots know `blur` and `block` only (`crop`/`auto`
+blur them): overlays set `props.redact_style`, the renderer averages the box into cells
+and draws them smoothed back up over the solid fill.
 
 **Where personal data is: measured, not estimated** (`tools/redact.py`, `tools/_ocr.py`).
 Boxes estimated by eye from downscaled stills landed a text line too high in real runs (the
@@ -576,7 +602,9 @@ every screen segment (for all of them). On each, the text is searched on the scr
 that the reel shows there; every place found, and the track's text box of that time (or
 its area), is mapped through the layout and the zoom window to output px, and ≥ 98 % of
 the visible part (not under a pip bubble) must be the block colour (`colors.bg`, ±28 per
-channel). The reel frame's screen view is read as well: the text found there is readable.
+channel). The reel frame's screen view is read as well: the text found there is readable. Inside a blurred
+box the px count as hidden when that box shows no sharp edges; a place in a cropped band
+maps outside the view.
 Either flags `redaction_leak` (verify not ok) with output time, segment and candidate id.
 `redaction_unchecked` (not ok either): no text recognition, a reel or screen frame that
 cannot be read, an e-mail/phone/name candidate shown without `text`, or a text candidate
