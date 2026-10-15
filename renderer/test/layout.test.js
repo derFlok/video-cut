@@ -166,3 +166,15 @@ test("plates: captions are hidden while a full-frame plate is on screen", () => 
   assert.equal(hidesCaptions(plates, 10), true);
   assert.equal(hidesCaptions(plates, 12.5), true);
 });
+
+test("placeBlock: a hard block (the slide part of slide_split) weighs more than the face", () => {
+  const size = [1080, 1920];
+  const safe = { top: 200, bottom: 400, side: 60 };
+  const slidePart = [0, 0, 1080, 1110];
+  const face = [200, 1150, 880, 1500]; // fills the usable speaker part
+  const soft = placeBlock({ size, safe, w: 700, h: 160, face, avoid: [slidePart] });
+  assert.ok(soft.box[1] < 1110, "without hard: on the slide, off the face");
+  const r = placeBlock({ size, safe, w: 700, h: 160, face, avoid: [slidePart], hard: [slidePart] });
+  assert.ok(r.box[1] >= 1110 + 24, `in the speaker part: ${r.box}`);
+  assert.ok(r.overlapsFace);
+});

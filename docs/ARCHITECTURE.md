@@ -712,6 +712,12 @@ with screenshot_frame's `redacted()` and fails closed on malformed boxes (the sl
 gets `env.canvas` for it). Verify rebuilds the spec with the same boxes, so a clip made
 before a candidate existed is `slide_stale`.
 
+**Captions around slides.** `slide` and `slide_full` views are `hide` (no caption, no
+item). In `slide_split` the view's `screen` (the slide part) is a hard block in the
+renderer (`render.js` `hardDuring`, `layout.placeBlock` `hard`): a caption or card covers
+the face before it covers the slide. In 9:16 the speaker part lies mostly in the bottom
+safe zone, so a caption there usually overlaps the face (verify: `overlay_on_face`).
+
 **Plan.** The plan skill writes `work/slides.json` (`{slides: [{id, template, content,
 source, why}]}`, checked by `slides check`) and `plan.json` `slides` (the same plus `t0`/`t1`,
 the source time of the words a slide illustrates, and `layout`); `plan check` validates the

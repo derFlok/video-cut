@@ -129,7 +129,8 @@ function pageMain(spec) {
   const memo = new Map();
   // Product demo (overlays.json "views", flattened by validViews): every item keeps off a
   // screen view that does not fill the frame and off every zoom target.
-  const blocks = (views || []).map((v) => ({ t0: v.t0, t1: v.t1, box: v.screen }));
+  // The slide part of a slide_split view is hard: text goes in the speaker part only.
+  const blocks = (views || []).map((v) => ({ t0: v.t0, t1: v.t1, box: v.screen, hard: !!v.hard }));
   const env = {
     tokens,
     size,
@@ -146,6 +147,7 @@ function pageMain(spec) {
     },
     // Blocks already placed that are on screen at some point in [t0, t1].
     blocksDuring: (t0, t1) => blocks.filter((b) => b.t0 < t1 && b.t1 > t0).map((b) => b.box),
+    hardDuring: (t0, t1) => blocks.filter((b) => b.hard && b.t0 < t1 && b.t1 > t0).map((b) => b.box),
     addBlock: (t0, t1, box) => blocks.push({ t0, t1, box }),
     // Decoded image for an asset reference a scene declared (null when not loaded),
     // and an offscreen canvas for scenes that prepare images once (redaction).
@@ -443,15 +445,15 @@ function items(spec, known) {
 
 // Areas to keep clear in a product demo, flattened to {t0, t1, screen: [x0, y0, x1, y1]}
 // (output time/px): each view's `screen` (null when the screen fills the frame: it is the
-// picture) and each of its `focus` zoom targets ({t0, t1, box}). Malformed entries are
-// dropped.
+// picture; `hard` for the slide part of a slide_split view) and each of its `focus` zoom
+// targets ({t0, t1, box}). Malformed entries are dropped.
 function validViews(views) {
   const box = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[2] > b[0] && b[3] > b[1];
   const span = (v) => v && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1;
   const out = [];
   for (const v of Array.isArray(views) ? views : []) {
     if (!span(v)) continue;
-    if (box(v.screen)) out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice() });
+    if (box(v.screen)) out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice(), hard: v.layout === "slide_split" });
     for (const f of Array.isArray(v.focus) ? v.focus : []) {
       if (span(f) && box(f.box)) out.push({ t0: f.t0, t1: f.t1, screen: f.box.slice() });
     }

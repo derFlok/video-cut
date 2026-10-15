@@ -30,6 +30,8 @@
 - Overlays and revise skills: no captions, keywords or overlays during `slide` and
   `slide_full`; in `slide_split` only in the speaker part. `plan check` refuses slide
   layouts in `views`; plan stills and `sheet` treat slide layouts as slides, not screen.
+- Renderer: in `slide_split` the slide part is a hard block for captions and cards
+  (`placeBlock` `hard`, weighed before the face), so text goes in the speaker part only.
 
 ### Added
 - Repository scaffold, Apache-2.0 licence, design brief (`docs/BRIEF.md`).
