@@ -14,6 +14,9 @@ screen segment it overlaps, and by a props.redact box of each screenshot_frame o
 Blink warnings (never a failure): with a current work/face.json, every segment `in`/`out`
 inside a blink (+-1 frame) is reported with the nearest blink-free time within +-150 ms that
 also lies outside every word of work/words.json (when present) as a suggestion.
+Slides: a segment with a slide layout must name a slide of work/slides.json, its
+reveal times may not outnumber the slide's build steps, and an image slide's file must
+exist (tools/slides.py).
 Readability warnings (never a failure): a screen window whose UI text would be lower than
 _layouts.TEXT_MIN_PX output px is reported as `screen_text_small` with the zoom it needs.
 
@@ -46,6 +49,8 @@ from .. import redaction
 from ..edl import (
     EdlError,
     blink_warnings,
+    is_screen,
+    is_slide,
     load,
     output_spans,
     output_to_source,
@@ -55,6 +60,7 @@ from ..edl import (
     validate,
 )
 from . import _audio_env, _layouts, _snap
+from . import slides as slides_mod
 from ._geometry import sized
 from .common import ToolError, job_parent, read_job, resolve_job, run_tool, write_json
 from .face import load_face
@@ -101,6 +107,12 @@ def check(args) -> dict:
             '"speech_cut_ok": "<reason>"'
             for c in (_snap.in_speech(raw, env, duration) if env else [])
         ]
+        if any(is_slide(seg.layout) for seg in edl.segments):  # the slides it names
+            try:
+                doc = slides_mod.load_doc(job)
+                errs += slides_mod.edl_problems(doc, raw) + slides_mod.asset_errors(job, doc)
+            except ToolError as e:
+                errs.append(f"$.segments: the EDL shows slides but {e}")
         if errs:
             for err in errs:
                 print(err)
@@ -238,7 +250,7 @@ def _blinks(job: Path, edl, duration: float | None) -> list[str]:
 
 
 def _text(job: Path, edl) -> list[str]:
-    if all(s.layout == "face" for s in edl.segments):
+    if not any(is_screen(s.layout) for s in edl.segments):
         return []
     try:
         screen = tuple(_layouts.probe_screen(_layouts.screen_source(job))["size"])
@@ -246,7 +258,7 @@ def _text(job: Path, edl) -> list[str]:
         return []  # no screen recording: the layout errors say so
     out = []
     for k, s in enumerate(edl.segments):
-        if s.layout == "face":
+        if not is_screen(s.layout):
             continue
         for d in _layouts.readability(s, screen, tuple(edl.size)):
             if d["flags"]:

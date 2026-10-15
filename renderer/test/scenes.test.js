@@ -1,12 +1,12 @@
 // Scenes take every colour, font and motion value from env.tokens. This lint keeps
-// literal colours and font names out of renderer/scenes (and the scene helpers).
+// literal colours and font names out of renderer/scenes, renderer/slides (and the helpers).
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const DIRS = ["scenes"].map((d) => path.join(__dirname, "..", d));
-const HELPERS = ["textblock.js", "style.js", "layout.js", "card.js", "assets.js"].map((f) => path.join(__dirname, "..", "lib", f));
+const DIRS = ["scenes", "slides"].map((d) => path.join(__dirname, "..", d));
+const HELPERS = ["textblock.js", "style.js", "layout.js", "card.js", "assets.js", "slide.js"].map((f) => path.join(__dirname, "..", "lib", f));
 const files = [...DIRS.flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith(".js")).map((f) => path.join(d, f))), ...HELPERS];
 
 const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");

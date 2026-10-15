@@ -54,6 +54,12 @@ track are in the output px of work/overlays.json)
     (overlays.check_record); otherwise one entry with flag `overlay_boxes_untrusted`.
     out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
     out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
+Slides (_verify_slides.py; EDL segments with a slide layout): per slide the layout report
+of `videocut tool slides render` (trusted only as recorded): `slide_text_overflow`,
+`slide_reading_time`, `slide_bubble_over_text`, `slide_missing` / `slide_untrusted` /
+`slide_stale` / `slide_unchecked`. A slide_full stretch is a still on purpose; in slide /
+slide_split the frozen check looks inside the speaker area only.
+out/verify/slides_NN.jpg: one tile per slide, near the end of its stretch.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size of the job's format (job.json "format": 1080x1920 for 9:16, 1920x1080 for
 16:9, ...), no black or frozen stretch longer than 0.5 s. A preview is
@@ -77,7 +83,7 @@ import numpy as np
 from ..edl import Edl, EdlError, load, output_spans
 from ..paths import tool_env
 from . import _image as im
-from . import _plates, _verify_audio, _verify_screen
+from . import _plates, _verify_audio, _verify_screen, _verify_slides
 from . import overlays as overlays_mod
 from ._geometry import job_size, overlap, safe_zones, sized
 from .common import (
@@ -276,12 +282,13 @@ def reframes(edl: Edl) -> list[bool]:
 def blinks_at_cuts(edl: Edl, blinks: list[dict]) -> list[bool]:
     """Per inner cut: does one of the two output frames before or after it show a blink?
     Output frames map to source time: the last ones of segment a end at a.end, the first
-    ones of segment b start at b.start. A "screen" segment shows no camera."""
+    ones of segment b start at b.start. A "screen" or "slide_full" segment shows no camera."""
     dt = 1 / edl.fps
+    blind = ("screen", "slide_full")
     out = []
     for a, b in pairwise(edl.segments):
-        ts = (a.end - 2 * dt, a.end - dt) if a.layout != "screen" else ()
-        ts += (b.start, b.start + dt) if b.layout != "screen" else ()
+        ts = (a.end - 2 * dt, a.end - dt) if a.layout not in blind else ()
+        ts += (b.start, b.start + dt) if b.layout not in blind else ()
         out.append(any(in_blink(t, blinks) for t in ts))
     return out
 
@@ -697,6 +704,13 @@ def verify(args) -> dict:
         demo = {"error": "work/edl.json is missing or invalid; screen layouts not checked"}
     still_screen = demo.get("spans", [])
     bubbles = demo.get("bubbles", [])  # landscape/square pip: the camera is the bubble only
+    slide_doc = (
+        _verify_slides.check(job, edl, (v["width"], v["height"]))
+        if edl is not None and not stale
+        else {}
+    )
+    still_screen = still_screen + slide_doc.get("still", [])  # a full slide is a still
+    bubbles = bubbles + slide_doc.get("bubbles", [])  # slide: the camera is the speaker area
 
     loud = loudness(reel)
     # The end card as `videocut tool overlays` scheduled it (after the last word, over the
@@ -783,6 +797,11 @@ def verify(args) -> dict:
     for old in vdir.glob("captions_*.jpg"):
         if old not in sheets:
             old.unlink()
+    sl_times = [t for t in slide_doc.get("times", []) if 0 <= t < video_dur]
+    sl_sheets = caption_sheets(reel, v, sl_times, vdir, "slides") if sl_times else []
+    for old in vdir.glob("slides_*.jpg"):
+        if old not in sl_sheets:
+            old.unlink()
     ov_times = overlay_times(sched.overlays, fps, video_dur) if sched is not None else []
     ov_sheets = caption_sheets(reel, v, ov_times, vdir, "overlays") if ov_times else []
     for old in vdir.glob("overlays_*.jpg"):
@@ -812,8 +831,17 @@ def verify(args) -> dict:
         for d in demo.get(kind, [])
         if d["flags"]
     ] + demo.get("decision", [])  # fmt: skip
+    slide_flagged = [
+        {k: d[k] for k in ("id", "layout", "spans", "seconds", "need", "error") if k in d}
+        | {"flags": d["flags"]}
+        for d in slide_doc.get("slides", [])
+        if d["flags"]
+    ]
     failed = [k for k, c in checks.items() if not c["ok"]]
-    ok = not failed and not flagged and not overlay_flagged and not screen_flagged
+    ok = (
+        not failed and not flagged and not overlay_flagged and not screen_flagged
+        and not slide_flagged
+    )  # fmt: skip
     doc = {
         "ok": ok,
         "reel": f"out/{reel_name}",
@@ -832,6 +860,9 @@ def verify(args) -> dict:
         },
         "screen_flagged": screen_flagged,
         "screen_zoom_clamped": demo.get("clamped", []),
+        "slides": slide_doc.get("slides", []),
+        "slide_flagged": slide_flagged,
+        "slide_sheets": [str(p.relative_to(job)) for p in sl_sheets],
         "caption_sheets": [str(p.relative_to(job)) for p in sheets],
         "caption_times": times,
         "overlay_sheets": [str(p.relative_to(job)) for p in ov_sheets],
@@ -846,6 +877,8 @@ def verify(args) -> dict:
     for d in screen_flagged:
         where = f"candidate {d['id']} {d['where']}" if "id" in d else f"segment {d.get('segment')}"
         print(f"screen {d['check']} {where}: {', '.join(d['flags'])}")
+    for d in slide_flagged:
+        print(f"slide {d.get('id')}: {', '.join(d['flags'])}")
     for c in demo.get("clamped", []):
         print(f"info: segment {c['segment']} screen zoom {c['zoom']}x at {c['t']}s clamped "
               f"to {c['max_zoom']}x (sharpness)")  # fmt: skip
@@ -860,11 +893,13 @@ def verify(args) -> dict:
         "info": info,
         "overlay_flagged": overlay_flagged,
         "screen_flagged": screen_flagged,
+        "slide_flagged": slide_flagged,
         "screen_zoom_clamped": demo.get("clamped", []),
         "failed": failed,
         "warnings": warnings,
         "images": [c["image"] for c in cut_docs] + [str(p.relative_to(job)) for p in sheets],
         "overlay_sheets": [str(p.relative_to(job)) for p in ov_sheets],
+        "slide_sheets": [str(p.relative_to(job)) for p in sl_sheets],
     }
 
 

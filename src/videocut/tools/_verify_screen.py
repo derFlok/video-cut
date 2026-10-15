@@ -94,10 +94,11 @@ MAP_MIN = 4.0  # ... and the mapped one must be at least this far off
 
 
 def context(job: Path, data: dict, size: tuple[int, int]) -> dict | None:
-    """Drawn segments of the EDL dict `data` at reel `size`, or None for a face-only EDL.
+    """Drawn segments of the EDL dict `data` at reel `size`, or None for an EDL without
+    screen layouts (face and slide segments only).
     Raises ToolError when the screen inputs are missing (render would have failed too)."""
     segs = data.get("segments") if isinstance(data, dict) else None
-    if not any(isinstance(s, dict) and s.get("layout", "face") != "face" for s in segs or []):
+    if not any(isinstance(s, dict) and edl_mod.is_screen(s.get("layout")) for s in segs or []):
         return None
     src = (job / data["source"]).resolve()
     info = probe(src)
@@ -797,7 +798,7 @@ def readability(ctx: dict) -> list[dict]:
     return [
         {"segment": k, "layout": s.layout, **doc}
         for k, s in enumerate(edl.segments)
-        if s.layout != "face"
+        if edl_mod.is_screen(s.layout)
         for doc in _layouts.readability(s, screen, tuple(edl.size))
     ]
 

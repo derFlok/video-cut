@@ -772,3 +772,29 @@
 - Real check with the job's records (approval, personal-data decision, overlay record):
   render 396 s; verify not ok on 3 real flags (a blink at cut 1, a keyword card over the
   screen view, a keyword card on its own caption); 0 screen flags.
+
+### Added — Slides: brand templates, slide layouts, slide checks
+- `renderer/slides/`: ten templates (title, bullets, big_number, compare, steps, timeline,
+  bar_chart, quote, cta, image) drawn from brand tokens only, through the shared text block,
+  layout scales (1.3 … 0.6, never below) and the brand spring at a calm pace. Build steps
+  follow the EDL's `reveal` times. `render.js` with a spec `"mode": "slide"`: an opaque
+  ProRes 422 HQ clip at output size and fps, a still, and a layout report (scale, fits,
+  text boxes, times).
+- `videocut tool slides check|stills|render`: schema and text limits of work/slides.json,
+  final-state stills (`<id>.jpg` + `<id>_sm.jpg` ≤ 960 px), clips reused while their spec
+  matches, with SHA-256 records outside the job folder.
+- EDL layouts `slide` (round speaker bubble; brand token `pip` for corner and size),
+  `slide_split` and `slide_full` with `slide` and `reveal`; render composites them in all four
+  formats; a slide across consecutive segments keeps its clock. `edl check` adds the slide
+  checks when the EDL shows slides.
+- overlays: no captions or overlays during `slide` / `slide_full` (views `hide: true`); in
+  `slide_split` the slide part is a block.
+- verify: `slide_text_overflow`, `slide_reading_time` (≥ 0.25 s per word + 1 s),
+  `slide_bubble_over_text`, `slide_missing` / `slide_untrusted` / `slide_stale` /
+  `slide_unchecked`, and `slides_NN.jpg`. A slide_full stretch is exempt from the frozen
+  check; in slide / slide_split the camera is judged inside the speaker area.
+
+### Changed — Slides
+- Code that read "not face" as "screen" (redaction, snapping, `run`, `edl` text, screen
+  checks) now asks `edl.SCREEN_LAYOUTS` / `is_screen`; `screen_zoom` and `redact` are allowed
+  on screen layouts only.

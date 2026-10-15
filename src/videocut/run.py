@@ -67,6 +67,7 @@ from pathlib import Path
 
 from . import agent
 from . import redaction as red
+from .edl import SCREEN_LAYOUTS
 from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
 from .tools import _format, _length, _redact_style, _style
@@ -963,7 +964,7 @@ def redaction_removed(before: dict, after: dict) -> list[str]:
     shown = [
         (s["in"], s["out"])
         for s in after.get("segments") or []
-        if isinstance(s, dict) and s.get("layout", "face") != "face"
+        if isinstance(s, dict) and s.get("layout", "face") in SCREEN_LAYOUTS
     ]
     for t0, t1, box in sorted(_blocks(before) - _blocks(after)):
         if any(min(t1, b) - max(t0, a) > red.EPS for a, b in shown):
