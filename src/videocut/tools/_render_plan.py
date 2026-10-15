@@ -4,7 +4,20 @@ No I/O here, so the timing and crop maths can be tested without ffmpeg.
 
 Timing: every segment boundary and zoom key is snapped to the output frame grid
 (round(t_out * fps)). Video gets an exact frame count per range and audio the same
-snapped duration, so audio and video never drift apart however many cuts there are.
+snapped duration (in samples), so audio and video never drift apart however many cuts
+there are.
+
+Audio transitions: the video is a hard cut on the frame grid, the audio crossfades at
+every cut (equal power, `xfade_s` or the segment's "xfade_ms"). The crossfade is centred on
+the cut: the outgoing segment's audio runs on for half of it past its `out`, the incoming
+one starts half of it before its `in` (the slack snapping leaves), so the total duration is
+unchanged. It is shortened where a segment is too short or the source ends, and to the
+quiet room around the two cut points (`xfade_caps`, from _snap.xfade_caps: a cut that has
+only 20 ms of quiet before the next word gets a short crossfade, never under
+MIN_XFADE_S). Two segments
+that continue each other in the source (a join) get a JOIN_XFADE_S linear crossfade
+(the same audio on both sides). The reel's first and last samples fade over EDGE_FADE_S.
+The legacy per-segment "fade_ms" is ignored.
 """
 
 import math
@@ -22,6 +35,10 @@ TARGET_I, TARGET_TP, TARGET_LRA = -14.0, -1.0, 11.0
 TP_HEADROOM = 0.5
 MEASURED_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
 RATE = 48000
+EDGE_FADE_S = 0.02
+JOIN_XFADE_S = 0.01
+MIN_XFADE_S = 0.01  # the shortest crossfade at a cut (shorter ones click)
+JOIN_S = 0.001  # out == next in within this: a join, not a cut
 
 
 def sharp_min_width(out_size: tuple[int, int]) -> int:
@@ -46,7 +63,12 @@ class Range:
 class AudioPart:
     src_in: float
     dur: float  # snapped output duration of the segment
-    fade: float  # seconds, already clamped to half the duration
+    start: int = 0  # first source sample read (crossfade lead-in included)
+    samples: int = 0  # samples read: output samples + both crossfade halves
+    xfade: int = 0  # samples crossfaded with the previous part (0: the first part)
+    join: bool = False  # the previous part continues into this one in the source
+    fade_in: float = 0.0  # seconds (reel start only)
+    fade_out: float = 0.0  # seconds (reel end only)
 
 
 @dataclass
@@ -72,9 +94,13 @@ def build(
     src_size: tuple[int, int],
     out_size: tuple[int, int],
     layouts: list[str] | None = None,
+    xfade_s: float = 0.0,
+    source_duration: float | None = None,
+    xfade_caps: dict[int, float] | None = None,
 ) -> Plan:
     """`layouts`: per segment its EDL layout (default all "face"); a non-face segment
-    becomes one range without zoom steps (_layouts draws it)."""
+    becomes one range without zoom steps (_layouts draws it). `xfade_s`: the audio
+    crossfade at every cut (the cut style's; a segment's "xfade_ms" overrides it)."""
     fps = Fraction(edl.fps).limit_denominator(1001)
     ranges: list[Range] = []
     audio: list[AudioPart] = []
@@ -107,10 +133,60 @@ def build(
                 )
         dur = float((f_end - frame0) / fps)
         if dur > 0:
-            audio.append(AudioPart(seg.start, dur, min(seg.fade_ms / 1000, dur / 2)))
+            audio.append((k, frame0, f_end))
         t_out += seg.duration
         frame0 = f_end
-    return Plan(fps, out_size, ranges, audio, frame0)
+    parts = audio_parts(edl, fps, audio, xfade_s, source_duration, xfade_caps)
+    return Plan(fps, out_size, ranges, parts, frame0)
+
+
+def _sample(t) -> int:
+    return round(t * RATE)
+
+
+def audio_parts(
+    edl: Edl, fps: Fraction, spans: list[tuple[int, int, int]], xfade_s: float,
+    source_duration: float | None, caps: dict[int, float] | None = None,
+) -> list[AudioPart]:  # fmt: skip
+    """One AudioPart per (segment index, first frame, end frame) with its crossfades."""
+    segs = edl.segments
+    n = [_sample(Fraction(f1) / fps) - _sample(Fraction(f0) / fps) for _, f0, f1 in spans]
+    src = [_sample(segs[k].start) for k, _, _ in spans]
+    end = _sample(source_duration) if source_duration is not None else None
+    x = [0] * len(spans)  # crossfade samples before part i
+    joins = [False] * len(spans)
+    for i in range(1, len(spans)):
+        a, b = segs[spans[i - 1][0]], segs[spans[i][0]]
+        joins[i] = abs(b.start - a.end) <= JOIN_S
+        if joins[i]:
+            want = JOIN_XFADE_S
+        else:
+            own = [v for v in (a.xfade_ms, b.xfade_ms) if v is not None]
+            want = min(own) / 1000 if own else xfade_s
+            k = spans[i][0]
+            if caps and k in caps and want > 0:  # not into speech next to the cut
+                want = min(want, max(caps[k], MIN_XFADE_S))
+        half = min(_sample(want) // 2, n[i - 1] // 2, n[i] // 2, src[i])
+        if end is not None:
+            half = min(half, max(0, end - (src[i - 1] + n[i - 1])))
+        x[i] = 2 * max(half, 0)
+    parts = []
+    for i, (k, _, _) in enumerate(spans):
+        pre, post = x[i] // 2, (x[i + 1] // 2 if i + 1 < len(spans) else 0)
+        dur = n[i] / RATE
+        parts.append(
+            AudioPart(
+                src_in=segs[k].start,
+                dur=float(Fraction(spans[i][2] - spans[i][1]) / fps),
+                start=src[i] - pre,
+                samples=n[i] + pre + post,
+                xfade=x[i],
+                join=joins[i],
+                fade_in=min(EDGE_FADE_S, dur / 2) if i == 0 else 0.0,
+                fade_out=min(EDGE_FADE_S, dur / 2) if i == len(spans) - 1 else 0.0,
+            )
+        )
+    return parts
 
 
 def with_tail(plan: Plan, frames: int) -> Plan:
@@ -123,29 +199,48 @@ def _t(v: float) -> str:
     return f"{v:.6f}"
 
 
-def audio_chain(plan: Plan, audio_in: str) -> list[str]:
-    """Filter lines that cut `audio_in` (e.g. "1:a") into the segments, fade every edge and
-    join them as [cut]."""
+def audio_chain(plan: Plan, audio_in: str, audio_offset: float = 0.0) -> list[str]:
+    """Filter lines that cut `audio_in` (e.g. "1:a") into the segments (with their crossfade
+    halves), crossfade them at every cut and join them as [cut]. `audio_offset`: where the
+    input's first sample lies in video time (0 for work/audio.wav, which is in video time;
+    audio_start - video_start for a source stream)."""
     lines = []
     for i, a in enumerate(plan.audio):
         f = [
-            f"atrim=start={_t(a.src_in)}:end={_t(a.src_in + a.dur)}",
+            # by timestamp (start=/end=): start_sample counts from the stream's first
+            # sample, which is not source time when the audio starts after the video
+            f"atrim=start={_t(a.start / RATE)}:end={_t((a.start + a.samples) / RATE)}",
             "asetpts=PTS-STARTPTS",
-            f"apad=whole_dur={_t(a.dur)}",
-            f"atrim=duration={_t(a.dur)}",
+            f"apad=whole_len={a.samples}",
+            f"atrim=end_sample={a.samples}",
         ]
-        if a.fade > 0:
-            f += [
-                f"afade=t=in:st=0:d={_t(a.fade)}",
-                f"afade=t=out:st={_t(a.dur - a.fade)}:d={_t(a.fade)}",
-            ]
+        if a.fade_in > 0:
+            f.append(f"afade=t=in:st=0:d={_t(a.fade_in)}")
+        if a.fade_out > 0:
+            f.append(f"afade=t=out:st={_t(a.samples / RATE - a.fade_out)}:d={_t(a.fade_out)}")
         lines.append(f"[a{i}]" + ",".join(f) + f"[ac{i}];")
     n = len(plan.audio)
-    split = f"[{audio_in}]aresample={RATE},aformat=channel_layouts=stereo,asplit={n}" + "".join(
-        f"[a{i}]" for i in range(n)
-    )
-    joined = "".join(f"[ac{i}]" for i in range(n)) + f"concat=n={n}:v=0:a=1[cut]"
-    return [split + ";", *lines, joined]
+    # first_pts=0 + async: an audio stream that starts after the video gets silence in
+    # front (one that starts before it loses what lies before video time 0), so a segment
+    # from before its first sample is not shifted early
+    # PTS-STARTPTS + offset: video time, whatever the container's first timestamp is
+    split = (
+        f"[{audio_in}]asetpts=PTS-STARTPTS{audio_offset:+.6f}/TB,"
+        f"aresample={RATE}:async=1:first_pts=0,aformat=channel_layouts=stereo,asplit={n}"
+    ) + "".join(f"[a{i}]" for i in range(n))
+    if n == 1:
+        return [split + ";", *lines, "[ac0]anull[cut]"]
+    prev = "ac0"
+    for i in range(1, n):
+        a, nxt = plan.audio[i], ("cut" if i == n - 1 else f"x{i}")
+        if a.xfade == 0:
+            join = "concat=n=2:v=0:a=1"
+        else:  # equal power across a cut, equal gain across a join (the same audio)
+            curve = "tri" if a.join else "qsin"
+            join = f"acrossfade=ns={a.xfade}:c1={curve}:c2={curve}"
+        lines.append(f"[{prev}][ac{i}]{join}[{nxt}]" + (";" if i < n - 1 else ""))
+        prev = nxt
+    return [split + ";", *lines]
 
 
 def loudnorm(measured: dict | str | None) -> str:
@@ -188,7 +283,10 @@ def video_chain(plan: Plan, video_in: str, to_sdr: str = "") -> list[str]:
     """Filter lines that cut, crop and scale `video_in` (e.g. "0:0") into the ranges and join
     them as [v]; `to_sdr` (a tonemap chain) runs once on the joined output-size frames."""
     n = len(plan.ranges)
-    lines = [f"[{video_in}]split={n}" + "".join(f"[v{i}]" for i in range(n)) + ";"]
+    # PTS-STARTPTS: video time (0 = the first frame) also when the audio starts earlier
+    lines = [
+        f"[{video_in}]setpts=PTS-STARTPTS,split={n}" + "".join(f"[v{i}]" for i in range(n)) + ";"
+    ]
     for i, r in enumerate(plan.ranges):
         f = range_filters(plan, r)
         lines.append(f"[v{i}]" + ",".join(f) + f"[vc{i}];")
@@ -206,6 +304,7 @@ def graph(
     audio_in: str,
     to_sdr: str = "",
     video: list[str] | None = None,
+    audio_offset: float = 0.0,
 ) -> str:
     """Full render graph: [v] video, [a] normalised audio (+ the silent tail). `video`
     replaces the face-only video lines (a render with layouts, _layouts.video_chain)."""
@@ -213,17 +312,17 @@ def graph(
     lines = [
         *(video if video is not None else video_chain(plan, video_in, to_sdr)),
         ";",
-        *audio_chain(plan, audio_in),
+        *audio_chain(plan, audio_in, audio_offset),
         ";",
         f"[cut]{loudnorm(measured)}{pad}[a]",
     ]
     return "\n".join(lines) + "\n"
 
 
-def measure_graph(plan: Plan, audio_in: str) -> str:
+def measure_graph(plan: Plan, audio_in: str, audio_offset: float = 0.0) -> str:
     """First pass: the cut audio into a measuring loudnorm, output [a] to discard."""
     lines = [
-        *audio_chain(plan, audio_in),
+        *audio_chain(plan, audio_in, audio_offset),
         ";",
         f"[cut]loudnorm=I={TARGET_I}:TP={TARGET_TP - TP_HEADROOM}:LRA={TARGET_LRA}"
         ":print_format=json[a]",

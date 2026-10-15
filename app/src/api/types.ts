@@ -5,6 +5,23 @@ export type Format = "9:16" | "16:9" | "1:1" | "4:5";
 export type FormatChoice = "auto" | Format;
 export const FORMATS: Format[] = ["9:16", "16:9", "1:1", "4:5"];
 
+/** How tightly the reel is cut; "auto" lets the server pick (calm with screen material). */
+export type CutStyle = "calm" | "standard" | "tight";
+export type CutStyleChoice = "auto" | CutStyle;
+export const CUT_STYLES: CutStyleChoice[] = ["auto", "calm", "standard", "tight"];
+
+/** Target length of the video in seconds; null (or "auto" in requests) lets the server
+ * decide: by type for talking heads, as long as needed for demos. */
+export type TargetChoice = number | null;
+/** The range the plan aims for; null: no fixed length. */
+export interface TargetRange {
+  min_s: number;
+  max_s: number;
+}
+export const TARGET_PRESETS = [30, 60, 90, 120, 180, 300, 600];
+export const TARGET_MIN_S = 5;
+export const TARGET_MAX_S = 3 * 3600;
+
 export type Stage =
   | "prep"
   | "plan"
@@ -63,6 +80,7 @@ export interface JobSummary {
   stage: Stage;
   title: string | null;
   thumb_url: string | null;
+  target_s?: number | null;
 }
 
 export type PdKind = "email" | "phone" | "name" | "customer" | "other";
@@ -156,6 +174,26 @@ export interface JobDetail {
   title?: string | null;
   brief?: string | null;
   created?: string;
+  /** The stored choice (absent: automatic) and what it resolves to. */
+  cut_style?: CutStyle | "auto" | null;
+  cut_style_resolved?: CutStyle | null;
+  /** The current reel was cut with another style or format than the resolved one. */
+  cut_stale?: boolean;
+  /** The chosen target length (null: automatic) and the range the plan aims for (null: no
+   * fixed length, as long as the content needs). */
+  target_s?: number | null;
+  target_resolved?: TargetRange | null;
+  /** The plan was made for another target length (plan_target_s; null: automatic): it
+   * must be planned again before it can be approved. */
+  plan_target_stale?: boolean;
+  plan_target_s?: number | null;
+  /** Length of the camera recording (work/probe.json), for the duration hints. */
+  source_duration_s?: number | null;
+  has_screen?: boolean;
+  /** When the running stage started (ISO); null when nothing runs. */
+  stage_since?: string | null;
+  /** The stage a failed run stopped in. */
+  failed_stage?: Stage | null;
 }
 
 export interface PlanKeep {
@@ -184,6 +222,9 @@ export interface PlanJson {
   personal_data?: PdCandidate[];
   risks?: (string | { text?: string; [k: string]: unknown })[];
   change_note?: string;
+  /** The target the plan was made for and its estimate of the output length (seconds). */
+  target_s?: number;
+  estimated_s?: number;
   [k: string]: unknown;
 }
 
@@ -194,7 +235,8 @@ export interface Plan {
 }
 
 export type JobEvent =
-  | { t: "stage"; stage: Stage }
+  /** `at`: when the stage started (ISO); a replayed event keeps its original time. */
+  | { t: "stage"; stage: Stage; at?: string }
   | { t: "log"; text: string }
   | { t: "tool"; text: string }
   | { t: "gate"; gate: "plan" | "result" }

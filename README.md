@@ -57,8 +57,8 @@ The app runs only on your Mac (`127.0.0.1`) and opens in your browser with a one
 close the terminal window to stop it. German by default, English via the switch at the top.
 
 1. **New video:** pick a video type, drag your camera recording onto the page (optionally a
-   screen recording of the same take, or screenshots), choose a brand and an output format,
-   and write a one-line instruction for Claude. The upload starts the preparation.
+   screen recording of the same take, or screenshots), choose a brand, an output format and
+   a cut style, and write a one-line instruction for Claude. The upload starts the preparation.
 2. **Watch the progress:** the steps, a live log, the time and the Claude cost so far.
 3. **Read the plan:** hook, core message, what stays in (with source times and why), the
    framing with stills, overlays and risks. Ask Claude to change it in plain words, for
@@ -107,7 +107,8 @@ Options: `--approve` (no prompt), `--replan`, `--recut`, `--brand <id>`, `--scre
 screen recording made at the same time, for a new job), `--asset FILE...` (screenshots for a
 new job; put it last), `--demo-data` (personal data the plan found is demo data),
 `--format 9:16|16:9|1:1|4:5` (output format; for an existing job it replaces the format and
-cuts again), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
+cuts again), `--cut-style calm|standard|tight` (see below), `--target 90|5m|2:30|auto` (target
+length, see below), `--max-turns N`. Time, turns, cost and tokens of every Claude run are
 logged in `work/runs.jsonl`.
 
 **Output format** (per video): `9:16` 1080×1920 (Reels, Shorts, Stories), `16:9` 1920×1080
@@ -115,6 +116,24 @@ logged in `work/runs.jsonl`.
 Default: `16:9` when the job has a screen recording or screenshots (a product demo), else
 `9:16`. Change it later with `videocut tool job format <id> 16:9`; `videocut tool job show
 <id>` prints it.
+
+**Cut style** (per video): how much of your natural rhythm the cut keeps.
+`calm` keeps whole sentences and pauses up to a second, with a soft 120 ms audio crossfade
+at every cut — for demos and explanations, where the viewer reads the screen while you
+talk. `standard` removes fillers and false starts but keeps sentences whole otherwise — for
+talking heads. `tight` removes every pause and filler — for fast reels. Default: `calm` when
+the job has a screen recording or screenshots, else `standard`. Change it with
+`videocut tool job cut-style <id> standard` or in the app (plan or result page); the
+approved plan and your personal-data decision stay, and the app offers to cut again.
+Every cut point is moved to a real pause in the audio and verify fails a reel where a word
+is cut off.
+
+**Target length** (per video): `auto` gives reels of 30–60 s (30–45 s for a thought) and lets
+a product demo run as long as its content needs, tight but complete. Set a length (e.g.
+`5m`) and the plan aims for it ± 15 %; it never pads — if there is not enough material it
+says so and proposes the natural length. Choose it when creating the video or later with
+`videocut tool job target <id> 5m` / on the plan page; changing it needs a new plan and a
+new approval.
 
 ## Recording a product demo
 
@@ -126,6 +145,8 @@ Default: `16:9` when the job has a screen recording or screenshots (a product de
 1. **Screen:** press Cmd+Shift+5, choose "Record Entire Screen" (or a part), and under
    *Options* pick your **microphone** and turn on **Show Mouse Clicks**. The microphone track
    lets Video Cut line the screen up with your camera recording.
+   **Keep the microphone on in both recordings** (camera and screen): without sound in one
+   of them the two cannot be lined up.
 2. **Yourself:** start the camera recording of yourself **at the same time** (phone or
    webcam), then start the screen recording. Optional: clap once in view of the camera at
    the start; it helps when the room is noisy.

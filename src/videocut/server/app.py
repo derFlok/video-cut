@@ -21,9 +21,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, agent, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format
+from ..tools import _format, _length, _style
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
+    LANGS,
     approve_job,
     approved_plan_json,
     brand_id,
@@ -31,6 +32,8 @@ from ..tools.job import (
     project_sha,
     read_approval,
     revoke_approval,
+    set_cut_style,
+    set_target,
 )
 from . import brands, state
 from .runs import Busy, Runs
@@ -115,6 +118,7 @@ TYPES = [
     },
 ]
 FORMATS = ("auto", *_format.FORMATS)
+CUT_STYLES = (_style.AUTO, *_style.STYLES)
 MAX_TEXT = 4000  # plan feedback / feedback text
 FALLBACK_PAGE = "web/index.html"
 DIST = "web/dist"
@@ -140,6 +144,10 @@ class Pipeline:
     def feedback(self, job: Path, text: str, at_s: float | None, say, ask) -> int:
         """`videocut run <job> --feedback <text> [--at <output_s>]`: run.revise()."""
         return pipeline.run(str(job), feedback=text, at_s=at_s, say=say, ask=ask)
+
+    def recut(self, job: Path, say, ask) -> int:
+        """`videocut run <job> --recut`: cut + overlays again with the approved plan."""
+        return pipeline.recut(str(job), say=say, ask=ask)
 
 
 # ------------------------------------------------------------------ errors
@@ -191,6 +199,16 @@ class FeedbackBody(TextBody):
 class Redaction(BaseModel):
     mode: str = Field(pattern="^(demo|redact_all|redact)$")
     ids: list[int] = Field(default_factory=list, max_length=1000)
+
+
+class CutStyleBody(BaseModel):
+    cut_style: str = Field(pattern="^(" + "|".join(CUT_STYLES) + ")$")
+
+
+class TargetBody(BaseModel):
+    """Seconds, "auto" or null (the default rule); strings like "5m" or "2:30" too."""
+
+    target_s: float | str | None = Field(default=None)
 
 
 class ApproveBody(BaseModel):
@@ -286,7 +304,7 @@ def create_app(
             form = await read_form(
                 request,
                 {"camera": VIDEO_EXT, "screen": VIDEO_EXT, "assets": ASSET_EXT},
-                {"type", "brand", "format", "brief"},
+                {"type", "brand", "format", "brief", "cut_style", "lang", "target_s"},
             )
         except UploadError as e:
             raise HTTPException(e.status, str(e)) from None
@@ -470,6 +488,65 @@ def create_app(
             job, "feedback", lambda say, ask: run_with.feedback(job, text, at_s, say, ask)
         )
 
+    # -------------------------------------------------------------- cut style, recut
+
+    @app.put("/api/jobs/{job_id}/cut-style")
+    @decision
+    def put_cut_style(job_id: str, body: CutStyleBody) -> dict:
+        """Store the cut style; a finished cut of another style goes stale (cut_stale), the
+        app then offers /recut. The approval stays (the plan did not change)."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = set_cut_style(job, body.cut_style, say=lambda _: None)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        data = json.loads((job / "job.json").read_text())
+        return {
+            "id": job.name,
+            "cut_style": data.get("cut_style") or _style.AUTO,
+            "cut_style_resolved": res["cut_style"],
+            "previous": res["previous"],
+            "cut_stale": state.cut_stale(job),
+        }
+
+    # -------------------------------------------------------------- target length
+
+    @app.put("/api/jobs/{job_id}/target")
+    @decision
+    def put_target(job_id: str, body: TargetBody) -> dict:
+        """Store the target length. A plan made for another length goes stale and an
+        approval is revoked (the plan's content depends on it, unlike the cut style): the
+        app then offers to plan again (POST plan/feedback, or /start for a fresh plan)."""
+        job = job_or_404(job_id)
+        not_running(job)
+        value = _length.AUTO if body.target_s is None else body.target_s
+        try:
+            res = set_target(job, value, say=lambda _: None)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        return {
+            "id": job.name,
+            "target_s": res["target_s"],
+            "target_resolved": res["target_range"],
+            "previous": res["previous"],
+            "plan_stale": res["plan_stale"],
+            "approval_revoked": res["approval_revoked"],
+            "reel_stale": res["reel_stale"],
+            "approved": is_approved(job),
+        }
+
+    @app.post("/api/jobs/{job_id}/recut")
+    @decision
+    def recut(job_id: str) -> dict:
+        """Cut again with the approved plan (cut + overlays), no new plan approval."""
+        job = job_or_404(job_id)
+        if not is_approved(job):
+            raise conflict("state", "cutting again needs an approved plan")
+        if not (job / "out" / "reel.mp4").is_file():
+            raise conflict("state", "there is no cut yet; start the job")
+        return submit(job, "recut", lambda say, ask: run_with.recut(job, say, ask))
+
     # -------------------------------------------------------------- files
 
     @app.get("/api/jobs/{job_id}/stills/{name:path}")
@@ -550,6 +627,17 @@ def _new_job(form) -> dict:
     fmt = (f.get("format") or "auto").strip()
     if fmt not in FORMATS:
         raise HTTPException(400, f"format must be one of {', '.join(FORMATS)}")
+    cut_style = (f.get("cut_style") or _style.AUTO).strip().lower()
+    if cut_style not in CUT_STYLES:
+        raise HTTPException(400, f"cut_style must be one of {', '.join(CUT_STYLES)}")
+    try:
+        target = _length.parse_target(f.get("target_s"))
+    except _length.LengthError as e:
+        raise HTTPException(400, f"target_s: {e}") from None
+    ui_lang = str(settings.load().get("lang") or "").lower()
+    lang = (f.get("lang") or (ui_lang if ui_lang in LANGS else "de")).strip().lower()
+    if lang not in LANGS:
+        raise HTTPException(400, f"lang must be one of {', '.join(LANGS)}")
     brief = " ".join((f.get("brief") or "").split())[:2000] or None
     brand_ref = (f.get("brand") or "").strip() or None
     try:
@@ -574,6 +662,9 @@ def _new_job(form) -> dict:
             assets=[str(a) for a in assets] or None,
             screen=str(screen) if screen else None,
             format_=None if fmt == "auto" else fmt,
+            cut_style=None if cut_style == _style.AUTO else cut_style,
+            lang=lang,
+            target=None if target is None else str(target),
         )
     except pipeline.RunError as e:
         raise HTTPException(400, str(e)) from None

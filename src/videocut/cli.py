@@ -69,6 +69,21 @@ def main(argv: list[str] | None = None) -> int:
         help="output format 9:16, 16:9, 1:1 or 4:5 (default: 16:9 with a screen recording or "
         "screenshots, else 9:16); for an existing job it replaces the format",
     )
+    r.add_argument(
+        "--cut-style",
+        help="cut style calm, standard or tight (default: calm with a screen recording or "
+        "screenshots, else standard); for an existing job it replaces the style and a "
+        "finished cut is cut again",
+    )
+    r.add_argument(
+        "--target",
+        dest="target_length",
+        metavar="LENGTH",
+        help="target length: seconds or 90s, 5m, 2:30, or auto (default: 30-45 s for "
+        "thought, 30-60 s for other types; with a screen recording or screenshots as long "
+        "as the content needs); for an existing job a plan made for another length is "
+        "planned again and needs a new approval",
+    )
 
     r.add_argument(
         "--feedback",

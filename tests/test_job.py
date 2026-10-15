@@ -1,7 +1,10 @@
 import json
 import os
 
+import pytest
 from helpers import run_tool
+
+from videocut.tools.common import jobs_root
 
 
 def _video(tmp_path):
@@ -252,3 +255,93 @@ def test_job_format_sets_replaces_and_says_to_redo_a_plan(capsys, tmp_path, monk
     assert code == 0 and s["previous"] is None and s["redo"] and "another format" in out
     monkeypatch.setenv("VIDEOCUT_AGENT", "1")
     assert run_tool(capsys, "job", "format", "f4", "16:9")[0] == 1
+
+
+def test_cut_style_and_lang_on_new_show_and_change(capsys, tmp_path):
+    v = _video(tmp_path)
+    code, s, _ = run_tool(capsys, "job", "new", str(v), "--id", "c1")
+    assert code == 0 and (s["cut_style"], s["cut_style_default"], s["lang"]) == (
+        "standard", True, "de",
+    )  # fmt: skip
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"img")
+    code, s, _ = run_tool(capsys, "job", "new", str(v), "--id", "c2", "--asset", str(shot))
+    assert s["cut_style"] == "calm" and s["cut_style_default"]  # a demo job is cut calm
+    code, s, _ = run_tool(
+        capsys, "job", "new", str(v), "--id", "c3", "--cut-style", "Tight", "--lang", "en"
+    )
+    assert code == 0 and s["cut_style"] == "tight" and not s["cut_style_default"]
+    data = json.loads((jobs_root() / "c3" / "job.json").read_text())
+    assert (data["cut_style"], data["lang"]) == ("tight", "en")
+    code, s, out = run_tool(capsys, "job", "show", "c3")
+    assert s["cut_style"] == "tight" and s["cut_style_params"]["keep_pause_s"] == 0.35
+    assert s["cut_style_params"]["name"] == "tight" and s["lang"] == "en"
+    assert "cut style: tight (set;" in out and "language of plan and reports: en" in out
+    code, s, _ = run_tool(capsys, "job", "new", str(v), "--id", "c4", "--cut-style", "slow")
+    assert code == 1 and "unknown cut style" in s["error"]
+    code, s, _ = run_tool(capsys, "job", "new", str(v), "--id", "c4", "--lang", "fr")
+    assert code == 1 and "unknown language" in s["error"]
+    assert not (jobs_root() / "c4").exists()
+
+    code, s, out = run_tool(capsys, "job", "cut-style", "c1", "calm")
+    assert code == 0 and (s["cut_style"], s["previous"], s["stale"]) == ("calm", "standard", False)
+    code, s, out = run_tool(capsys, "job", "cut-style", "--job", "c1", "auto")
+    assert code == 0 and s["cut_style"] == "standard" and s["cut_style_default"]
+    assert "cut_style" not in json.loads((jobs_root() / "c1" / "job.json").read_text())
+    assert run_tool(capsys, "job", "cut-style", "c1", "slow")[0] == 1
+
+
+def test_cut_style_change_marks_a_cut_stale(capsys, tmp_path):
+    from videocut.tools.job import set_cut_style
+
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "s1", "--cut-style", "calm")
+    job = jobs_root() / "s1"
+    data = json.loads((job / "job.json").read_text())
+    (job / "job.json").write_text(json.dumps({**data, "cut": {"cut_style": "calm"}}))
+    (job / "out" / "reel.mp4").write_bytes(b"reel")
+    said = []
+    assert set_cut_style(job, "calm", said.append)["stale"] is False
+    res = set_cut_style(job, "tight", said.append)
+    assert res["stale"] and res["previous"] == "calm"
+    assert any("made in the calm style" in x and "videocut run s1" in x for x in said)
+
+
+def test_a_reel_from_before_cut_records_goes_stale_when_a_style_is_set(capsys, tmp_path):
+    from videocut.tools.job import set_cut_style
+
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "s0")
+    job = jobs_root() / "s0"
+    (job / "out" / "reel.mp4").write_bytes(b"reel")  # no job.json "cut" record
+    said = []
+    assert set_cut_style(job, "standard", said.append)["stale"]
+    assert any("made in the tight style" in x for x in said)
+    assert set_cut_style(job, "tight", said.append)["stale"] is False
+
+
+def test_only_a_human_sets_the_cut_style(capsys, tmp_path, monkeypatch):
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "h1")
+    monkeypatch.setenv("VIDEOCUT_AGENT", "1")
+    code, s, _ = run_tool(capsys, "job", "cut-style", "h1", "tight")
+    assert code == 1 and "only a human" in s["error"]
+
+
+def test_style_module_contract():
+    from videocut.tools import _style
+
+    assert set(_style.STYLES) == {"calm", "standard", "tight"}
+    keys = {"keep_pause_s", "min_segment_s", "splice_in_sentence", "xfade_ms", "snap_window_s"}
+    for params in _style.STYLES.values():
+        assert keys <= set(params)
+    calm, std, tight = (_style.STYLES[k] for k in ("calm", "standard", "tight"))
+    assert calm["keep_pause_s"] > std["keep_pause_s"] > tight["keep_pause_s"]
+    assert calm["min_segment_s"] > std["min_segment_s"] > tight["min_segment_s"]
+    assert calm["xfade_ms"] > std["xfade_ms"] > tight["xfade_ms"]
+    assert not calm["splice_in_sentence"] and not calm["splice_only"]
+    assert _style.job_style({}) == "standard" and _style.job_style({"screen": "x"}) == "calm"
+    assert _style.job_style({"assets": ["a"], "cut_style": "tight"}) == "tight"
+    assert _style.style({"assets": ["a"]})["name"] == "calm"
+    s = _style.style({})
+    s["splice_only"].append("x")  # a copy: the table stays as it is
+    assert "x" not in _style.STYLES["standard"]["splice_only"]
+    with pytest.raises(_style.StyleError):
+        _style.job_style({"cut_style": "slow"})

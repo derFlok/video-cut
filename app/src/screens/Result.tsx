@@ -4,6 +4,7 @@ import type { JobDetail, Revision, VerifySummary, Version } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog } from "../components/LiveLog";
 import { clock, date, money, STRINGS, useI18n, type T, type TKey } from "../i18n";
+import { isInterim, lockReason } from "../progress";
 import type { Live } from "./JobPage";
 
 /** A known id ("blink_at_cut") in plain words; an unknown one as it is, readable. */
@@ -56,7 +57,8 @@ export function Result({ live }: { live: Live }) {
   const failed = job.revisions.filter((r) => r.ok === false || r.error);
   const current = api.mediaUrl(job.id, "reel", bust);
   const cover = job.outputs?.cover ? api.mediaUrl(job.id, "cover", bust) : undefined;
-  const revising = sending || job.stage === "revise" || (live.running && job.approved);
+  const interim = isInterim(job, live.running, live.kind);
+  const locked = lockReason(job, live.running, live.kind, sending, interim, t);
 
   const send = async (e: FormEvent) => {
     e.preventDefault();
@@ -80,9 +82,25 @@ export function Result({ live }: { live: Live }) {
 
   const lines = job.verify ? verifyLines(job.verify, t) : [];
 
+  // A cut run is still making the reel: what is on disk is a step on the way, not the result.
+  if (interim && live.running)
+    return (
+      <section className="panel stack" aria-labelledby="result-title">
+        <h2 id="result-title">{t("result.title")}</h2>
+        <div className="placeholder" data-testid="result-pending">
+          <p>{t("result.interim.running")}</p>
+        </div>
+      </section>
+    );
+
   return (
     <section className="panel stack" aria-labelledby="result-title">
       <h2 id="result-title">{t("result.title")}</h2>
+      {interim && (
+        <p className="banner banner-warn" data-testid="result-interim">
+          {t("result.interim")}
+        </p>
+      )}
       <div className={`player player-${(job.format_resolved ?? "9:16").replace(":", "x")}`}>
         <video
           ref={player}
@@ -106,17 +124,23 @@ export function Result({ live }: { live: Live }) {
       )}
 
       <div className="actions">
-        <a className="btn btn-primary" href={api.downloadUrl(job.id)} download>
-          {t("result.download.mp4")}
-        </a>
-        {cover && (
+        {interim ? (
+          <button type="button" className="btn btn-primary" disabled>
+            {t("result.download.mp4")}
+          </button>
+        ) : (
+          <a className="btn btn-primary" href={api.downloadUrl(job.id)} download>
+            {t("result.download.mp4")}
+          </a>
+        )}
+        {cover && !interim && (
           <a className="btn" href={cover} download>
             {t("result.download.cover")}
           </a>
         )}
       </div>
 
-      {job.verify && (
+      {job.verify && !interim && (
         <div className={`banner ${lines.length ? "banner-warn" : "banner-ok"}`}>
           {lines.length === 0 ? (
             <p>{t("result.verify.ok")}</p>
@@ -139,7 +163,8 @@ export function Result({ live }: { live: Live }) {
           id="fb-text"
           rows={2}
           value={text}
-          disabled={revising}
+          disabled={!!locked}
+          aria-describedby={locked ? "fb-locked" : undefined}
           placeholder={t("result.feedback.placeholder")}
           onChange={(e) => setText(e.target.value)}
         />
@@ -148,18 +173,18 @@ export function Result({ live }: { live: Live }) {
             <input type="checkbox" checked={atHere} onChange={(e) => setAtHere(e.target.checked)} />
             {t("result.feedback.at", { t: clock(now) })}
           </label>
-          <button type="submit" className="btn" disabled={revising || !text.trim()}>
+          <button type="submit" className="btn" disabled={!!locked || !text.trim()}>
             {t("result.feedback.send")}
           </button>
         </div>
+        {locked && (
+          <p id="fb-locked" className={`hint${live.running || sending ? " working" : ""}`} data-testid="fb-locked">
+            {locked}
+          </p>
+        )}
       </form>
       <ErrorBanner error={err} />
-      {revising && (
-        <div className="stack-sm" role="status">
-          <p className="working">{t("result.feedback.running")}</p>
-          <LiveLog lines={live.lines} defaultOpen />
-        </div>
-      )}
+      {(sending || (live.running && live.kind === "revise")) && <LiveLog lines={live.lines} />}
 
       <div className="stack-sm">
         <h3>{t("result.history")}</h3>

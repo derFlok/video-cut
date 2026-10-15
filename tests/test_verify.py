@@ -78,14 +78,16 @@ def test_hard_cut_is_flagged_and_faded_cut_passes(capsys, reel):
     doc = json.loads((job / "out" / "verify.json").read_text())
     hard, soft = doc["cuts"]
     assert "click" in hard["flags"] and hard["audio"]["click_peak"] >= 12
-    assert soft["flags"] == [], soft
+    # a tone runs on across both cuts: no click when faded, but speech is cut there
+    assert soft["flags"] == ["speech_clipped"], soft
+    assert "speech_clipped" in hard["flags"] and "speech_clipped" in s["failed"]
     # the inverted picture is far above the other cut's jump: info and flag
     assert hard["info"] == ["jump_cut"] and hard["visual"]["jump_score"] >= 4
     assert "visual_jump" in hard["flags"]
     assert "visual_jump" not in soft["flags"] and soft["info"] == []
     assert [i["cut"] for i in s["info"]] == [1]
     assert s["ok"] is False
-    assert [f["cut"] for f in s["flagged"]] == [1]
+    assert [f["cut"] for f in s["flagged"]] == [1, 2]
     assert s["images"] == ["out/verify/cut_01.jpg", "out/verify/cut_02.jpg"]
     for name in s["images"]:
         assert (job / name).stat().st_size > 1000

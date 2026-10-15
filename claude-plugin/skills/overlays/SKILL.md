@@ -26,6 +26,12 @@ brand's look, render, check and fix. **You never change the cut.**
   (`du` or `sie`).
 - **Image budget:** at most **4 images** in this run, only the overlay and caption sheets
   `videocut tool verify` writes. Numbers from tool summaries first.
+- **Language:** overlay and caption text is what is spoken, in the language spoken (never
+  translated). `videocut tool job show` → `lang` (`de` default, `en`) is the language of
+  the free text of `work/overlay_report.md` (*Why*, rounds, doubts); headings stay as given.
+- **Cut style** (`job show` → `cut_style`): it shaped the cut, you keep it. With `calm` the
+  reel breathes: prefer fewer overlays (2–3 for 60 s) and let each stay 2.5–4 s; with
+  `tight` keep them short (1.5–2.5 s) so they follow the faster pace.
 
 ## 1. Read
 
@@ -88,9 +94,11 @@ Add `overlays` to `work/edl.json`, times in **output** seconds:
 - Take the times from the caption words (`captions[].words[]` are output time): start on
   the first word the overlay belongs to, end 1.5–3.5 s later, at a word boundary.
 - At most **one overlay at a time** (captions are separate and always on), none in the first
-  1.5 s, ~6 s or more between two, 2–4 for 30–60 s. Fewer is better than filler.
+  1.5 s, ~6 s or more between two; about **2–4 per minute** of output (2–4 for a 30–60 s
+  reel, ~10–20 for a 5-minute demo). Fewer is better than filler.
 - Follow the plan's overlay ideas; drop an idea whose words were cut. A plan without that
-  section: pick 2–3 moments yourself from the core message and the spoken words.
+  section: pick about 2–3 moments per minute yourself from the core message and the spoken
+  words.
 
 | Scene | props | Use |
 |---|---|---|

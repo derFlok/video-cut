@@ -35,8 +35,15 @@ straight to the cut, and a finished cut of the approved plan is kept (`--recut` 
 job.json "cut" records which plan, segments, redaction and output format it was).
 `--format` sets the output format (job.json "format", tools/_format.py): for a new job like
 `tool job new --format`, for an existing one like `tool job format` (a changed format makes
-the cut stale, so the cut runs again). Plan and cut prompts name the job's format. The
-overlay stage runs when `--brand` is given or when the brand's overlays are not done for
+the cut stale, so the cut runs again). Plan and cut prompts name the job's format.
+`--cut-style` likewise sets the cut style (job.json "cut_style", tools/_style.py; a changed
+style makes the cut stale) and the prompts name it and its parameters; `recut()` is the entry
+for "cut again with the approved plan" (the app's /recut: cut + overlays, no new approval).
+`--target` sets the target length (job.json "target_s", tools/_length.py). It changes what
+the plan contains: a plan made for another length is stale, its approval is revoked, and the
+run plans again (with `--plan-feedback`, the revise-the-plan run is told the new length);
+every plan run records the length it was made for (job.json "plan_target").
+The overlay stage runs when `--brand` is given or when the brand's overlays are not done for
 the current cut. Every Claude run appends one line to work/runs.jsonl (wall time, turns,
 cost, tokens), and its raw event stream goes to work/claude-<phase>.jsonl.
 """
@@ -58,19 +65,28 @@ from pathlib import Path
 
 from . import agent
 from . import redaction as red
+from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
-from .tools import _format
+from .tools import _format, _length, _style
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
     approve_job,
     brand_id,
     is_approved,
+    job_lang,
+    plan_made_for,
+    plan_target_stale,
     project_sha,
     read_approval,
     redaction_enforced,
     resolved_format,
+    resolved_range,
+    resolved_style,
     revoke_approval,
+    set_cut_style,
     set_format,
+    set_target,
+    stamp_plan_target,
 )
 
 TYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}")
@@ -103,6 +119,18 @@ CUT_PROMPT = (
 FORMAT_NOTE = (
     ' Output format: {fmt} ({w}x{h}, job.json "format"); work/edl.json "size" is [{w}, {h}].'
 )
+STYLE_NOTE = (
+    ' Cut style: {name} (job.json "cut_style"): natural pauses up to {keep_pause_s} s stay '
+    "inside a segment, segments are at least {min_segment_s} s, {splice}; render crossfades "
+    "the audio {xfade_ms} ms at every cut. Human-facing text (plan, reports): {lang}."
+)
+TARGET_NOTE = ' Target length (job.json "target_s", a human sets it): {note}.'
+TARGET_CHANGED = (
+    " The human changed the target length since this plan was made (it was made for "
+    "{old}, now: {new}): fit the keep list to the new length (never pad; if the material "
+    "is too short, say so), and name the new length in the change note."
+)
+LANG_NAMES = {"de": "German", "en": "English"}
 CUT_AGAIN = (
     " The job was cut before; the human asked to cut it again ({why}): write a new "
     "work/edl.json (segments only; captions and overlays are redone after the cut), render "
@@ -208,6 +236,9 @@ def new_job(
     assets: list[str] | None = None,
     screen: str | None = None,
     format_: str | None = None,
+    cut_style: str | None = None,
+    lang: str | None = None,
+    target: str | None = None,
 ) -> Path:
     from .cli import main
 
@@ -216,6 +247,9 @@ def new_job(
     argv += ["--brief", brief] if brief else []
     argv += ["--screen", screen] if screen else []
     argv += ["--format", format_] if format_ else []
+    argv += ["--cut-style", cut_style] if cut_style else []
+    argv += ["--target", str(target)] if target is not None else []
+    argv += ["--lang", lang] if lang else []
     if assets:
         argv += ["--asset", *assets]
     with capture_stdout() as buf:
@@ -235,10 +269,12 @@ def open_job(
     screen: str | None = None,
     format_: str | None = None,
     say=print,
+    cut_style: str | None = None,
+    target: str | None = None,
 ) -> Path:
     p = Path(ref).expanduser()
     if p.is_file():
-        return new_job(p, type_, brief, assets, screen, format_)
+        return new_job(p, type_, brief, assets, screen, format_, cut_style, target=target)
     if assets or screen:
         raise RunError(
             "--asset/--screen only work when a new job is made from a recording "
@@ -256,6 +292,10 @@ def open_job(
         update_job(job, **changes)
     if format_:
         set_format(job, format_, say)  # the cut of another format goes stale (cut_done)
+    if cut_style:
+        set_cut_style(job, cut_style, say)  # the cut of another style goes stale (cut_done)
+    if target is not None:
+        set_target(job, target, say)  # a plan for another length goes stale (plan again)
     return job
 
 
@@ -397,11 +437,9 @@ def segments_sha(job: Path) -> str | None:
     """Hash of what makes the cut (source, fps, size, segments) in work/edl.json; captions
     and overlays are not part of it."""
     try:
-        edl = json.loads((job / "work" / "edl.json").read_text())
-        cut = {k: edl.get(k) for k in ("source", "fps", "size", "segments")}
+        return edl_segments_sha(json.loads((job / "work" / "edl.json").read_text()))
     except (OSError, ValueError, AttributeError):
         return None
-    return hashlib.sha256(json.dumps(cut, sort_keys=True).encode()).hexdigest()
 
 
 def _final_verify(job: Path, started: float, phase: str) -> dict:
@@ -434,6 +472,11 @@ def cut_done(job: Path) -> bool:
             and rec.get("redaction_sha256", red_now := _redaction_sha(job)) == red_now
             # (before this field every cut was a 9:16 reel)
             and rec.get("format", _format.PORTRAIT) == fmt
+            # (a record from before cut styles: it stays until the style is changed,
+            # which stamps the record, tools/job.set_cut_style)
+            and rec.get("cut_style", style_now := resolved_style(data)) == style_now
+            # (a record from before target lengths: a changed target revokes the approval)
+            and rec.get("target_s", data.get("target_s")) == data.get("target_s")
         )
     vfile = job / "out" / "verify.json"
     try:
@@ -446,7 +489,10 @@ def cut_done(job: Path) -> bool:
     edl_t, verify_t = _mtime(job / "work" / "edl.json"), _mtime(vfile) or 0
     approved_t = datetime.fromisoformat(approval["at"]).timestamp()
     return (
-        verify.get("reel") == "out/reel.mp4"
+        # a cut from before cut styles was cut the way "tight" cuts now: a style the
+        # human set since makes it stale (absent: it stays, like an old record)
+        data.get("cut_style") in (None, "tight")
+        and verify.get("reel") == "out/reel.mp4"
         and not verify.get("preview")
         and edl_t is not None
         and verify_t >= max(edl_t, approved_t)
@@ -471,6 +517,8 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "segments_sha256": segments_sha(job),
             "redaction_sha256": _redaction_sha(job),
             "format": resolved_format(read_job(job)),
+            "cut_style": resolved_style(read_job(job)),
+            "target_s": read_job(job).get("target_s"),
             "verify_ok": bool(verify.get("ok")),
         },
         overlays=None,  # a new cut has no overlays yet
@@ -584,9 +632,50 @@ def not_approved(job: Path, asked: bool) -> list[str]:
 
 
 def format_note(job: Path) -> str:
-    fmt = resolved_format(read_job(job))
+    """The job's output format, cut style and target length, for every plan, cut and revise
+    prompt."""
+    data = read_job(job)
+    fmt = resolved_format(data)
     w, h = _format.FORMATS[fmt]
-    return FORMAT_NOTE.format(fmt=fmt, w=w, h=h)
+    st = _style.STYLES[resolved_style(data)]
+    splice = (
+        "a sentence may be spliced only to drop: " + ", ".join(st["splice_only"])
+        if st["splice_in_sentence"]
+        else "never assemble a sentence from pieces"
+    )
+    lang = job_lang(data)
+    resolved_range(data)  # ToolError for an invalid job.json "target_s"
+    return (
+        FORMAT_NOTE.format(fmt=fmt, w=w, h=h)
+        + STYLE_NOTE.format(name=resolved_style(data), splice=splice, lang=LANG_NAMES[lang], **st)
+        + TARGET_NOTE.format(note=_length.describe(data))
+    )
+
+
+def stale_why(job: Path) -> str:
+    """Why a cut that exists is not the current one (for the cut-again prompt)."""
+    data = read_job(job)
+    rec = data.get("cut")
+    approval = read_approval(job) or {}
+    if not isinstance(rec, dict):
+        return "the plan, the personal-data decision, the output format or the cut style changed"
+    why = []
+    if rec.get("project_sha256") != approval.get("project_sha256"):
+        why.append("the plan changed")
+    if rec.get("redaction_sha256", now := _redaction_sha(job)) != now:
+        why.append("the personal-data decision changed")
+    if rec.get("format", _format.PORTRAIT) != resolved_format(data):
+        why.append("the output format changed")
+    if rec.get("cut_style", style := resolved_style(data)) != style:
+        why.append(f"the cut style changed from {rec.get('cut_style')} to {style}")
+    if rec.get("target_s", target := data.get("target_s")) != target:
+        why.append(
+            f"the target length changed from {_length.label(rec.get('target_s'))} to "
+            f"{_length.label(target)}"
+        )
+    if not why and rec.get("segments_sha256") != segments_sha(job):
+        why.append("work/edl.json changed after the cut")
+    return "; ".join(why) or "the human asked for it"
 
 
 def ask_approval(job: Path, ask: Callable[[str], str] = input) -> bool:
@@ -903,6 +992,19 @@ def _record_overlays(job: Path, brand: str, verify: dict) -> None:
     )
 
 
+def upgrade_time_base(job: Path) -> None:
+    """Move a job ingested before the video time base into it (ingest shifts its wavs,
+    words and EDL; the cut and overlay records follow). Nothing for an up-to-date job. A
+    revision runs no prep, so it does this first: otherwise its snap would place the cut
+    in video time and a later upgrade would shift it again."""
+    try:
+        meta = json.loads((job / "work" / "audio.json").read_text())
+    except (OSError, ValueError):
+        return
+    if isinstance(meta, dict) and meta.get("time_base") != "video":
+        tool(job, "ingest", *(["--denoise"] if meta.get("denoised") else []))
+
+
 def revise(
     job: Path, feedback: str, at_s: float | None = None, max_turns: int = 60, say=print
 ) -> int:
@@ -916,6 +1018,7 @@ def revise(
         raise RunError(f"the plan of {job.name} is not approved; feedback needs a finished reel")
     if not ((out / "reel.mp4").is_file() and (work / "edl.json").is_file()):
         raise RunError(f"{job.name} has no finished reel yet; run `videocut run {job.name}`")
+    upgrade_time_base(job)
     if not cut_done(job):
         raise RunError(
             f"out/reel.mp4 of {job.name} is not the cut of the approved plan; "
@@ -1057,19 +1160,22 @@ def run(
     feedback: str | None = None,
     at_s: float | None = None,
     plan_feedback: str | None = None,
+    cut_style: str | None = None,
+    target: str | None = None,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
-              format_)  # fmt: skip
+              format_, cut_style, target)  # fmt: skip
     if feedback is not None and any(v is not None for v in others):
         raise RunError(
             "--feedback revises the finished reel; it cannot be combined with --plan-feedback, "
-            "--replan, --recut, --brand, --type, --brief, --asset, --screen or --format"
+            "--replan, --recut, --brand, --type, --brief, --asset, --screen, --format, "
+            "--cut-style or --target"
         )
-    job = open_job(ref, type_, brief, assets, screen, format_, say)
+    job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target)
     say(f"job: {job}")
     if feedback is not None:
         return revise(job, feedback, at_s, max_turns, say)
@@ -1078,6 +1184,11 @@ def run(
             raise RunError("the plan feedback is empty")
         if not (job / "work" / "project.md").is_file():
             raise RunError("there is no plan to revise yet (run without --plan-feedback first)")
+        replan = True
+    target_changed = plan_target_stale(job)
+    if target_changed and not replan:
+        old = _length.label(plan_made_for(read_job(job)))
+        say(f"plan: work/project.md was made for the target length {old}; planning again")
         replan = True
     if brand:
         update_job(job, brand=brand_id(brand))
@@ -1101,9 +1212,16 @@ def run(
 
                 write_json(request, {"text": plan_feedback.strip(), "plan_sha256": plan_before})
                 prompt += PLAN_REVISE
+                if target_changed:
+                    data = read_job(job)
+                    prompt += TARGET_CHANGED.format(
+                        old=_length.label(plan_made_for(data)),
+                        new=_length.describe(data),
+                    )
             else:
                 request.unlink(missing_ok=True)  # never a stale request in a fresh plan run
             try:
+                planned_for = read_job(job).get("target_s")  # what the prompt asked for
                 res = claude(job, "plan", prompt, max_turns, None, say)
             finally:
                 request.unlink(missing_ok=True)
@@ -1115,6 +1233,9 @@ def run(
                 raise RunError("the plan run did not write work/project.md")
             if _mtime(edl) != edl_before or _snapshot(job / "out") != out_before:
                 raise RunError("the plan run wrote an EDL or rendered; it must only plan")
+            stamp_plan_target(job, planned_for)  # the target this plan run was asked for
+            if plan_target_stale(job):
+                say("plan: the target length changed during the plan run; plan again")
             plan_session, plan_sha = res.session_id, project_sha(job)
         else:
             say("plan: using the existing work/project.md (--replan makes a new one)")
@@ -1138,11 +1259,7 @@ def run(
         started = _fs_now(job)
         prompt = CUT_PROMPT + format_note(job)
         if not plan_session and (job / "out" / "reel.mp4").is_file():
-            why = (
-                "--recut"
-                if recut
-                else "the plan, the personal-data decision or the output format changed"
-            )
+            why = "--recut" if recut else stale_why(job)
             prompt += CUT_AGAIN.format(why=why)
         archive_revisions(job)
         claude(job, "cut", prompt, max_turns, resume, say)
@@ -1196,6 +1313,18 @@ def run(
     return 0 if verify.get("ok") else 4
 
 
+def recut(ref: str, say=print, ask: Callable[[str], str] = input, max_turns: int = 60) -> int:
+    """Cut again with the approved plan (e.g. after a changed cut style), then redo the
+    overlays: no new plan run and no new approval. RunError when the plan is not approved."""
+    try:
+        job = resolve_job(ref)
+    except ToolError as e:
+        raise RunError(str(e)) from None
+    if not is_approved(job):
+        raise RunError("cutting again needs an approved plan; approve the plan first")
+    return run(str(job), recut=True, max_turns=max_turns, say=say, ask=ask)
+
+
 def main(args) -> int:
     try:
         return run(
@@ -1214,6 +1343,8 @@ def main(args) -> int:
             feedback=args.feedback,
             at_s=args.at,
             plan_feedback=args.plan_feedback,
+            cut_style=args.cut_style,
+            target=args.target_length,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

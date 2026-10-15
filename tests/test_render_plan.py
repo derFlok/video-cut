@@ -61,10 +61,47 @@ def test_zoom_key_at_segment_start_replaces_base_zoom():
     assert [(r.frames, r.zoom) for r in plan.ranges] == [(30, 1.5)]
 
 
-def test_fades_are_clamped_to_half_a_short_segment():
-    plan = rp.build(_edl([{"in": 0, "out": 0.04, "fade_ms": 100}]), (1920, 1080), OUT)
+def test_edge_fades_are_clamped_to_half_a_short_segment():
+    plan = rp.build(_edl([{"in": 0, "out": 0.02, "fade_ms": 100}]), (1920, 1080), OUT)
     (a,) = plan.audio
-    assert a.fade == a.dur / 2
+    assert a.fade_in == a.fade_out == a.samples / rp.RATE / 2
+
+
+def test_crossfade_is_centred_and_keeps_the_duration():
+    segs = [{"in": 1, "out": 2}, {"in": 5, "out": 6.5}, {"in": 9, "out": 10}]
+    plan = rp.build(_edl(segs), (1920, 1080), OUT, xfade_s=0.1)
+    a, b, c = plan.audio
+    assert (a.xfade, b.xfade, c.xfade) == (0, 4800, 4800)
+    assert a.start == 48000 and a.samples == 48000 + 2400  # runs on half the fade
+    assert b.start == 5 * 48000 - 2400 and b.samples == 72000 + 4800
+    # parts minus the overlaps = the video's duration, to the sample
+    total = sum(p.samples for p in plan.audio) - sum(p.xfade for p in plan.audio)
+    assert total == round(plan.duration * rp.RATE)
+    chain = "".join(rp.audio_chain(plan, "1:a"))
+    assert chain.count("acrossfade=ns=4800:c1=qsin:c2=qsin") == 2
+    assert "concat" not in chain
+
+
+def test_crossfade_override_join_and_source_limits():
+    segs = [
+        {"in": 0.02, "out": 1},  # 20 ms before it: a 40 ms crossfade at most
+        {"in": 1, "out": 2},  # continues the first: a join
+        {"in": 3, "out": 4, "xfade_ms": 40},
+        {"in": 4.5, "out": 9.9},  # the source ends at 9.92 s
+        {"in": 2, "out": 3},
+        {"in": 0, "out": 1},
+    ]
+    plan = rp.build(_edl(segs), (1920, 1080), OUT, xfade_s=0.2, source_duration=9.92)
+    x = [p.xfade for p in plan.audio]
+    assert x[1] == round(rp.JOIN_XFADE_S * rp.RATE) and plan.audio[1].join
+    assert x[2] == 1920  # the segment's own 40 ms
+    assert x[3] == 1920  # set on one side of the cut: that length
+    assert x[4] == 1920  # 20 ms of source left after 9.9 s: a 40 ms crossfade
+    assert x[5] == 0  # in at 0: nothing to lead in with
+    chain = "".join(rp.audio_chain(plan, "1:a"))
+    assert "c1=tri:c2=tri" in chain and "concat=n=2" in chain
+    total = sum(p.samples for p in plan.audio) - sum(x)
+    assert total == round(plan.duration * rp.RATE)
 
 
 def test_graph_has_every_range_and_loudnorm_second_pass():
@@ -77,8 +114,11 @@ def test_graph_has_every_range_and_loudnorm_second_pass():
         "target_offset": "0.1",
     }
     g = rp.graph(plan, measured, "0:0", "1:a", _color.to_sdr({"color_transfer": "smpte2084"}))
-    assert g.count("crop=") == 2 and g.count("atrim=start") == 2
-    assert "[0:0]split=2" in g and "[1:a]aresample" in g
+    assert g.count("crop=") == 2 and g.count("atrim=start=") == 2
+    assert (
+        "[0:0]setpts=PTS-STARTPTS,split=2" in g
+        and "[1:a]asetpts=PTS-STARTPTS+0.000000/TB,aresample" in g
+    )
     assert "linear=true" in g and "measured_I=-20" in g and "tonemap=" in g
     assert "linear=true" not in rp.graph(plan, None, "0:0", "0:1")
     assert "print_format=json" in rp.measure_graph(plan, "0:1")
@@ -124,3 +164,10 @@ def test_held_tail_repeats_the_last_frame_and_pads_silence_after_loudnorm():
     # silence goes on after loudnorm, so the spoken part's loudness does not change
     assert g.index("apad=whole_dur=2.800000") > g.index("loudnorm=")
     assert "apad=whole_dur=2.8" not in rp.measure_graph(long, "1:a")
+
+
+def test_crossfade_is_capped_to_the_quiet_room():
+    segs = [{"in": 1, "out": 2}, {"in": 5, "out": 6}, {"in": 8, "out": 9}]
+    caps = {1: 0.04, 2: 0.0}  # 20 ms of quiet around cut 1, none around cut 2
+    plan = rp.build(_edl(segs), (1920, 1080), OUT, xfade_s=0.12, xfade_caps=caps)
+    assert [p.xfade for p in plan.audio] == [0, 1920, round(rp.MIN_XFADE_S * rp.RATE)]

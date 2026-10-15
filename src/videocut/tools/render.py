@@ -1,7 +1,13 @@
 """`videocut tool render [--preview]`: work/edl.json -> out/ (pipeline steps 6, 7 and 9).
 
-    cut      every segment [in, out] in source time, frame accurate (decode-side trim),
-             audio faded by fade_ms at every boundary
+    snap     first `edl snap` (tools/edl.py, _snap.py): every cut point that is not in a
+             quiet place moves to the nearest one within the cut style's snap_window_s;
+             work/edl.json is rewritten when one moved (render.json "snap": moved,
+             max_shift_ms, unresolved, style)
+    cut      every segment [in, out] in source time, frame accurate (decode-side trim);
+             the audio crossfades at every cut (equal power, the cut style's xfade_ms or
+             the segment's "xfade_ms", centred, duration unchanged, shortened to the quiet
+             room around the cut points; _render_plan), the video is a hard cut
     reframe  crop window of the output aspect around crop.cx/cy, `zoom`× tighter, scaled
              to the job's output size (job.json "format", _format.py; an EDL "size" of
              another format is overridden with a warning) at the EDL fps; zoom_keys are
@@ -49,8 +55,8 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
-from ..edl import EdlError, load, read_sync
-from . import _layouts, _plates
+from ..edl import EdlError, load, read_sync, validate
+from . import _audio_env, _layouts, _plates, _snap
 from . import _render_plan as plan_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed, sized
@@ -66,7 +72,8 @@ from .common import (
     run_tool,
     write_json,
 )
-from .ingest import probe
+from .edl import snap_job
+from .ingest import audio_offset, probe
 from .job import PROJECT, is_approved, redaction_enforced
 
 CRF, PRESET = "18", "medium"
@@ -127,9 +134,14 @@ def _finite(v) -> float | None:
 def _audio_input(job: Path, src: Path, rel: str, info: dict) -> tuple[list[str], str, str]:
     """(extra ffmpeg input args, filter input label, description) for the audio to cut."""
     wav, meta = job / "work" / "audio.wav", job / "work" / "audio.json"
-    # The wav starts at the audio's first sample; only use it when that is where the video
-    # starts too, else cutting it by source time would shift the audio.
-    aligned = abs(info.get("audio_start", 0) - info.get("video_start", 0)) < 0.001
+    # The wav is in video time when ingest says so ("time_base": "video": padded or trimmed
+    # by the audio stream's start). A legacy wav starts at the audio's first sample, so it
+    # is only usable when that is where the video starts too.
+    try:
+        video_time = json.loads(meta.read_text()).get("time_base") == "video"
+    except (OSError, ValueError, AttributeError):
+        video_time = False
+    aligned = video_time or abs(info.get("audio_start", 0) - info.get("video_start", 0)) < 0.001
     fresh = meta.is_file() and is_fresh([wav, meta], [src])
     if read_job(job).get("source") == rel and aligned and fresh:
         return ["-i", str(wav)], "1:a", "work/audio.wav"
@@ -218,13 +230,17 @@ def render(args) -> dict:
     edl_path = work / "edl.json"
     if not edl_path.is_file():
         raise ToolError(f"EDL not found: {edl_path}")
-    raw = edl_path.read_bytes()
     try:
-        data = json.loads(raw)
+        data = json.loads(edl_path.read_bytes())
     except json.JSONDecodeError:
         data = {}
     src = _source(job, data)
     info = probe(src) if src else None
+    snapped = None
+    if info and not validate(data, info["duration"]):  # an invalid EDL: load reports it
+        snapped = snap_job(job)
+    raw = edl_path.read_bytes()
+    data = json.loads(raw) if snapped and snapped["written"] else data
     try:
         edl = load(
             edl_path,
@@ -253,7 +269,15 @@ def render(args) -> dict:
     ow, oh = edl.size
     if preview:
         ow, oh = max(2, ow // 4 * 2), max(2, oh // 4 * 2)
-    plan = plan_mod.build(edl, tuple(info["size"]), (ow, oh), layouts if use_layouts else None)
+    style = _snap.cut_style(read_job(job))
+    env = _audio_env.job_envelope(job) if snapped and not snapped.get("skipped") else None
+    # room for the longest crossfade asked for (a segment's own xfade_ms may exceed the style)
+    own = [s["xfade_ms"] for s in data["segments"] if isinstance(s.get("xfade_ms"), int | float)]
+    caps = _snap.xfade_caps(data, env, max([style["xfade_ms"], *own]) / 2000) if env else None
+    plan = plan_mod.build(
+        edl, tuple(info["size"]), (ow, oh), layouts if use_layouts else None,
+        style["xfade_ms"] / 1000, info["duration"], caps,
+    )  # fmt: skip
     overlay = work / "overlay.mov"
     ov_json = work / "overlays.json"
     # words.json too: the end card's tail is computed from it (_plates), like overlays did.
@@ -275,7 +299,9 @@ def render(args) -> dict:
     # First loudness pass (audio only, fast). Also run for previews: loudnorm turns digital
     # silence into NaN samples, so silence must be known before the render.
     mgraph = work / "render_measure.txt"
-    _write_graph(mgraph, plan_mod.measure_graph(plan, audio_in))
+    # a source stream is moved into video time by its start; work/audio.wav already is
+    a_off = 0.0 if audio_args else audio_offset(info)
+    _write_graph(mgraph, plan_mod.measure_graph(plan, audio_in, a_off))
     measured = _loudnorm_json(
         _ffmpeg_info(*inputs, "-/filter_complex", str(mgraph), "-map", "[a]", "-f", "null", "-")
     )
@@ -287,6 +313,11 @@ def render(args) -> dict:
     warnings, v_out, video, clamped, screen_rel, speaker = [], "[v]", None, [], None, []
     if size_note:
         warnings.append(size_note)
+    if snapped and snapped["unresolved"]:
+        warnings.append(
+            f"{len(snapped['unresolved'])} cut point(s) stay in speech after snapping "
+            "(`videocut tool edl snap` lists them)"
+        )
     if use_layouts:
         video, drawn = _layout_video(job, plan, edl, info, face, video_in, inputs)
         clamped, speaker = drawn["clamped"], drawn["speaker"]
@@ -298,7 +329,7 @@ def render(args) -> dict:
                 f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
                 f" blurry; clamped to {c['max_zoom']}x"
             )
-    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video)
+    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off)
     if use_overlay:
         graph += composite_graph(len(inputs) // 2, plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
@@ -386,6 +417,13 @@ def render(args) -> dict:
         "loudness": loud,
         "preview": preview,
     }
+    if snapped is not None:
+        report["snap"] = {
+            k: snapped.get(k)
+            for k in ("style", "moved", "max_shift_ms", "unresolved", "written", "skipped")
+            if k in snapped
+        }
+    report["xfade_ms"] = style["xfade_ms"]
     if use_overlay:
         report["overlay"] = True
     if use_layouts:
@@ -428,6 +466,7 @@ def render(args) -> dict:
         "screen_zoom_clamped": clamped,
         "speaker": speaker,
         "redaction": report.get("redaction"),
+        "snap": report.get("snap"),
         "warnings": warnings,
     }
 

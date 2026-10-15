@@ -35,7 +35,7 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>` | `job.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>` | `job.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]` | `brand.py` |
 | `captions [--force]` | `captions.py` |
 | `overlays [--no-render]` | `overlays.py` |
@@ -44,9 +44,10 @@
 | `screen [--force]` | `screen.py` |
 | `redact text [--force]`, `redact measure` | `redact.py` |
 | `face` | `face.py` |
-| `transcribe [--model turbo\|parakeet] [--language]`, `candidates` | `transcribe.py` |
+| `transcribe [--model turbo\|parakeet] [--language] [--no-align]`, `candidates` | `transcribe.py` |
+| `align [--no-candidates]` | `align.py` |
 | `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets` | `sheets.py` |
-| `edl check [file]` | `edl.py` |
+| `edl check [file]`, `edl snap [--dry-run]`, `edl locate <t> [--source]` | `edl.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
 
@@ -56,17 +57,23 @@ Helpers: `_transcribe_energy.py` (pauses, voiced gaps), `_transcribe_pack.py`
 framing, face track in output px, safe zones; shared by render, overlays and verify),
 `_color.py` (HDR → SDR), `_layouts.py` (screen/pip/split geometry, zoom windows and their
 filter graph; shared by render, overlays and verify), `_verify_screen.py` (the product-demo
-checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes).
+checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes),
+`_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
+snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
+(`speech_clipped`), `_style.py` (cut styles).
 
 ## Job folder (`$VIDEOCUT_HOME/jobs/<id>/`)
 
 ```
 job.json   id, created, source (relative), type, brief, status, approval, brand, assets,
            format (optional output format; absent = the default rule, resolved on read),
-           cut / overlays (what `videocut run` finished: plan and segments hashes, brand)
+           cut_style (optional; absent = the default rule), lang (de|en, default de),
+           cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
+           format and cut style of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
 work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4        ingest
-           screen_probe.json, screen_audio.wav, screen_proxy.mp4                ingest (demo)
+           screen_probe.json, screen_audio.wav (+ screen_audio.json),
+           screen_proxy.mp4                                                     ingest (demo)
            sync.json                                                            sync
            screen.json                                                          screen
            screen_text.json                                                     redact text
@@ -98,6 +105,104 @@ job.json only mirrors it for display, and `render` (also `--preview`) refuses wi
 Ingest is idempotent: an output newer than its input is kept. DeepFilterNet runs with delay
 compensation (`-D`) so cleaned audio stays in sync with the picture. Transcribe keeps a
 `words.json` made from the same audio, model and language.
+
+## Time base, word alignment, snapping and crossfades
+
+**Video time.** Every time in a job is video time: 0 is the first frame of the camera's video
+stream. Phones and AAC encoders start the audio stream a little later (typically 20-160 ms of
+priming; 157 ms on the real demo recording) or earlier. Ingest therefore pads (or trims) both
+wavs by `audio_offset_s = audio_start - video_start`, so a time in `audio.wav`,
+`audio_raw.wav` and `words.json` is a time in the picture; `audio.json` records
+`{"time_base": "video", "audio_offset_s"}` (`screen_audio.json` the same for the screen
+recording's microphone, in screen time). The proxy and render start the camera video at its
+first frame (`setpts=PTS-STARTPTS`), and a render that cuts the source's own audio stream
+moves it by its start (`asetpts=PTS-STARTPTS±offset`); render cuts `work/audio.wav` (the
+denoised track) whenever `audio.json` says video time. Every consumer of word times (captions,
+candidates, face/blink checks at cuts, `edl snap`/`check`/`locate`, revise, redaction measure,
+plan stills and bursts) reads them as video time without any further offset;
+`tests/test_video_time.py` checks words, cuts, picture, sound, captions and the proxy on a
+generated clip whose audio starts 157 ms after the video and one whose audio starts first.
+
+A job ingested before this rule (`audio.json` without `time_base`) is upgraded in place by
+the next ingest (every `videocut run` starts with it; a revision runs it first): the wavs are
+shifted, `words.json` (with alignment and candidates) moves along instead of being
+transcribed again, and `edl.json` moves with the words its cut points were placed on (zoom
+and screen-zoom keys too; redact blocks were measured on the video and stay). The job.json
+cut and overlay records follow the EDL (same cut, new time base), so a finished reel stays
+finished. The plan keeps its numbers: they guide the cut, the words decide it. A
+`"time_base": "shifting"` marker makes an interrupted upgrade rebuild instead of shifting
+twice; the EDL moves exactly once also when the audio is rebuilt instead of shifted (a
+changed `--denoise`, a re-probe; marker `edl_shifted`), and keeps its file time. Pads and
+trims are counted in 48 kHz samples whatever the source rate. Before an upgrade,
+`_audio_env.wav_offset` still reads such a job correctly for checks; `edl snap` waits
+(skipped with a hint) instead of mixing both time bases.
+
+**Word alignment** (`tools/align.py`, run by `transcribe` unless `--no-align`, again by
+`videocut tool align`): Whisper chains consecutive words and ends them 40-330 ms early.
+Alignment moves every boundary onto the energy of `audio.wav`: silence pins a word's edges,
+chained words split at the level valley between them, a word stretched over a pause shrinks
+to its voice, words in silence (hallucinations) keep their times. The model times stay in
+`t0_asr`/`t1_asr`; `transcribe.json` `align` records method, version and median shift. On the
+real demo recording: median shift 55 ms, p90 199 ms.
+
+**Snapping** (`edl snap`, also run by every render): every segment `in`/`out` moves to the
+nearest acoustically quiet point within the cut style's `snap_window_s`, never across a kept
+word and never into a dropped one (an `out` stays before the middle of the next dropped
+word, an `in` after the middle of the dropped word before it). The originals are kept as
+`in_src`/`out_src`, so snapping again is idempotent; a hand-edited cut point becomes the new
+original. Zoom, screen-zoom and redact keys on a moved edge follow it; output times
+(captions, overlays) are remapped. `edl check` reports `cut_in_speech` for a cut point
+inside full speech unless the segment says `"speech_cut_ok": "<reason>"`.
+
+**Crossfades** (`_render_plan.audio_parts`): the video is a hard cut on the frame grid; the
+audio crossfades equal-power at every cut (`xfade_ms` of the style, a segment's own
+`xfade_ms` overrides it), centred on the cut: the outgoing segment runs on half of it past its
+`out`, the incoming starts half of it before its `in`, so the reel length is exactly the sum
+of the frame-snapped segments. A crossfade is shortened to the quiet room around both cut
+points (never under 10 ms), to half of a short segment and to the source end; two segments
+that continue each other (a join) get a 10 ms linear crossfade. The legacy `fade_ms` is
+ignored.
+
+**speech_clipped** (`verify`, `_verify_audio.py`): a hard check on the reel's own audio: at
+every cut, speech level and spectral flux right before and after the cut tell a word cut off
+or started mid-syllable from a clean cut; it fails verify like a click.
+
+## Cut style and job language
+
+job.json `cut_style` is `calm`, `standard` or `tight` (`_style.py`); absent, a job with a
+screen recording or screenshots is cut `calm` (the viewer reads the screen while the speaker
+talks), every other job `standard`. The style sets `keep_pause_s` (the longest natural
+pause kept inside a segment: 1.0 / 0.6 / 0.35 s), `min_segment_s` (3.0 / 1.5 / 0.8),
+whether a sentence may be assembled from pieces and what an in-sentence cut may remove
+(calm: nothing; standard: fillers and false starts; tight: also repeats and pauses),
+`xfade_ms` (120 / 80 / 50) and `snap_window_s` (0.35 / 0.30 / 0.25). The cut, overlays and
+revise skills read it from `job show`; `edl snap` and render use it directly. Only a human
+sets it (`job cut-style`, `videocut run --cut-style`, the app's `PUT cut-style`; refused
+inside an agent run, like format and brand). Changing it keeps the approval (the plan did
+not change) and makes a finished cut stale (job.json `cut.cut_style`); a recut
+(`videocut run --recut`, `POST recut`) cuts again with the approved plan and the
+personal-data decision as they are.
+
+job.json `lang` (`de` default, `en`) is the language of the plan's and reports'
+human-facing text; the skills write in it.
+
+## Target length (`tools/_length.py`)
+
+job.json `target_s` (seconds) is the length the human wants; absent means automatic: 30-45 s
+for type `thought`, 30-60 s for the other talking-head types, and no fixed length for a job
+with a screen recording or screenshots ("as long as the content needs, tight but complete";
+the plan states its estimate, `plan.json` `estimated_s`). A set target means target ± 15 %
+(`target_range`). `job show` prints it with its range; the plan sizes the keep list to it
+(never pads; too little material: it says so and proposes the natural length), overlays
+plan about 2-4 ideas per minute, cut and revise stay inside the range (revise goes beyond
+only when the feedback asks). Set by a human only: `job new --target`, `job target <job>
+<len|auto>` (90, 90s, 5m, 2:30; 5 s - 3 h), `videocut run --target`, `POST /api/jobs`
+`target_s`, `PUT /api/jobs/{id}/target`; refused inside an agent run. Unlike the cut style
+it changes the content: a plan run records the target it planned for (job.json
+`plan_target`); a changed target makes the plan stale and revokes the approval (the
+approval record also stores `target_s`, and `is_approved` compares it), a stale plan cannot
+be approved, and the next run plans again (the app offers "Plan neu erstellen" through the
+plan-feedback path, keeping earlier plan edits). A cut records its target.
 
 ## Skills and `videocut run`
 
@@ -497,8 +602,9 @@ file or the lock file changed); without it, every page explains how to build it.
 Routes (prefix `/api`): `session`, `types`, `brands` (list, read, validated edit, create from
 the neutral example, logo/font upload with `role`, cached preview sheet), `jobs` (list,
 create by multipart upload, detail, delete to `$VIDEOCUT_HOME/trash`), `jobs/{id}/start`,
-`events` (server-sent events: `stage`, `log`, `tool`, `gate`, `error`, `done`; replayed on
-connect), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
+`events` (server-sent events: `stage` (with `at`, the stage's start, ISO), `log`, `tool`,
+`gate`, `error`, `done`; replayed on connect, so a reloaded page keeps the stage's start),
+`cut-style` (PUT), `target` (PUT), `recut` (POST: cut + overlays again with the approved plan), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
 `media/{reel|preview|cover|screen_proxy|camera_proxy|history/reel-<k>.mp4}` (HTTP Range),
 `download`. Errors are `{"detail": {"message", "code"?, "errors"?}}`; 409 codes: `busy` (a
 run is queued or active), `stale` (the plan changed since it was read), `state`, `exists`,
@@ -510,7 +616,11 @@ capture keeps tool output of parallel requests apart) and an `ask` that never an
 a run stops at the plan gate (exit code 3 → gate `plan`) and the UI answers through
 `/approve`. Status/stage of a job come from its files plus the channel: status `new |
 running | waiting | done | error`, stage `prep, plan, approval, cut, overlays, verify, done,
-revise, plan_revise, error`, gate `plan | result | null`.
+revise, plan_revise, error`, gate `plan | result | null`. The job detail also carries
+`stage_since` (start of the running stage), `failed_stage`, `has_screen`, `cut_style`
+(stored or `auto`), `cut_style_resolved`, `cut_stale`, `source_duration_s`, `lang`,
+`target_s`, `target_resolved`, `plan_target_stale` and `plan_target_s`; the
+app's "What is happening" line counts the time in the step from `stage_since`.
 
 Security model:
 - bound to 127.0.0.1; a request whose Host header is not `127.0.0.1:PORT`/`localhost:PORT`

@@ -22,6 +22,10 @@ Numbers per cut
     blink    flag `blink_at_cut` when one of the two output frames on either side of the cut
              shows a blink: the frames are mapped to source time via the EDL and looked up
              in the blink intervals of a current work/face.json
+Speech (_verify_audio.py): check `speech_clipped` (a hard failure) lists every cut of the
+OUTPUT audio where a word is cut off mid-phoneme (level and spectral flux within +-60 ms of
+the cut, on the frame grid render cut at); the cut gets the flag `speech_clipped` too, with
+`side` out/in/both. A segment with "speech_cut_ok": "<reason>" makes it info instead.
 Overlays (when work/overlay_boxes.json from `videocut tool overlays` exists; boxes and face
 track are in the output px of work/overlays.json)
     flag `overlay_in_safe_zone` when a box reaches into the organic safe zones (top 250 px,
@@ -59,10 +63,10 @@ from pathlib import Path
 
 import numpy as np
 
-from ..edl import Edl, EdlError, load
+from ..edl import Edl, EdlError, load, output_spans
 from ..paths import tool_env
 from . import _image as im
-from . import _plates, _verify_screen
+from . import _plates, _verify_audio, _verify_screen
 from . import overlays as overlays_mod
 from ._geometry import job_size, overlap, safe_zones, sized
 from .common import (
@@ -540,6 +544,18 @@ def inscribed(box: list[int]) -> list[int]:
     return [cx - side // 2, cy - side // 2, cx - side // 2 + side, cy - side // 2 + side]
 
 
+def _speech(audio: np.ndarray, render: dict, edl: Edl | None) -> dict:
+    """speech_clipped numbers per cut: at the frame-grid cuts of `edl` (joins skipped,
+    speech_cut_ok honoured), else at render.json's cuts."""
+    if edl is None:
+        return _verify_audio.check(audio, RATE, [float(c) for c in render["cuts"]])
+    segs = edl.segments
+    cuts = [a for a, _ in output_spans(edl)[1:]]
+    joins = [abs(b.start - a.end) <= 0.001 for a, b in pairwise(segs)]
+    oks = [a.speech_cut_ok or b.speech_cut_ok for a, b in pairwise(segs)]
+    return _verify_audio.check(audio, RATE, cuts, joins, oks)
+
+
 def _check(ok: bool, **fields) -> dict:
     return {"ok": bool(ok), **fields}
 
@@ -584,12 +600,14 @@ def verify(args) -> dict:
             warnings.append(f"work/edl.json is invalid: {e}")
     reframe = [False] * len(render["cuts"])
     blink = [False] * len(render["cuts"])
+    stale = False
     if edl is not None:
         cuts, edl_cuts = [float(c) for c in render["cuts"]], edl.cut_points()[1:-1]
         if len(cuts) != len(edl_cuts) or any(
             abs(a - b) > 1 / fps for a, b in zip(cuts, edl_cuts, strict=True)
         ):
             warnings.append("render.json cuts differ from work/edl.json; the render may be stale")
+            stale = True
         else:
             face = load_face(job, edl.source)
             framed_edl = face_crops(sized(job, edl)[0], face)[0]  # the framing render used
@@ -622,6 +640,11 @@ def verify(args) -> dict:
                 "audio": aud,
             }
         )
+    speech = _speech(audio, render, edl if not stale else None)
+    by_cut = {d["cut"]: d for d in speech["cuts"]}
+    for c in cut_docs:
+        if c["cut"] in by_cut:
+            c["speech"] = by_cut[c["cut"]]
     scores = [c["visual"]["jump_score"] for c in cut_docs]
     for i, c in enumerate(cut_docs):
         others = [x for j, x in enumerate(scores) if j != i and x is not None]
@@ -630,6 +653,11 @@ def verify(args) -> dict:
         c["flags"], c["info"] = cut_notes(
             c["visual"], c["audio"], median, reframe[i_cut], blink[i_cut]
         )
+        sp = c.get("speech") or {}
+        if sp.get("clipped"):
+            (c["info"] if sp.get("speech_cut_ok") else c["flags"]).append(
+                "speech_cut_ok" if sp.get("speech_cut_ok") else "speech_clipped"
+            )
 
     demo = {}
     if edl is not None:
@@ -691,6 +719,14 @@ def verify(args) -> dict:
         if f"out/verify/{old.name}" not in {c["image"] for c in cut_docs}:
             old.unlink()
     checks["cuts_in_range"] = _check(not bad_cuts, outside=bad_cuts)
+    checks["speech_clipped"] = _check(
+        not speech["flagged"],
+        cuts=[
+            {k: d[k] for k in ("cut", "t", "segments", "clipped", "level_db", "flux")}
+            for d in speech["flagged"]
+        ],
+        speech_db=speech["speech_db"],
+    )
     if "error" in demo:
         checks["screen_layouts"] = _check(False, error=demo["error"])
     elif "overlap" in demo:

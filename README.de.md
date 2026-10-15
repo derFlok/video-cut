@@ -31,8 +31,8 @@ Einmal-Link; Terminalfenster schließen beendet sie. Deutsch ist voreingestellt,
 über den Umschalter oben.
 
 1. **Neues Video:** Videoart wählen, die Kamera-Aufnahme auf die Seite ziehen (optional eine
-   gleichzeitig laufende Bildschirmaufnahme oder Screenshots), Marke und Ausgabeformat
-   wählen, eine Zeile Anweisung an Claude schreiben. Mit dem Hochladen beginnt die
+   gleichzeitig laufende Bildschirmaufnahme oder Screenshots), Marke, Ausgabeformat und
+   Schnittstil wählen, eine Zeile Anweisung an Claude schreiben. Mit dem Hochladen beginnt die
    Vorbereitung.
 2. **Fortschritt verfolgen:** die Schritte, ein Live-Protokoll, Laufzeit und bisherige
    Claude-Kosten.
@@ -86,7 +86,8 @@ Optionen: `--approve` (ohne Nachfrage), `--replan`, `--recut`, `--brand <id>`, `
 (gleichzeitig aufgenommene Bildschirmaufnahme, für einen neuen Auftrag), `--asset DATEI...`
 (Screenshots für einen neuen Auftrag; als letzte Option angeben), `--demo-data` (gefundene
 persönliche Daten sind Demodaten), `--format 9:16|16:9|1:1|4:5` (Ausgabeformat; bei einem
-bestehenden Auftrag ersetzt es das Format und schneidet neu), `--max-turns N`. Zeit, Turns,
+bestehenden Auftrag ersetzt es das Format und schneidet neu), `--cut-style calm|standard|tight`
+(siehe unten), `--target 90|5m|2:30|auto` (Ziellänge, siehe unten), `--max-turns N`. Zeit, Turns,
 Kosten und Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
 
 **Ausgabeformat** (je Video): `9:16` 1080×1920 (Reels, Shorts, Stories), `16:9` 1920×1080
@@ -94,6 +95,24 @@ Kosten und Tokens jedes Claude-Laufs stehen in `work/runs.jsonl`.
 Standard: `16:9`, wenn der Auftrag eine Bildschirmaufnahme oder Screenshots hat
 (Produktdemo), sonst `9:16`. Später ändern mit `videocut tool job format <id> 16:9`;
 `videocut tool job show <id>` zeigt es an.
+
+**Schnittstil** (je Video): wie viel von deinem natürlichen Sprechrhythmus bleibt.
+`calm` (ruhig) behält ganze Sätze und Pausen bis zu einer Sekunde, mit einer weichen
+Tonüberblendung von 120 ms an jedem Schnitt – für Demos und Erklärungen, bei denen man
+nebenbei den Bildschirm liest. `standard` entfernt Füllwörter und Versprecher, lässt Sätze
+sonst ganz – für Videos, in denen du in die Kamera sprichst. `tight` (straff) entfernt jede
+Pause und jedes Füllwort – für schnelle Reels. Standard: `calm` mit Bildschirmaufnahme oder
+Screenshots, sonst `standard`. Ändern mit `videocut tool job cut-style <id> standard` oder in
+der App (Plan- oder Ergebnisseite); der freigegebene Plan und deine Entscheidung zu
+persönlichen Daten bleiben, die App bietet an, neu zu schneiden. Jeder Schnitt wird auf
+eine echte Pause im Ton gelegt, und die Prüfung schlägt an, wenn ein Wort abgeschnitten ist.
+
+**Ziellänge** (je Video): `auto` ergibt Reels von 30–60 s (30–45 s für einen Gedanken) und
+lässt eine Produktdemo so lang laufen, wie der Inhalt braucht – straff, aber vollständig.
+Mit einer Länge (z. B. `5m`) zielt der Plan auf ± 15 % davon; er streckt nie – reicht das
+Material nicht, sagt er das und schlägt die natürliche Länge vor. Wählbar beim Anlegen
+oder später mit `videocut tool job target <id> 5m` bzw. auf der Planseite; eine Änderung
+braucht einen neuen Plan und eine neue Freigabe.
 
 ## Produktdemo aufnehmen
 
@@ -105,6 +124,8 @@ Standard: `16:9`, wenn der Auftrag eine Bildschirmaufnahme oder Screenshots hat
 1. **Bildschirm:** Cmd+Shift+5 drücken, „Gesamten Bildschirm aufnehmen" (oder einen Teil)
    wählen und unter *Optionen* dein **Mikrofon** wählen und **Mausklicks anzeigen**
    einschalten. Über die Mikrofonspur legt Video Cut Bildschirm und Kamera übereinander.
+   **Das Mikrofon in beiden Aufnahmen einschalten** (Kamera und Bildschirm): ohne Ton in
+   einer davon lassen sich die beiden nicht übereinanderlegen.
 2. **Du selbst:** die Kameraaufnahme von dir **gleichzeitig** starten (Handy oder Webcam),
    dann die Bildschirmaufnahme. Optional: zu Beginn einmal sichtbar in die Hände klatschen;
    das hilft bei lauter Umgebung.

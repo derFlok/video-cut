@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from helpers import run_tool
 
+from videocut.tools import _snap, verify
 from videocut.tools.job import approve_job
 
 pytestmark = pytest.mark.media
@@ -87,7 +88,11 @@ def test_render_reel(capsys, request, orientation):
     assert abs(int(v["nb_frames"]) - want * 30) <= 1
 
     report = json.loads((job / "out" / "render.json").read_text())
-    assert set(report) == {"edl_sha256", "output_duration", "cuts", "loudness", "preview"}
+    assert set(report) == {
+        "edl_sha256", "output_duration", "cuts", "loudness", "preview", "snap", "xfade_ms"
+    }  # fmt: skip
+    style = _snap.cut_style(json.loads((job / "job.json").read_text()))
+    assert report["xfade_ms"] == style["xfade_ms"] and report["snap"]["skipped"]  # no wav
     edl_bytes = (job / "work" / "edl.json").read_bytes()
     assert report["edl_sha256"] == hashlib.sha256(edl_bytes).hexdigest()
     assert report["output_duration"] == pytest.approx(want)
@@ -107,20 +112,21 @@ def test_render_reel(capsys, request, orientation):
 
 
 def test_no_click_at_cuts(capsys, landscape_clip):
-    """With fades the signal is near zero at every cut; without, the same cuts jump."""
-    peaks = {}
-    for fade in (30, 0):
-        segs = [{**s, "fade_ms": fade} for s in SEGMENTS]
-        job = _job(capsys, landscape_clip, f"click-{fade}", segs)
+    """The cuts lie inside speech: crossfaded (the default) they do not click, hard cut
+    ("xfade_ms": 0) the same cuts jump. The duration stays the same either way."""
+    peaks, durations = {}, {}
+    for name, extra in (("xfade", {}), ("hard", {"xfade_ms": 0})):
+        segs = [{**s, **extra} for s in SEGMENTS]
+        job = _job(capsys, landscape_clip, f"click-{name}", segs)
         code, s, _ = run_tool(capsys, "render", "--job", str(job), "--preview")
         assert code == 0, s
         x = _audio(job / "out" / "preview.mp4")
-        ms = RATE // 1000
-        peaks[fade] = [
-            float(np.abs(x[int(c * RATE) - ms : int(c * RATE) + ms]).max()) for c in s["cuts"]
-        ]
-    assert max(peaks[30]) < 0.05, peaks
-    assert max(peaks[0]) > 0.1, peaks  # the check would catch a missing fade
+        peaks[name] = [verify.audio_numbers(x, c)["click_peak"] for c in s["cuts"]]
+        durations[name] = len(x) / RATE
+    assert max(peaks["xfade"]) < verify.CLICK_PEAK_MAX, peaks
+    assert max(peaks["hard"]) > max(peaks["xfade"]) * 2, peaks  # the check would catch it
+    assert abs(durations["xfade"] - durations["hard"]) < 0.005, durations
+    assert abs(durations["xfade"] - _output_duration(SEGMENTS)) <= FRAME + 0.03, durations
 
 
 def test_zoom_key_changes_crop(capsys, landscape_clip):

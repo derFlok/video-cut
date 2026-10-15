@@ -523,3 +523,110 @@
 - On a real 4K screen recording (248 s): ~0.48 s per sampled frame with 4 threads
   (Vision dominates); two texts over 215 s took 150 s; the packet scan for frame times
   0.5 s; 29 frame gaps > 0.5 s (up to 2 s) that a plain seek got wrong.
+
+### Added — Cut quality: video time base, aligned words, snapped cuts, cut style per video
+- **Video time base.** Every time in a job is video time (0 = the first camera frame).
+  Ingest pads/trims `audio_raw.wav`, `audio.wav` and `screen_audio.wav` by the audio
+  stream's start (`audio.json`/`screen_audio.json`: `time_base: "video"`,
+  `audio_offset_s`); phones start the audio up to ~160 ms after the picture, so words,
+  cuts and captions were that much early before. The proxy and render start the camera at
+  its first frame (`setpts=PTS-STARTPTS`); a render from the source's own audio stream
+  moves it by its start; render cuts `work/audio.wav` whenever it is in video time (also
+  when the audio starts late). A job ingested before this is upgraded in place by the next
+  ingest (every run starts with it; a revision runs it first): wavs shifted, `words.json`
+  shifted instead of transcribed again, `edl.json` moved with the words its cuts were
+  placed on, job.json cut/overlay records carried along (same cut, so a finished reel stays
+  finished); an interrupted upgrade rebuilds instead of shifting twice. `sync` never
+  shifts twice.
+- **Word alignment** (`tools/align.py`; run by `transcribe` unless `--no-align`,
+  `videocut tool align` re-aligns): energy-based boundaries for every word (silence pins,
+  chained words split at the level valley, a word stretched over a pause shrinks to its
+  voice, hallucinated words in silence untouched); model times kept in `t0_asr`/`t1_asr`,
+  `transcribe.json` `align` records method, version and shifts; candidates refreshed.
+- **Snapped cuts.** `videocut tool edl snap` (also run by every render) moves each `in`/`out`
+  to the nearest quiet point within the style's window, never across a kept word and never
+  into a dropped one; keeps `in_src`/`out_src` (idempotent; a hand-edited point becomes the
+  new original), moves zoom/screen-zoom/redact keys on a moved edge, remaps output times,
+  stays inside the sync overlap for screen segments. `edl check` reports `cut_in_speech`
+  unless a segment says `"speech_cut_ok": "<reason>"`.
+- **Crossfades at every cut.** Equal-power audio crossfade, centred on the cut (half of it
+  from the slack snapping leaves), sample-exact so the reel length is the sum of the
+  frame-snapped segments; shortened to the quiet room around both cut points (min. 10 ms),
+  to half a short segment and to the source end; joins get 10 ms linear; a segment's
+  `xfade_ms` overrides the style; the legacy `fade_ms` is ignored. The video stays a hard cut.
+- **verify `speech_clipped`**: a hard check on the reel's audio (speech level and spectral
+  flux at every cut) for a word cut off or started mid-syllable.
+- **Cut style per video** (`_style.py`): `calm` (whole sentences, pauses up to 1 s,
+  segments ≥ 3 s, 120 ms crossfade), `standard` (fillers and false starts go, 80 ms),
+  `tight` (every pause and filler goes, 50 ms; the behaviour before). Default `calm` with a
+  screen recording or screenshots, else `standard`. `job new --cut-style`, `job cut-style
+  <job> <style|auto>` (human only; refused inside an agent run), `videocut run --cut-style`;
+  the cut, plan, overlays and revise skills follow it (and snap + check + `xfade_ms`). A
+  changed style keeps the approval and makes the cut stale (job.json `cut.cut_style`);
+  `run.recut` / `videocut run --recut` cuts again with the approved plan and the
+  personal-data decision unchanged.
+- **Job language**: job.json `lang` (`de` default, `en`; `job new --lang`); plan and reports
+  are written in it.
+- API: `cut_style`, `cut_style_resolved`, `cut_stale`, `source_duration_s`, `lang`,
+  `stage_since` in the job detail; `PUT /api/jobs/{id}/cut-style`, `POST /api/jobs/{id}/recut`;
+  SSE `stage` events carry `at` (the stage's start, ISO), kept on replay.
+- App: cut style picker on "New video" and on the plan/result page, "Neu schneiden" for a
+  stale cut with a time and cost hint from the last runs; a plain-language "What is
+  happening" line with the time in this step (from the server's stage start, right after a
+  reload) and a rough expectation from the recording length; the locked correction box
+  says why; a reel left by failed overlays is shown as interim, never as the result.
+- Tests: `tests/test_video_time.py` (a generated clip whose audio starts 157 ms after the
+  video and one whose audio starts 120 ms before it: aligned words, candidates, snapped
+  cuts, the reel's picture, sound and captions and the proxy agree to one frame; the
+  render from `audio.wav` matches the render from the source stream sample for sample),
+  `test_snap.py`, `test_align.py`, `test_time_base.py`, cut style in `test_job.py`,
+  `test_run.py`, `test_server.py`, app `progress.test.tsx`.
+- **Target length per video** (`tools/_length.py`): job.json `target_s` or automatic (30–45 s
+  for a thought, 30–60 s for other talking heads, as long as needed for a demo with screen
+  material); a set target means ± 15 %. `job new --target`, `job target <job> <len|auto>`,
+  `videocut run --target` (90, 90s, 5m, 2:30), human only; `job show` prints the range.
+  A changed target makes the plan stale and revokes the approval (also recorded in the
+  approval record); the next run plans again. Skills: the plan sizes the keep list to it
+  and never pads, overlays about 2–4 ideas per minute, cut/revise stay inside it. API:
+  `target_s` on create, `target_s`/`target_resolved`/`plan_target_stale` in the detail,
+  `PUT /api/jobs/{id}/target`. App: "Ziellänge" on "New video" (Automatisch, 30 s … 10 Min,
+  custom mm:ss) and on the plan page next to the estimated length, "Plan neu erstellen"
+  for a stale plan.
+- README: cut style and target length; recording tip: the microphone on in both
+  recordings.
+
+### Fixed — Cut quality
+- A recording whose audio starts before its video was cut and proxied in container time:
+  the picture of every cut was off by the lead (render, layouts and the proxy now start
+  the camera at its first frame).
+- Review fixes: the video-time pad/trim was counted at the source's sample rate (a
+  44.1 kHz recording got 9 % too much: 20 ms for 0.25 s); an old job whose audio is rebuilt
+  rather than shifted now moves its EDL too (once); `edl snap` waits for the upgrade of an
+  old job instead of mixing time bases; a segment that keeps no word never snaps into a
+  dropped word that spans its edge; a segment's own longer `xfade_ms` gets the quiet room
+  it needs; a reel from before cut records goes stale when a style is set; a recut shows
+  no plan stage.
+
+### Observed — cut quality (real runs, Opus 5.5, copies of two real jobs)
+- 10-min product demo (camera + screen, 16:9, approved plan and personal-data decision
+  kept, recut in style `calm` through `run.recut`): its audio starts 157 ms after the
+  video. The legacy upgrade alone moved the old cut's cut points in speech from 53 of 94 to
+  31 of 94. Alignment: median word shift 55 ms, p90 199 ms. Recut: 47 → 21 segments,
+  median segment 2.17 → 4.85 s, cut points in speech 53/94 → 3/38 (all three marked
+  `speech_cut_ok`: words without a pause between them), `speech_clipped` 0, reel 120.3 →
+  119.9 s. Cut 1507 s / 52 turns / USD 2.59 (before 1459 s / 71 / 2.49), overlays 1167 s /
+  22 turns / USD 0.90 (before 1062 s / 22 / 0.86). Verify not ok: 5 × `click`, 1 ×
+  `blink_at_cut`. Four of the clicks sit where the denoised track is digital silence on one
+  side (DeepFilterNet gates to zero) and room tone at −50…−70 dBFS on the other: the click
+  metric divides by a silent baseline; the cut makes no sample step (crossfaded). One
+  (44.3 s) fades a non-speech sound at −30…−46 dBFS into silence over the 30 ms crossfade
+  the agent set.
+- 66-s selfie talking head (9:16, recut in style `standard`): 14 → 9 segments, median
+  1.41 → 2.35 s, cut points in speech 11/28 → 3/18 (all `speech_cut_ok`), `speech_clipped`
+  0, reel 24.7 → 29.3 s; cut 390 s / 53 turns / USD 1.58 (before 190 s / 34 / 0.75),
+  overlays 251 s / 19 turns / USD 0.61. Verify not ok: 1 × `click` (a −63 dBFS mouth tick
+  of the source inside the outgoing crossfade tail, next to digital silence), 1 ×
+  `blink_at_cut` (no blink-free point in that pause).
+- Known: the click check flags low-level sound next to the denoiser's digital silence; a
+  follow-up should judge clicks against the source or an audible level, or keep a noise
+  floor in the denoised track.

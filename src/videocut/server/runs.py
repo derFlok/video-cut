@@ -25,6 +25,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from .. import agent
 from .. import run as pipeline
@@ -36,6 +37,8 @@ STAGE_RE = re.compile(r"\n?(prep|plan|cut|overlays|revise|verify)\b")
 STAGE_BY_KIND = {
     "plan_feedback": {"plan": "plan_revise"},
     "feedback": {"plan": "revise", "cut": "revise", "overlays": "revise"},
+    # a recut keeps the approved plan ("plan: already approved"): no plan stage
+    "recut": {"plan": "cut"},
 }
 GATE_CODES = {3: "plan", 0: "result", 4: "result"}
 MAX_EVENTS = 5000  # per run; later log lines are dropped (stage/gate/done are kept)
@@ -59,6 +62,7 @@ class Channel:
     state: str = "idle"  # idle | queued | running
     kind: str | None = None  # what the current or last run does (start, approve, ...)
     stage: str | None = None
+    stage_at: str | None = None  # when the current stage started (ISO, from its event)
     gate: str | None = None
     ok: bool | None = None
     error: str | None = None
@@ -74,12 +78,16 @@ class Channel:
             self.base += len(self.events)
             self.events = []
             self.state, self.kind = "queued", kind
-            self.stage = self.gate = self.ok = self.error = self.failed_stage = None
+            self.stage = self.stage_at = self.gate = self.ok = self.error = None
+            self.failed_stage = None
 
     def push(self, ev: dict) -> None:
         with self.lock:
             if ev["t"] == "stage":
-                self.stage = ev["stage"]
+                # the start time travels with the event, so a reader that replays the
+                # run (a reloaded page) knows how long the stage has been running
+                ev = {**ev, "at": ev.get("at") or now_iso()}
+                self.stage, self.stage_at = ev["stage"], ev["at"]
             elif ev["t"] == "gate":
                 self.gate = ev["gate"]
             elif ev["t"] == "error":
@@ -116,6 +124,11 @@ class Channel:
             if stage != self.stage:
                 self.push({"t": "stage", "stage": stage})
         self.push({"t": "log", "text": text.lstrip("\n")})
+
+
+def now_iso() -> str:
+    """The current time as ISO 8601 with offset, to the millisecond."""
+    return datetime.now(UTC).astimezone().isoformat(timespec="milliseconds")
 
 
 def no_ask(prompt: str) -> str:

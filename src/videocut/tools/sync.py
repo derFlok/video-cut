@@ -226,6 +226,16 @@ def _probe(job: Path, name: str) -> dict:
         raise ToolError(f"work/{name} is missing; run `videocut tool ingest` first") from None
 
 
+def _wav_shift(record: Path, probe: dict) -> float:
+    """Video time of a wav's first sample: 0 when ingest already put it in video time."""
+    try:
+        if json.loads(record.read_text()).get("time_base") == "video":
+            return 0.0
+    except (OSError, ValueError):
+        pass
+    return (probe.get("audio_start") or 0.0) - (probe.get("video_start") or 0.0)
+
+
 def overlap(offset: float, camera_duration: float, screen_duration: float) -> list[float]:
     """Camera-time range in which both recordings have pictures."""
     return [
@@ -245,10 +255,11 @@ def sync(args) -> dict:
     cam_probe, scr_probe = _probe(job, "probe.json"), _probe(job, "screen_probe.json")
     if scr_probe.get("file") != json.loads((job / "job.json").read_text()).get("screen"):
         raise ToolError("work/screen_probe.json describes another file; run ingest again")
-    # Screen time counts from the first screen frame; its wav starts at the audio stream.
-    scr_shift = (scr_probe.get("audio_start") or 0.0) - (scr_probe.get("video_start") or 0.0)
-    # Camera time counts from the camera's first video frame; audio_raw.wav starts at its audio.
-    cam_shift = (cam_probe.get("audio_start") or 0.0) - (cam_probe.get("video_start") or 0.0)
+    # Screen time counts from the first screen frame, camera time from the camera's first
+    # video frame. Ingest puts both wavs in their video time (time_base "video"); a job
+    # ingested before that has wavs starting at the audio stream, shifted here instead.
+    scr_shift = _wav_shift(work / "screen_audio.json", scr_probe)
+    cam_shift = _wav_shift(work / "audio.json", cam_probe)
 
     if args.offset is not None:
         result = {"offset_s": float(args.offset), "method": "manual", "confidence": 1.0}

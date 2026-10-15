@@ -1,11 +1,15 @@
 """`videocut tool transcribe|candidates`: local transcription and filler candidates.
 
-transcribe [--model turbo|parakeet] [--language de|en|...|auto]
+transcribe [--model turbo|parakeet] [--language de|en|...|auto] [--no-align]
     work/audio.wav -> work/words.json  {"model", "language", "duration",
-                                        "words": [{"w", "t0", "t1", "conf"}]}  (source s)
-    then runs `candidates` (cheap) so one call leaves a complete takes_packed.md.
+                                        "words": [{"w", "t0", "t1", "conf",
+                                                   "t0_asr", "t1_asr"}]}  (source s)
+    then aligns every word against the audio (`align.py`: t0/t1 aligned, the model's own
+    times kept in t0_asr/t1_asr; `--no-align` keeps the model's times) and runs
+    `candidates` (cheap) so one call leaves a complete takes_packed.md.
     A words.json newer than audio.wav from the same model and language is kept
-    (work/transcribe.json records how it was made).
+    (work/transcribe.json records how it was made, "align" how it was aligned, and
+    "time_base": "video" when audio.wav is in video time, see ingest.py).
 candidates
     work/words.json + work/audio.wav -> work/candidates.json
         {"pauses": [{"t0", "t1", "dur"}],
@@ -25,6 +29,7 @@ import wave
 from pathlib import Path
 
 from . import _transcribe_energy as energy
+from . import align as aligner
 from ._transcribe_pack import pack
 from .common import ToolError, home, is_fresh, job_parent, resolve_job, run_tool, write_json
 
@@ -172,6 +177,58 @@ def make_candidates(work: Path) -> dict:
     }
 
 
+def sync_alignment(work: Path, meta: dict, wanted: bool) -> dict | None:
+    """Bring words.json to the wanted alignment state; returns the "align" record."""
+    current = meta.get("align") or {}
+    if wanted:
+        if (current.get("method"), current.get("version")) == (aligner.METHOD, aligner.VERSION):
+            return current
+        info = aligner.align_work(work)
+        print(f"aligned words to the audio: median shift {info['median_shift_ms']} ms")
+        return info
+    words_file = work / "words.json"
+    doc = json.loads(words_file.read_text())
+    if current or any("t0_asr" in w for w in doc["words"]):
+        doc["words"] = aligner.strip(doc["words"])
+        write_json(words_file, doc)
+        meta.pop("align", None)
+        write_json(work / "transcribe.json", meta)
+    return None
+
+
+def audio_time_base(work: Path) -> str:
+    """ "video" when ingest put audio.wav in video time, "audio" for an older job."""
+    try:
+        return json.loads((work / "audio.json").read_text()).get("time_base") or "audio"
+    except (OSError, ValueError):
+        return "audio"
+
+
+def shift_to_video_time(work: Path, offset: float) -> None:
+    """Move an existing transcript by `offset` s into video time (ingest's upgrade of a
+    job transcribed before the video time base), instead of transcribing again: the words
+    under an approved plan stay the same. Re-aligns and redoes candidates when there."""
+    words_file, meta_file = work / "words.json", work / "transcribe.json"
+    doc, meta = json.loads(words_file.read_text()), json.loads(meta_file.read_text())
+    duration = round(wav_duration(work / "audio.wav"), 3)
+    words = []
+    for w in doc["words"]:
+        w = dict(w)
+        for k in ("t0", "t1", "t0_asr", "t1_asr"):
+            if k in w:
+                w[k] = round(min(max(w[k] + offset, 0.0), duration), 3)
+        if w["t1"] > 0.0 or offset >= 0:  # words trimmed away with the audio are gone
+            words.append(w)
+    doc.update(words=words, duration=duration)
+    write_json(words_file, doc)
+    meta.update(time_base="video", shifted_s=offset)
+    meta.pop("align", None)
+    write_json(meta_file, meta)
+    if any("t0_asr" in w for w in words):
+        aligner.align_work(work)
+    make_candidates(work)
+
+
 def transcribe(args) -> dict:
     job = resolve_job(args.job)
     work = _work(job)
@@ -204,10 +261,13 @@ def transcribe(args) -> dict:
         write_json(words_file, doc)
         meta["seconds"] = round(time.monotonic() - started, 1)
         meta["prompt_used"] = prompt_used
+        meta["time_base"] = audio_time_base(work)
         write_json(meta_file, meta)
         print(f"transcribed {duration:.1f}s with {meta['model']} in {meta['seconds']}s")
     else:
-        doc, meta = json.loads(words_file.read_text()), prev
+        meta = prev
+    aligned = sync_alignment(work, meta, not args.no_align)
+    doc = json.loads(words_file.read_text())
     stats = make_candidates(work)
     return {
         "job": str(job),
@@ -217,6 +277,8 @@ def transcribe(args) -> dict:
         "words": len(doc["words"]),
         "seconds": meta.get("seconds"),
         "filler_prompt": meta.get("prompt_used", False),
+        "aligned": aligned is not None,
+        "align_shift_ms": aligned and aligned["median_shift_ms"],
         **stats,
     }
 
@@ -235,6 +297,11 @@ def register(subparsers) -> None:
         "--language",
         default="de",
         help="spoken language code for turbo (default de); `auto` detects it",
+    )
+    t.add_argument(
+        "--no-align",
+        action="store_true",
+        help="keep the model's word times (default: align them to the audio)",
     )
     t.set_defaults(handler=run_tool("transcribe", transcribe))
     c = subparsers.add_parser(
