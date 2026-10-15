@@ -4,11 +4,13 @@ import subprocess
 from pathlib import Path
 
 import clips
+import numpy as np
 import pytest
 from helpers import run_tool
 
+from videocut.tools import _image as im
+from videocut.tools import _verify_screen, verify
 from videocut.tools import overlays as overlays_mod
-from videocut.tools import verify
 
 pytestmark = pytest.mark.skipif(clips.ffmpeg() is None, reason="needs ffmpeg")
 
@@ -137,6 +139,79 @@ def test_cut_outside_the_reel_is_a_failed_check(capsys, reel):
     job = _job(capsys, reel, [1.0, 9.0])
     code, s, _ = run_tool(capsys, "verify", "--job", str(job))
     assert code == 0 and "cuts_in_range" in s["failed"] and s["cuts"] == 1
+
+
+# ---------------------------------------------------------------- click calibration
+# Shapes of the false flags measured on two real reels (a denoised track is digital silence
+# between words): a soft mouth tick in a short stretch of room tone, a word fragment that
+# starts just before the cut. A real cut click is an audible sample step at the cut.
+
+R = verify.RATE
+CUT = R // 2
+
+
+def _db(v):
+    return 10 ** (v / 20)
+
+
+def _sines(level_db, silent_around=False):
+    """300 Hz up to the cut, then 440 Hz starting at its peak: a sample step at the cut."""
+    t = np.arange(R) / R
+    x = _db(level_db) * np.sin(2 * np.pi * 300 * t)
+    x[CUT:] = _db(level_db) * np.sin(2 * np.pi * 440 * (t[CUT:] - t[CUT]) + np.pi / 2)
+    if silent_around:  # only +-20 ms of sound, digital silence around it
+        x[: CUT - 960], x[CUT + 960 :] = 0.0, 0.0
+    return x.astype(np.float32)
+
+
+def _tick():
+    rng = np.random.default_rng(1)
+    x = np.zeros(R)
+    x[CUT - 480 : CUT + 1440] = rng.normal(0, _db(-62), 1920)  # the gate opens briefly
+    m = np.arange(240)
+    x[CUT + 100 : CUT + 340] += _db(-45) * np.exp(-m / 40) * np.sin(2 * np.pi * 3000 * m / R)
+    return x.astype(np.float32)
+
+
+def _word_onset():
+    rng = np.random.default_rng(2)
+    n = np.arange(1392)
+    v = sum(
+        np.sin(2 * np.pi * f * n / R + rng.uniform(0, 6)) / (i + 1)
+        for i, f in enumerate((140, 280, 420, 560, 700, 1200, 2400))
+    )
+    v = v / np.abs(v).max() * _db(-12) * np.minimum(1, n / 96) * np.minimum(1, (1391 - n) / 96)
+    x = np.zeros(R)
+    x[CUT - 432 : CUT + 960] = v  # starts 9 ms before the cut
+    return x.astype(np.float32)
+
+
+NO_VIS = {"diff_cut": None, "diff_around": None, "jump_score": None}
+
+
+def _clicks(x):
+    a = verify.audio_numbers(x, CUT / R)
+    return "click" in verify.cut_notes(NO_VIS, a, None)[0], a
+
+
+@pytest.mark.parametrize("make", [lambda: _sines(-10), lambda: _sines(-20, silent_around=True)])
+def test_a_real_sample_step_clicks(make):
+    flagged, a = _clicks(make())
+    assert flagged, a
+    assert a["click_peak"] >= 20 and a["step_sharpness"] >= 20 and a["step_db"] >= -30
+
+
+@pytest.mark.parametrize(
+    "make", [_tick, _word_onset, lambda: _sines(-55)], ids=["tick", "word_onset", "inaudible"]
+)
+def test_quiet_or_natural_sounds_next_to_silence_do_not_click(make):
+    flagged, a = _clicks(make())
+    assert not flagged, a
+
+
+def test_digital_silence_has_no_click():
+    flagged, a = _clicks(np.zeros(R, np.float32))
+    assert not flagged and a["click_peak"] == 0.0, a
 
 
 def _vis(score):
@@ -306,3 +381,57 @@ def test_merge_spans_and_the_bubble_square():
     assert merge_spans([(3.0, 4.0), (0.0, 1.0), (1.02, 2.0)], 1 / 30) == [(0.0, 2.0), (3.0, 4.0)]
     sq = inscribed([1563, 670, 1843, 950])  # a 280 px bubble
     assert sq[2] - sq[0] == sq[3] - sq[1] == 196 and sq[0] > 1563 and sq[3] < 950
+
+
+# ---------------------------------------------------------------- long reels
+
+
+def test_select_expressions_stay_within_ffmpeg_nesting():
+    """ffmpeg refuses an expression nested deeper than 100 ("Cannot allocate memory"): a
+    flat a+b+c+... of a long reel's caption groups failed verify. The trees stay shallow."""
+    times = [i / 30 for i in range(0, 9000, 3)]  # 3000 frames of a 5 min reel
+    for expr in (im.select_times(times, 30), im.select_frames(list(range(3000)))):
+        assert im.expr_depth(expr) <= im.MAX_EXPR_DEPTH
+    assert im.expr_depth("+".join(["eq(n\\,1)"] * 150)) > 100  # what the measure catches
+    assert im.select_times([1.0], 30).startswith("between(") and im.any_of([]) == "0"
+
+
+def _long_reel(path: Path, seconds: int) -> None:
+    subprocess.run(
+        [
+            clips.ffmpeg(), "-hide_banner", "-nostdin", "-y", "-loglevel", "error",
+            "-f", "lavfi", "-i", f"testsrc2=size=360x640:rate=30:duration={seconds}",
+            "-f", "lavfi", "-i", f"aevalsrc='{AMP}*sin(2*PI*300*t)':s=48000:d={seconds}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k", "-shortest", str(path),
+        ],
+        check=True,
+    )  # fmt: skip
+
+
+def test_verify_runs_on_a_reel_with_many_caption_groups(capsys, tmp_path):
+    long = tmp_path / "long" / "reel.mp4"
+    long.parent.mkdir()
+    _long_reel(long, 12)
+    job = _job(capsys, long, [], duration=12.0)
+    src = json.loads((job / "job.json").read_text())["source"]
+    caps = [{"t0": i * 0.075, "t1": i * 0.075 + 0.075, "words": []} for i in range(160)]
+    edl = {"fps": 30, "size": [360, 640], "source": src, "segments": [{"in": 0, "out": 12}]}
+    (job / "work" / "edl.json").write_text(json.dumps({**edl, "captions": caps}))
+    code, s, _ = run_tool(capsys, "verify", "--job", str(job))
+    assert code == 0, s
+    doc = json.loads((job / "out" / "verify.json").read_text())
+    assert len(doc["caption_times"]) == 160
+    assert len(doc["caption_sheets"]) == -(-160 // verify.CAPTION_COLS**2)
+
+
+def test_many_reel_frames_are_read_exactly(tmp_path):
+    long = tmp_path / "reel.mp4"
+    _long_reel(long, 8)
+    want = list(range(0, 240, 2))  # 120 frames: more than one flat expression could hold
+    got = _verify_screen._frames(long, want, (360, 640))
+    assert sorted(got) == want
+    for n in (0, 118, 238):
+        assert np.array_equal(got[n], _verify_screen._frames(long, [n], (360, 640))[n])
+    streamed = dict(_verify_screen._frame_stream(long, want, (360, 640)))
+    assert all(streamed[n] is not None and np.array_equal(streamed[n], got[n]) for n in want)

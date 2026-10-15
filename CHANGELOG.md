@@ -630,3 +630,145 @@
 - Known: the click check flags low-level sound next to the denoiser's digital silence; a
   follow-up should judge clicks against the source or an audible level, or keep a noise
   floor in the denoised track.
+
+### Fixed — verify `click` false positives
+- The click baseline is the audible audio around the cut (blocks quieter than −70 dBFS, the
+  denoiser's digital silence, are left out; floor −60 dBFS instead of −80). A `click` now
+  also needs an audible step (`step_db` ≥ −45 dBFS) that stands alone (`step_sharpness` ≥ 10:
+  the step vs. the median step within ±1 ms; a sample discontinuity, not a breath, consonant
+  or mouth tick). New numbers per cut: `step_db`, `step_sharpness`.
+- Real checks (copies of the two jobs above, verify run on the existing reels): demo 5 →
+  0 `click` flags, selfie 1 → 0 (highest click_peak 7.2 and 8.9, before 44.2 and 22.0).
+  Generated hard cuts still flag: sine step click_peak 31 / sharpness 32, speech-like clip
+  without crossfade 22 and 44 / sharpness 45–51; crossfaded cuts 5–6 / sharpness ≤ 6.
+
+### Added — duplicate and rename a job
+- `videocut tool job duplicate <job> [--title T] [--keep-approval]` → `<id>-copy-N`:
+  input/ hard-linked, work/ and out/ copied (copy-on-write clones where the filesystem
+  has them). The approval and the personal-data decision move along only with
+  `--keep-approval` (a human choice); otherwise the copy needs its own approval. The
+  overlay record (hash-checked provenance of work/overlay*) always moves along.
+  `videocut tool job title <job> <title>`: job.json `title`, shown instead of the plan's
+  title. Both human only (refused inside an agent run).
+- API: `POST /api/jobs/{id}/duplicate {title?, keep_approval?}`, `PUT /api/jobs/{id}/title
+  {title}`; list and detail return the display title and `copy_of`.
+- App: job page title with inline rename and a "⋯" menu with "Duplizieren" (dialog with
+  the title and "Freigabe übernehmen", explained, offered only for an approved job); the job
+  list shows a "Kopie" badge on copies.
+
+### Added — Transcript vocabulary
+- brand.json and job.json `vocabulary`: `[{term, variants, note?}]`, the canonical spelling
+  of names the transcriber gets wrong and their known misspellings; validated by `brand
+  check`, the brand editor and the job routes (non-empty term, literal variants, no key used
+  twice). The effective vocabulary of a job is brand ∪ job, the job wins conflicts.
+- `videocut tool brand vocab <brand> add|remove|list`, `tool job vocab <job>
+  add|remove|list` (human only), `videocut run <file> --vocab "Term=variant,..."`
+  (repeatable, new jobs), `tool job new --vocab`.
+- Transcription: turbo's prompt names the canonical terms after the filler sample, within
+  Whisper's 223-token prompt budget (job terms first); an unstable decode retries with the
+  filler sample alone, then without a prompt. `transcribe.json` `prompt_terms`.
+- Deterministic correction after transcription and alignment (`tools/vocab.py`): variants
+  and the term in another case or split into words become the term (case and punctuation
+  ignored, spans of up to 4 words, inflection endings, hyphen compounds, never inside a
+  longer word); `w_asr` keeps the model's text, re-applying starts from it.
+  `transcribe.json` `vocabulary` has the counts.
+- `videocut tool vocab apply` (existing job, no new transcription; also the captions in
+  `edl.json`/`overlays.json`, then job.json `overlays.stale` makes the next run redo only the
+  overlay stage), `vocab suggest` (near misses of a term, reported only), `vocab show`.
+- `job show` → `vocabulary_effective`; the plan, cut, overlays and revise skills write
+  every name in its canonical spelling.
+- API: brand GET/PUT carry `vocabulary`; job create takes `vocabulary`; `GET/PUT
+  /api/jobs/{id}/vocabulary`, `POST /api/jobs/{id}/vocabulary/apply`, `POST
+  /api/jobs/{id}/overlays`; job detail `overlays_stale`.
+- App: "Wörterbuch" in the brand editor (correct spelling, misspellings as chips), a
+  collapsible "Begriffe für dieses Video" in Neues Video and on the job page (save and apply,
+  "Meintest du …? Zum Wörterbuch hinzufügen"), "Untertitel neu setzen" when the captions of a
+  finished reel changed. German and English.
+
+### Observed — transcript vocabulary
+- Prompt stability, turbo on two generated clips (the filler clip; a clip with three
+  invented names and three fillers), 12 runs with 3, 10, 20 and 40 terms (37-222 prompt
+  tokens): 3/3 fillers in every run, no fallback to sampling. With the terms in the prompt all
+  three names were spelled right; with the filler sample alone one was misspelled.
+- Real check on a copy of a real job (744 words) and of its brand: the company name was
+  transcribed with one wrong spelling twice, the brand's own name once with two words run together.
+  With the term and that variant in the copy's vocabulary, `vocab apply` changed 3 words and
+  1 caption word (edl.json and overlays.json) and marked the overlays stale; `vocab suggest`
+  with the term alone found the misspelling (2×, lowest conf 0.44) and nothing else. The copies
+  were deleted afterwards.
+
+### Added — Redaction styles: blur, crop, block
+- Personal data on the screen is no longer only covered by a solid block in the brand
+  background (a white bar over the browser's tabs and address bar in a real demo). job.json
+  `redact_style`: `blur` (pixelated into cells of the UI text height, or a quarter of the
+  box up to three text heights, then a gaussian of half a cell: the box keeps its colours),
+  `crop` (a band along a screen edge — touching it, spanning 90 % of the other side — is cut
+  off for the whole segment; the rest of the screen is laid out by the normal view rules,
+  zoom windows and targets in its coordinates; more than 20 % of the height or width blurs
+  instead, noted in render.json), `block` (as before) and the default `auto` (crop full-width
+  bars at the top/bottom, blur the rest). Absent, the brand's new `redaction.style` decides.
+- Render reads every blurred box on its middle frame with local text recognition and makes
+  the blur stronger while anything is readable (a solid block when even one cell reads):
+  never weaker. render.json `redaction.style` and `redaction.blocks` (per block: segment,
+  times, box, style, edge or cell, note).
+- Verify: a blurred box must show no sharp edges and no readable text (seams where two
+  blurred boxes meet are left out); a cropped segment must match the recording without the
+  band clearly better than the uncropped view; the coverage check counts a blurred box
+  without edges as hidden and maps text in a cropped band outside the view.
+- `videocut tool job redact-style [job] <auto|blur|crop|block>` and `videocut run
+  --redact-style` (human only); a reel that hid personal data in another style is stale
+  (job.json `cut.redact_style`; a cut from before styles counts as `block`). API: field
+  `redact_style` on `POST /api/jobs`, `PUT /api/jobs/{id}/redact-style`, `redact_style` in
+  the job detail. App: select "Schwärzen als: Automatisch / Unscharf / Abschneiden /
+  Fläche" in the personal-data step of the approval and in the new-job form (with a screen
+  recording or screenshots).
+- Screenshots (`screenshot_frame` `props.redact`): `blur` or `block` (`props.redact_style`,
+  set by overlays; crop and auto blur there). The renderer averages the box into cells and
+  draws them smoothed back up over the solid fill.
+- Real check (a copy of a 4096x2648 screen-recording job, 1920x1080 reel, both personal-data
+  candidates enforced): the top bar (candidate 1, `[0, 0, 1, 0.075]`) was cut off in all 39
+  segments that show it; the second candidate (a dialog box, shown in one added segment) was
+  blurred at a 78 px cell, which local text recognition could not read. Verify: 0 screen
+  flags; each cropped segment matched the recording without the bar (mean difference 2-13
+  grey levels) clearly better than the uncropped view (5-26). Render 133 s, verify 184 s.
+- Redact boxes grow so they never cut through text or a UI bar (every style; a measured box
+  ending in the middle of the browser tab titles left their lower half readable, with
+  `block` as well): text recognition reads the screen frames around each box, a line the
+  box cuts pulls it over the whole line plus a margin, and a band along a screen edge
+  then moves on to the next UI boundary (the bottom of the browser chrome) within three
+  text heights. render.json `redaction.blocks[]` `planned` / `grown`. Verify `text_cut`:
+  a line read on the reel over a box's planned position, or on the recording across the
+  edge a crop cuts at, is `redaction_partial` (a failure).
+  Real check again (fresh copy of the same job): the top bar grew from 7.5 % to 9.2-9.3 %
+  of the height (199 -> 246/248 px of 2648: the tab title line plus the chrome's edge),
+  the dialog box over the lines it cut; 0 screen flags, `text_cut` clean on 40 boxes and
+  39 crop edges. Growth adds OCR at render (render 292 s, verify 235 s on 126 s of reel).
+  The app names the flag ("Schwärzung schneidet Text an" / "redaction cuts through text").
+  Review fix: a block whose screen frames could not be read is not cached as "nothing to
+  grow" (the next render tries again); a retune of the growth constants drops the cache.
+
+### Fixed — verify on long reels; resuming without a second overlay run
+- Frame selection for verify, sheets and the screen checks is a balanced `(a+b)+(c+d)`
+  expression tree (`_image.any_of`, `select_times`, `select_frames`) instead of a flat sum
+  of one term per frame. ffmpeg refuses expressions nested deeper than 100 ("Error
+  initializing filters / Cannot allocate memory"): a flat sum failed at 101 frames, so a
+  ~5 min demo with 111 caption groups could not be verified, and "Weiter" restarted the
+  overlay run, which failed the same way. Measured on a 5 min 1080p30 reel, 295 frames:
+  one pass with the tree 7.3 s, batches of 40 with input seeks 8.2 s, one seek per frame
+  (pool of 4–8) 23–25 s; all three frame-identical, so the single pass stays.
+- `videocut run` (and the app's "Weiter"): when the overlay run finished but its final
+  render or verify failed, job.json `overlays_pending` records brand, approved plan, cut,
+  EDL and the overlay files. The next run repeats `render` + `verify` as tool steps
+  instead of a new Claude run, when all of them still match, the overlay record outside
+  the job folder confirms the files and overlay.mov is newer than its inputs. Same checks
+  afterwards as after a Claude run; `--brand` still redoes the overlays.
+- Real check (copy of a real ~3.4 min 16:9 demo, preview reel, 111 caption groups +
+  10 overlays): verify runs (before: ffmpeg error); 13 caption + 2 overlay sheets, 852 s
+  wall (most of it the screen checks; the human's app was rendering at the same time).
+- The `screen_time` check reads its five reference pictures per screen segment (one seek
+  into the full-size recording each, ~0.6 s) four at a time: verify of the same job with
+  its real records 81 s -> 42 s, identical results. (The 852 s above came from a copy
+  without the personal-data decision: every candidate was then checked for leaks.)
+- Real check with the job's records (approval, personal-data decision, overlay record):
+  render 396 s; verify not ok on 3 real flags (a blink at cut 1, a keyword card over the
+  screen view, a keyword card on its own caption); 0 screen flags.

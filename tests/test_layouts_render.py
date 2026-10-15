@@ -81,14 +81,15 @@ def material(tmp_path_factory):
 FORMAT_OF = {(1080, 1920): "9:16", (1920, 1080): "16:9", (1080, 1080): "1:1", (1080, 1350): "4:5"}
 
 
-def _job(capsys, material, job_id, size=(1080, 1920)) -> Path:
+def _job(capsys, material, job_id, size=(1080, 1920), redact_style="block") -> Path:
     camera, screen = material
     code, s, _ = run_tool(capsys, "job", "new", str(camera), "--id", job_id)
     assert code == 0, s
     job = Path(s["job"])
     shutil.copy(screen, job / "input" / "screen.mp4")
     meta = json.loads((job / "job.json").read_text())
-    meta |= {"screen": "input/screen.mp4", "format": FORMAT_OF[tuple(size)]}
+    meta |= {"screen": "input/screen.mp4", "format": FORMAT_OF[tuple(size)],
+             "redact_style": redact_style}  # fmt: skip
     (job / "job.json").write_text(json.dumps(meta))
     sync = {"offset_s": OFFSET, "method": "manual", "confidence": 1.0, "drift_ppm": None,
             "overlap": [0, 8]}  # fmt: skip
@@ -269,6 +270,8 @@ def test_layouts_verify(capsys, material):
     doc = json.loads((job / "out" / "verify.json").read_text())
     red = doc["screen"]["redaction"]
     assert [r["segment"] for r in red] == [1, 2]
+    cut = doc["screen"]["text_cut"]
+    assert [r["segment"] for r in cut] == [1, 2] and all(r["samples"] for r in cut)
     assert all(x["bg_share"] >= 0.9 for r in red for x in r["samples"]) and red[1]["samples"]
     assert len(doc["screen"]["screen_time"]) == 4 and doc["checks"]["screen_overlap"]["ok"]
     # No frozen flag for the still screen, no visual_jump at the view changes.
@@ -383,7 +386,9 @@ def test_undecided_candidate_is_redacted_by_render_and_flagged(capsys, material)
     assert code == 1 and "redaction_missing" in out and "$.segments[4].redact" in out
     code, s, out = run_tool(capsys, "render", "--job", str(job), "--preview")
     assert code == 0, (s, out)
-    assert s["redaction"] == {"source": "default", "candidates": [1]}
+    assert {k: s["redaction"][k] for k in ("source", "candidates", "style")} == {
+        "source": "default", "candidates": [1], "style": "block"}  # fmt: skip
+    assert [b["style"] for b in s["redaction"]["blocks"] if b["segment"] == 4] == ["block"]
     code, s, out = run_tool(capsys, "verify", "--job", str(job))
     assert code == 0 and not s["ok"]
     gap = {

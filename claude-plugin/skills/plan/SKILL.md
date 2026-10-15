@@ -26,6 +26,11 @@ approves the plan before anything is cut. Workflow after browser-use/video-use (
   `work/plan.json` `title`, `core_message`, every `why`, `risks`, `change_note` and each
   personal-data `reason`. Quoted spoken words stay exactly as spoken (never translated);
   headings, table column names, field names and the scene/view/kind ids stay as given.
+- **Vocabulary:** `videocut tool job show` → `vocabulary_effective` (`[{term, variants}]`,
+  the brand's and this video's names; a human sets it, never you). Every text you write
+  uses the canonical `term` exactly as given, never a variant: the working title, hook, core message, overlay
+  ideas, keywords and every *Why*.
+  The transcript already has them corrected (`w_asr` keeps what the model heard).
 
 ## Steps
 

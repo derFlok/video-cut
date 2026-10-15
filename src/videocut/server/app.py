@@ -21,19 +21,23 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, agent, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format, _length, _style
+from ..tools import _format, _length, _redact_style, _style, vocab
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
+    TITLE_MAX,
     approve_job,
     approved_plan_json,
     brand_id,
+    duplicate_job,
     is_approved,
     project_sha,
     read_approval,
     revoke_approval,
     set_cut_style,
+    set_redact_style,
     set_target,
+    set_title,
 )
 from . import brands, state
 from .runs import Busy, Runs
@@ -149,6 +153,11 @@ class Pipeline:
         """`videocut run <job> --recut`: cut + overlays again with the approved plan."""
         return pipeline.recut(str(job), say=say, ask=ask)
 
+    def overlays(self, job: Path, say, ask) -> int:
+        """`videocut run <job>` after the overlays went stale (a vocabulary applied to the
+        captions): the cut is kept, the overlay stage runs again."""
+        return pipeline.run(str(job), say=say, ask=ask)
+
 
 # ------------------------------------------------------------------ errors
 # Every error body is {"detail": {"message": str, "code"?: str, "errors"?: [str]}}.
@@ -205,10 +214,29 @@ class CutStyleBody(BaseModel):
     cut_style: str = Field(pattern="^(" + "|".join(CUT_STYLES) + ")$")
 
 
+class RedactStyleBody(BaseModel):
+    redact_style: str = Field(pattern="^(" + "|".join(_redact_style.STYLES) + ")$")
+
+
 class TargetBody(BaseModel):
     """Seconds, "auto" or null (the default rule); strings like "5m" or "2:30" too."""
 
     target_s: float | str | None = Field(default=None)
+
+
+class DuplicateBody(BaseModel):
+    title: str | None = Field(default=None, max_length=TITLE_MAX)
+    keep_approval: bool = False
+
+
+class TitleBody(BaseModel):
+    title: str = Field(min_length=1, max_length=TITLE_MAX)
+
+
+class VocabularyBody(BaseModel):
+    """The job's own vocabulary (tools/vocab.py), validated by vocab.check."""
+
+    vocabulary: list = Field(default_factory=list, max_length=vocab.MAX_ENTRIES)
 
 
 class ApproveBody(BaseModel):
@@ -304,7 +332,17 @@ def create_app(
             form = await read_form(
                 request,
                 {"camera": VIDEO_EXT, "screen": VIDEO_EXT, "assets": ASSET_EXT},
-                {"type", "brand", "format", "brief", "cut_style", "lang", "target_s"},
+                {
+                    "type",
+                    "brand",
+                    "format",
+                    "brief",
+                    "cut_style",
+                    "lang",
+                    "target_s",
+                    "vocabulary",
+                    "redact_style",
+                },  # fmt: skip
             )
         except UploadError as e:
             raise HTTPException(e.status, str(e)) from None
@@ -329,6 +367,35 @@ def create_app(
         shutil.move(str(job), str(dst))
         runs.channels.pop(job.name, None)
         return {"id": job.name, "trash": str(dst)}
+
+    @app.post("/api/jobs/{job_id}/duplicate")
+    @decision
+    def duplicate(job_id: str, body: DuplicateBody) -> dict:
+        """Copy the job to <id>-copy-N. The approval and the personal-data decision move
+        along only with keep_approval (the human ticks it); else the copy needs its own."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = duplicate_job(job, body.title, body.keep_approval)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        copy = state.job_dir(res["id"])
+        return state.summary(copy, runs.channels.get(copy.name))
+
+    @app.put("/api/jobs/{job_id}/title")
+    @decision
+    def put_title(job_id: str, body: TitleBody) -> dict:
+        """The display title (job.json "title"); it overrides the plan's title."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            set_title(job, body.title)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        return {
+            "id": job.name,
+            "title": state.title(job, json.loads((job / "job.json").read_text())),
+        }
 
     @app.post("/api/jobs/{job_id}/start")
     @decision
@@ -510,6 +577,22 @@ def create_app(
             "cut_stale": state.cut_stale(job),
         }
 
+    # -------------------------------------------------------------- redaction style
+
+    @app.put("/api/jobs/{job_id}/redact-style")
+    @decision
+    def put_redact_style(job_id: str, body: RedactStyleBody) -> dict:
+        """Store how personal data is hidden; a reel that hid it in another style goes
+        stale (cut_stale), the app then offers /recut. Plan and approval stay."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = set_redact_style(job, body.redact_style, say=lambda _: None)
+        except ToolError as e:
+            raise HTTPException(400, str(e)) from None
+        return {"id": job.name, "redact_style": res["redact_style"],
+                "previous": res["previous"], "cut_stale": state.cut_stale(job)}  # fmt: skip
+
     # -------------------------------------------------------------- target length
 
     @app.put("/api/jobs/{job_id}/target")
@@ -546,6 +629,64 @@ def create_app(
         if not (job / "out" / "reel.mp4").is_file():
             raise conflict("state", "there is no cut yet; start the job")
         return submit(job, "recut", lambda say, ask: run_with.recut(job, say, ask))
+
+    # -------------------------------------------------------------- vocabulary
+
+    def vocabulary_view(job: Path) -> dict:
+        src = vocab.sources(job)
+        meta = state.transcribe_meta(job)
+        words = state.words(job)
+        return {
+            "id": job.name,
+            "vocabulary": src["job"],
+            "brand": src["brand_id"],
+            "brand_vocabulary": src["brand"],
+            "effective": src["effective"],
+            "applied": meta.get("vocabulary"),
+            "has_transcript": words is not None,
+            "suggestions": vocab.suggestions(words, src["effective"]) if words else [],
+            "overlays_stale": state.overlays_stale(job),
+        }
+
+    @app.get("/api/jobs/{job_id}/vocabulary")
+    def get_vocabulary(job_id: str) -> dict:
+        return vocabulary_view(job_or_404(job_id))
+
+    @app.put("/api/jobs/{job_id}/vocabulary")
+    @decision
+    def put_vocabulary(job_id: str, body: VocabularyBody) -> dict:
+        """Store the job's own vocabulary; it takes effect on the next transcription or
+        /vocabulary/apply."""
+        job = job_or_404(job_id)
+        not_running(job)
+        entries, errors = vocab.check(body.vocabulary)
+        if errors:
+            raise HTTPException(422, {"message": "the vocabulary has problems", "errors": errors})
+        update_job(job, vocabulary=entries)
+        return vocabulary_view(job)
+
+    @app.post("/api/jobs/{job_id}/vocabulary/apply")
+    @decision
+    def apply_vocabulary(job_id: str) -> dict:
+        """Apply the effective vocabulary to the existing transcript (and captions); when
+        the captions changed the overlays are stale and the app offers /overlays."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = vocab.apply_job(job)
+        except ToolError as e:
+            raise conflict("state", str(e)) from None
+        return {**vocabulary_view(job), "result": res}
+
+    @app.post("/api/jobs/{job_id}/overlays")
+    @decision
+    def redo_overlays(job_id: str) -> dict:
+        """Set the captions and overlays again on the kept cut (after a vocabulary was
+        applied to the captions); no new plan approval, no new cut."""
+        job = job_or_404(job_id)
+        if not state.overlays_stale(job):
+            raise conflict("state", "the overlays of this job are not stale")
+        return submit(job, "overlays", lambda say, ask: run_with.overlays(job, say, ask))
 
     # -------------------------------------------------------------- files
 
@@ -630,6 +771,8 @@ def _new_job(form) -> dict:
     cut_style = (f.get("cut_style") or _style.AUTO).strip().lower()
     if cut_style not in CUT_STYLES:
         raise HTTPException(400, f"cut_style must be one of {', '.join(CUT_STYLES)}")
+    if (f.get("redact_style") or _redact_style.AUTO).strip().lower() not in _redact_style.STYLES:
+        raise HTTPException(400, f"redact_style must be one of {', '.join(_redact_style.STYLES)}")
     try:
         target = _length.parse_target(f.get("target_s"))
     except _length.LengthError as e:
@@ -639,6 +782,13 @@ def _new_job(form) -> dict:
     if lang not in LANGS:
         raise HTTPException(400, f"lang must be one of {', '.join(LANGS)}")
     brief = " ".join((f.get("brief") or "").split())[:2000] or None
+    try:
+        raw = json.loads(f.get("vocabulary") or "[]")
+    except ValueError:
+        raise HTTPException(400, "vocabulary: expected a JSON list of {term, variants}") from None
+    words, errors = vocab.check(raw)
+    if errors:
+        raise HTTPException(422, {"message": "the vocabulary has problems", "errors": errors})
     brand_ref = (f.get("brand") or "").strip() or None
     try:
         brand_ref = brand_id(brand_ref) if brand_ref else None
@@ -668,6 +818,20 @@ def _new_job(form) -> dict:
         )
     except pipeline.RunError as e:
         raise HTTPException(400, str(e)) from None
+    fields = {}
     if brand_ref:
-        update_job(job, brand=brand_ref)
+        fields["brand"] = brand_ref
+    if words:
+        fields["vocabulary"] = words
+    if fields:
+        update_job(job, **fields)
+    _new_job_redact_style(job, f.get("redact_style"))
     return {"id": job.name}
+
+
+def _new_job_redact_style(job, value) -> None:
+    """The redaction style picked in the new-job form; "auto" or none: the brand's default
+    (not stored). An unknown value was refused before the job was made."""
+    value = (value or "").strip().lower()
+    if value and value != _redact_style.AUTO:
+        set_redact_style(job, value, say=lambda _: None)

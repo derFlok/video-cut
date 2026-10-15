@@ -20,6 +20,13 @@ Models live in $VIDEOCUT_HOME/models/<manifest name> (`videocut models pull <nam
 turbo = mlx-whisper large-v3-turbo; it is prompted with a disfluent German/English sample
 so it keeps more "äh"/"ähm" (measured; see the PR that added this). parakeet = parakeet-mlx
 TDT 0.6b v3 (detects the language itself). Recordings never leave the machine.
+
+Vocabulary (`vocab.py`): turbo's prompt also names the canonical terms of the job's
+effective vocabulary (after the filler sample, within Whisper's prompt budget), and after
+transcription and alignment every run applies the vocabulary to words.json (variants ->
+canonical spelling, the model's text kept in "w_asr"); transcribe.json "vocabulary" has the
+counts and "prompt_terms" the terms the prompt named. A changed vocabulary does not
+transcribe again: it is applied to the kept transcript.
 """
 
 import json
@@ -30,6 +37,7 @@ from pathlib import Path
 
 from . import _transcribe_energy as energy
 from . import align as aligner
+from . import vocab
 from ._transcribe_pack import pack
 from .common import ToolError, home, is_fresh, job_parent, resolve_job, run_tool, write_json
 
@@ -94,13 +102,33 @@ def _mlx(module: str):
         ) from None
 
 
-def run_whisper(audio: Path, language: str | None, prompt: bool = True) -> tuple[list, str, bool]:
-    """Words from mlx-whisper; the bool says whether the filler prompt was kept."""
+def prompts(language: str | None, entries: list[dict], prompt: bool = True) -> list[tuple]:
+    """Initial prompts to try in order, as (text, terms): the filler sample with the
+    vocabulary's terms, then the filler sample alone, then none (when decoding falls back
+    to sampling, the next one is tried)."""
+    if not prompt:
+        return [(None, [])]
+    filler = FILLER_PROMPT.get(language or "")
+    full, terms, _ = vocab.prompt_text(filler, entries)
+    out = [(full, terms)]
+    if terms and filler:
+        out.append((filler, []))
+    if out[-1][0] is not None:
+        out.append((None, []))
+    return out
+
+
+def run_whisper(
+    audio: Path, language: str | None, prompt: bool = True, entries: list[dict] | None = None
+) -> tuple[list, str, bool, list[str]]:
+    """Words from mlx-whisper; the bool says whether the filler prompt was kept, the list
+    which vocabulary terms the kept prompt named."""
     d = model_dir("turbo")
     mlx_whisper = _mlx("mlx_whisper")
 
-    text = FILLER_PROMPT.get(language or "") if prompt else None
+    tries = prompts(language, entries or [], prompt)
     while True:
+        text, terms = tries.pop(0)
         result = mlx_whisper.transcribe(
             str(audio),
             path_or_hf_repo=str(d),
@@ -114,9 +142,9 @@ def run_whisper(audio: Path, language: str | None, prompt: bool = True) -> tuple
             verbose=None,
         )
         segments = result.get("segments", [])
-        if text and any(seg.get("temperature", 0.0) > 0.0 for seg in segments):
-            print("filler prompt made decoding unstable; transcribing again without it")
-            text = None
+        if tries and any(seg.get("temperature", 0.0) > 0.0 for seg in segments):
+            what = "without the vocabulary terms" if tries[0][0] else "without it"
+            print(f"the prompt made decoding unstable; transcribing again {what}")
             continue
         break
     raw = [
@@ -124,7 +152,8 @@ def run_whisper(audio: Path, language: str | None, prompt: bool = True) -> tuple
         for seg in segments
         for w in seg.get("words", [])
     ]
-    return raw, result.get("language") or language or "unknown", text is not None
+    filler_kept = text is not None and text.startswith(FILLER_PROMPT.get(language or "", "\0"))
+    return raw, result.get("language") or language or "unknown", filler_kept, terms
 
 
 def run_parakeet(audio: Path) -> tuple[list, str]:
@@ -234,6 +263,7 @@ def transcribe(args) -> dict:
     work = _work(job)
     audio, words_file, meta_file = work / "audio.wav", work / "words.json", work / "transcribe.json"
     language = None if args.language == "auto" else args.language
+    words = vocab.effective(job)
     meta = {
         "model": MODELS[args.model]["name"],
         "language": "auto" if args.model == "parakeet" else args.language,
@@ -247,8 +277,9 @@ def transcribe(args) -> dict:
     if not fresh:
         meta_file.unlink(missing_ok=True)  # written last: marks words.json as complete
         started = time.monotonic()
+        terms: list[str] = []
         if args.model == "turbo":
-            raw, detected, prompt_used = run_whisper(audio, language)
+            raw, detected, prompt_used, terms = run_whisper(audio, language, entries=words)
         else:
             (raw, detected), prompt_used = run_parakeet(audio), False
         duration = round(wav_duration(audio), 3)
@@ -261,12 +292,14 @@ def transcribe(args) -> dict:
         write_json(words_file, doc)
         meta["seconds"] = round(time.monotonic() - started, 1)
         meta["prompt_used"] = prompt_used
+        meta["prompt_terms"] = terms
         meta["time_base"] = audio_time_base(work)
         write_json(meta_file, meta)
         print(f"transcribed {duration:.1f}s with {meta['model']} in {meta['seconds']}s")
     else:
         meta = prev
     aligned = sync_alignment(work, meta, not args.no_align)
+    applied = vocab.apply_job(job, words, captions=False, candidates=False)
     doc = json.loads(words_file.read_text())
     stats = make_candidates(work)
     return {
@@ -279,6 +312,7 @@ def transcribe(args) -> dict:
         "filler_prompt": meta.get("prompt_used", False),
         "aligned": aligned is not None,
         "align_shift_ms": aligned and aligned["median_shift_ms"],
+        "vocabulary": {k: applied[k] for k in ("applied", "terms")},
         **stats,
     }
 

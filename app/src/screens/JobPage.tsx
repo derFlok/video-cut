@@ -3,9 +3,11 @@ import { api } from "../api/client";
 import type { JobDetail, JobEvent, Stage } from "../api/types";
 import { CutStylePanel } from "../components/CutStyle";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { JobHeader } from "../components/JobHeader";
 import { LiveLog, type LogLine } from "../components/LiveLog";
 import { StatusChip } from "../components/StatusChip";
 import { StatusLine } from "../components/StatusLine";
+import { JobVocabularyPanel, OverlaysStaleBanner } from "../components/Vocabulary";
 import { Stepper } from "../components/Stepper";
 import { clock, money, useI18n } from "../i18n";
 import { kindOf, type RunKind } from "../progress";
@@ -199,7 +201,7 @@ export function JobPage({ id }: { id: string }) {
     <div className="stack-lg">
       <div className="titlebar">
         <div>
-          <h1>{job.title || t("home.untitled")}</h1>
+          <JobHeader job={job} busy={running} onChanged={() => void live.reload()} />
           {job.brief && <p className="muted">„{job.brief}“</p>}
         </div>
         <StatusChip status={running ? "running" : job.status} stage={job.stage} />
@@ -224,6 +226,8 @@ export function JobPage({ id }: { id: string }) {
       </section>
 
       {atGateOrLater && <CutStylePanel live={live} />}
+      <OverlaysStaleBanner live={live} />
+      <JobVocabularyPanel live={live} />
       {showPlan && <PlanReview live={live} />}
       {job.outputs?.reel && job.approved && job.stage !== "plan_revise" && (
         <>

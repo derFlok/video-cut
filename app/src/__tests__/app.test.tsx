@@ -11,6 +11,7 @@ import { I18nProvider, STRINGS } from "../i18n";
 import { installMock } from "../mock/server";
 import { fieldErrors } from "../screens/Brands";
 import { JobPage } from "../screens/JobPage";
+import { Home } from "../screens/Home";
 import { NewJob, validateNewJob } from "../screens/NewJob";
 import { PersonalDataDialog, decision } from "../screens/PersonalData";
 import { changedKeeps } from "../screens/PlanReview";
@@ -106,17 +107,17 @@ describe("personal-data dialog", () => {
     boxes.forEach((b) => expect(b).toBeChecked());
 
     await user.click(screen.getByRole("button", { name: t("pd.confirm") }));
-    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact_all", ids: [1, 2, 3] });
+    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact_all", ids: [1, 2, 3] }, "auto");
 
     await user.click(boxes[1]);
     expect(screen.getByRole("radio", { name: t("pd.mode.redact") })).toBeChecked();
     await user.click(screen.getByRole("button", { name: t("pd.confirm") }));
-    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact", ids: [1, 3] });
+    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "redact", ids: [1, 3] }, "auto");
 
     await user.click(screen.getByRole("radio", { name: t("pd.mode.demo") }));
     boxes.forEach((b) => expect(b).not.toBeChecked());
     await user.click(screen.getByRole("button", { name: t("pd.confirm") }));
-    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "demo", ids: [] });
+    expect(onConfirm).toHaveBeenLastCalledWith({ mode: "demo", ids: [] }, "auto");
   });
 
   it("shows the measured boxes and says when the whole area is covered", () => {
@@ -254,6 +255,77 @@ describe("result", () => {
     );
     // known ids in plain words, an unknown one readable as it is
     expect(lines).toEqual(["Schnitt bei 0:21: Blinzeln am Schnitt, new flag x", "Prüfung „Lautstärke“ nicht bestanden"]);
+  });
+});
+
+describe("duplicate and rename", () => {
+  it("renames the job inline", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<JobPage id="job-done" />);
+    await user.click(await screen.findByRole("button", { name: t("job.title.rename") }));
+    const input = screen.getByRole("textbox", { name: t("job.title.label") });
+    await user.clear(input);
+    await user.type(input, "Zentrovia im Alltag");
+    await user.click(screen.getByRole("button", { name: t("common.save") }));
+    expect(lastCall(mock, "/api/jobs/job-done/title")!.body).toEqual({ title: "Zentrovia im Alltag" });
+    expect(await screen.findByRole("heading", { level: 1, name: "Zentrovia im Alltag" })).toBeInTheDocument();
+  });
+
+  it("duplicates without the approval unless the box is ticked", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<JobPage id="job-done" />);
+    await user.click(await screen.findByRole("button", { name: t("job.menu") }));
+    await user.click(screen.getByRole("menuitem", { name: t("job.duplicate") }));
+    const dialog = await screen.findByRole("dialog");
+    const keep = within(dialog).getByRole("checkbox", { name: t("job.duplicate.keep") });
+    expect(keep).not.toBeChecked();
+    expect(within(dialog).getByText(t("job.duplicate.keep.off"))).toBeInTheDocument();
+    const name = within(dialog).getByRole("textbox", { name: t("job.title.label") });
+    await user.clear(name);
+    await user.type(name, "Zweite Fassung");
+    await user.click(within(dialog).getByRole("button", { name: t("job.duplicate.confirm") }));
+    await waitFor(() => expect(window.location.hash).toBe("#/jobs/job-done-copy-1"));
+    expect(lastCall(mock, "/api/jobs/job-done/duplicate")!.body).toEqual({ title: "Zweite Fassung", keep_approval: false });
+    const copy = mock.state.jobs.get("job-done-copy-1")!.detail;
+    expect(copy.approved).toBe(false);
+    expect(copy.copy_of).toBe("job-done");
+  });
+
+  it("passes keep_approval when the human ticks it", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<JobPage id="job-done" />);
+    await user.click(await screen.findByRole("button", { name: t("job.menu") }));
+    await user.click(screen.getByRole("menuitem", { name: t("job.duplicate") }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("checkbox", { name: t("job.duplicate.keep") }));
+    expect(within(dialog).getByText(t("job.duplicate.keep.on"))).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: t("job.duplicate.confirm") }));
+    await waitFor(() => expect(lastCall(mock, "/api/jobs/job-done/duplicate")).toBeTruthy());
+    expect(lastCall(mock, "/api/jobs/job-done/duplicate")!.body).toMatchObject({ keep_approval: true });
+    expect(mock.state.jobs.get("job-done-copy-1")!.detail.approved).toBe(true);
+  });
+
+  it("offers no approval to keep for a job that has none", async () => {
+    installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<JobPage id="job-approval" />);
+    await user.click(await screen.findByRole("button", { name: t("job.menu") }));
+    await user.click(screen.getByRole("menuitem", { name: t("job.duplicate") }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
+  });
+
+  it("shows the display title and a copy badge in the list", async () => {
+    const mock = installMock({ step: 0 });
+    await api.duplicate("job-done", { title: "Zentrovia Kopie", keep_approval: false });
+    wrap(<Home />);
+    const card = (await screen.findByText("Zentrovia Kopie")).closest("a")!;
+    expect(within(card).getByText(t("job.copy.badge"))).toBeInTheDocument();
+    const original = screen.getByText(mock.state.jobs.get("job-done")!.title!).closest("a")!;
+    expect(within(original).queryByText(t("job.copy.badge"))).toBeNull();
   });
 });
 

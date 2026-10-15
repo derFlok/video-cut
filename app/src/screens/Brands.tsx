@@ -3,6 +3,7 @@ import { ApiError, api } from "../api/client";
 import { FORMATS, type Brand, type BrandSummary, type Format } from "../api/types";
 import { AspectIcon } from "../components/AspectIcon";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { VocabEditor, cleanVocabulary } from "../components/Vocabulary";
 import { useI18n } from "../i18n";
 import { go, href } from "../router";
 
@@ -83,7 +84,7 @@ export function BrandList() {
 export function fieldErrors(errors: string[]): Record<string, string[]> {
   const out: Record<string, string[]> = {};
   for (const e of errors) {
-    const m = e.match(/^\$\.([\w.]+?):\s*(.*)$/);
+    const m = e.match(/^\$\.([\w.[\]]+?):\s*(.*)$/);
     const key = m ? m[1] : "_";
     (out[key] ??= []).push(m ? m[2] : e);
   }
@@ -130,6 +131,11 @@ export function BrandEditor({ id }: { id: string }) {
     setErrors({});
     const { files: _files, ...tokens } = brand;
     void _files;
+    if (Array.isArray(tokens.vocabulary)) {
+      const words = cleanVocabulary(tokens.vocabulary);
+      if (words.length) tokens.vocabulary = words;
+      else delete tokens.vocabulary;
+    }
     try {
       const b = await api.saveBrand(id, tokens as Brand);
       setBrand({ ...b, files: b.files ?? files });
@@ -252,6 +258,18 @@ export function BrandEditor({ id }: { id: string }) {
                 {fe("voice.address")}
               </div>
             </div>
+
+            <fieldset className="stack-sm">
+              <legend className="h3">{t("vocab.brand.title")}</legend>
+              <VocabEditor
+                id="bv"
+                value={brand.vocabulary ?? []}
+                onChange={(v) => set("vocabulary", v)}
+                errors={Object.entries(errors)
+                  .filter(([k]) => k === "vocabulary" || k.startsWith("vocabulary["))
+                  .flatMap(([k, ms]) => ms.map((m) => `${k}: ${m}`))}
+              />
+            </fieldset>
 
             <fieldset className="stack-sm">
               <legend className="h3">{t("brands.logo")}</legend>

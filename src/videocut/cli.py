@@ -84,7 +84,22 @@ def main(argv: list[str] | None = None) -> int:
         "as the content needs); for an existing job a plan made for another length is "
         "planned again and needs a new approval",
     )
+    r.add_argument(
+        "--vocab",
+        action="append",
+        metavar="TERM=VARIANT,...",
+        help="transcript vocabulary for a new job: the canonical spelling and the "
+        'misspellings the transcriber writes, e.g. "Zentrovia=Zentrowia,Sentrovia" '
+        "(repeatable; the brand's vocabulary applies too)",
+    )
 
+    r.add_argument(
+        "--redact-style",
+        metavar="STYLE",
+        help="how personal data on the screen is hidden: auto (default: cut off full-width "
+        "bars at the screen's top/bottom, blur the rest), blur, crop or block; for an "
+        "existing job a finished reel is rendered again",
+    )
     r.add_argument(
         "--feedback",
         metavar="TEXT",

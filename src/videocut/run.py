@@ -43,6 +43,8 @@ for "cut again with the approved plan" (the app's /recut: cut + overlays, no new
 the plan contains: a plan made for another length is stale, its approval is revoked, and the
 run plans again (with `--plan-feedback`, the revise-the-plan run is told the new length);
 every plan run records the length it was made for (job.json "plan_target").
+`--vocab "Term=variant,..."` gives a new job its transcript vocabulary (job.json
+"vocabulary", tools/vocab.py); transcribe applies it together with the brand's.
 The overlay stage runs when `--brand` is given or when the brand's overlays are not done for
 the current cut. Every Claude run appends one line to work/runs.jsonl (wall time, turns,
 cost, tokens), and its raw event stream goes to work/claude-<phase>.jsonl.
@@ -67,7 +69,7 @@ from . import agent
 from . import redaction as red
 from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
-from .tools import _format, _length, _style
+from .tools import _format, _length, _redact_style, _style
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
     approve_job,
@@ -85,6 +87,7 @@ from .tools.job import (
     revoke_approval,
     set_cut_style,
     set_format,
+    set_redact_style,
     set_target,
     stamp_plan_target,
 )
@@ -206,8 +209,10 @@ def capture_stdout():
         router.local.buf = prev
 
 
-def tool(job: Path, *argv: str) -> dict:
-    """Run `videocut tool <argv> --job <job>` in-process; return its summary line."""
+def tool(job: Path, *argv: str, need_ok: bool = True) -> dict:
+    """Run `videocut tool <argv> --job <job>` in-process; return its summary line.
+    need_ok=False: a summary with "ok": false is returned (verify flags), only a failed
+    run raises."""
     from .cli import main
 
     with capture_stdout() as buf:
@@ -217,7 +222,7 @@ def tool(job: Path, *argv: str) -> dict:
         summary = json.loads(lines[-1]) if lines else {}
     except json.JSONDecodeError:
         summary = {}
-    if code != 0 or not summary.get("ok", False):
+    if code != 0 or (need_ok and not summary.get("ok", False)):
         raise RunError(f"videocut tool {' '.join(argv)} failed: {summary.get('error', code)}")
     return summary
 
@@ -239,6 +244,7 @@ def new_job(
     cut_style: str | None = None,
     lang: str | None = None,
     target: str | None = None,
+    vocab: list[str] | None = None,
 ) -> Path:
     from .cli import main
 
@@ -250,6 +256,8 @@ def new_job(
     argv += ["--cut-style", cut_style] if cut_style else []
     argv += ["--target", str(target)] if target is not None else []
     argv += ["--lang", lang] if lang else []
+    for v in vocab or []:
+        argv += ["--vocab", v]
     if assets:
         argv += ["--asset", *assets]
     with capture_stdout() as buf:
@@ -271,14 +279,23 @@ def open_job(
     say=print,
     cut_style: str | None = None,
     target: str | None = None,
+    vocab: list[str] | None = None,
 ) -> Path:
     p = Path(ref).expanduser()
     if p.is_file():
-        return new_job(p, type_, brief, assets, screen, format_, cut_style, target=target)
+        return new_job(
+            p, type_, brief, assets, screen, format_, cut_style, target=target, vocab=vocab
+        )
     if assets or screen:
         raise RunError(
             "--asset/--screen only work when a new job is made from a recording "
             "(for an existing job: `videocut tool job screen <file>`)"
+        )
+    if vocab:
+        raise RunError(
+            "--vocab only works when a new job is made from a recording (for an existing "
+            f"job: `videocut tool job vocab {ref} add <term> <variant>...`, then "
+            f"`videocut tool vocab apply {ref}`)"
         )
     try:
         job = resolve_job(ref)
@@ -477,6 +494,9 @@ def cut_done(job: Path) -> bool:
             and rec.get("cut_style", style_now := resolved_style(data)) == style_now
             # (a record from before target lengths: a changed target revokes the approval)
             and rec.get("target_s", data.get("target_s")) == data.get("target_s")
+            # (a record from before redaction styles: it stays until the style is changed,
+            # which stamps the record, tools/job.set_redact_style)
+            and rec.get("redact_style", drawn_now := _redact_style_used(job)) == drawn_now
         )
     vfile = job / "out" / "verify.json"
     try:
@@ -492,11 +512,32 @@ def cut_done(job: Path) -> bool:
         # a cut from before cut styles was cut the way "tight" cuts now: a style the
         # human set since makes it stale (absent: it stays, like an old record)
         data.get("cut_style") in (None, "tight")
+        # ... and drew personal data as solid blocks: likewise for a redaction style
+        and (data.get("redact_style") in (None, "block") or _redact_style_used(job) is None)
         and verify.get("reel") == "out/reel.mp4"
         and not verify.get("preview")
         and edl_t is not None
         and verify_t >= max(edl_t, approved_t)
     )
+
+
+def _check_redact_style(value: str) -> None:
+    """--redact-style before a job is made from it: RunError for an unknown style."""
+    try:
+        _redact_style.parse(value)
+    except ToolError as e:
+        raise RunError(str(e)) from None
+
+
+def _redact_style_used(job: Path) -> str | None:
+    """How the reel hides personal data (_redact_style), None when there is none to hide:
+    a changed style means a new render only then."""
+    if _redaction_sha(job) is None:
+        return None
+    try:
+        return _redact_style.resolved(read_job(job))
+    except ToolError:
+        return "invalid"
 
 
 def _redaction_sha(job: Path) -> str | None:
@@ -519,6 +560,7 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "format": resolved_format(read_job(job)),
             "cut_style": resolved_style(read_job(job)),
             "target_s": read_job(job).get("target_s"),
+            "redact_style": _redact_style_used(job),
             "verify_ok": bool(verify.get("ok")),
         },
         overlays=None,  # a new cut has no overlays yet
@@ -531,7 +573,8 @@ def _file_sha(path: Path) -> str | None:
 
 def overlays_done(job: Path, brand_id: str) -> bool:
     """The brand's overlays are in the current reel: recorded for this brand and exactly this
-    EDL, verified ok, and the last render composited them."""
+    EDL, verified ok, the last render composited them, and nothing marked them stale (a
+    vocabulary applied to the captions, tools/vocab.py)."""
     rec = read_job(job).get("overlays")
     try:
         composited = json.loads((job / "out" / "render.json").read_text()).get("overlay")
@@ -542,7 +585,40 @@ def overlays_done(job: Path, brand_id: str) -> bool:
         and rec.get("brand") == brand_id
         and rec.get("edl_sha256") == _file_sha(job / "work" / "edl.json")
         and rec.get("verify_ok") is True
+        and not rec.get("stale")
         and bool(composited)
+    )
+
+
+def _overlay_files(job: Path) -> dict:
+    from .tools.overlays import file_hashes
+
+    return file_hashes(job)
+
+
+def overlays_resumable(job: Path, brand_id: str, cut_sha: str | None) -> bool:
+    """A finished overlay run whose final render or verify failed (job.json
+    "overlays_pending", written when the Claude run returned) left exactly the files still
+    there: same brand, cut and EDL, the overlay files `videocut tool overlays` recorded,
+    overlay.mov newer than its inputs (render composites it). Then render + verify are
+    repeated as tool steps instead of a new Claude run."""
+    from .tools.common import is_fresh
+    from .tools.overlays import check_record
+
+    rec = read_job(job).get("overlays_pending")
+    work = job / "work"
+    files = _overlay_files(job)
+    inputs = (work / "edl.json", work / "overlays.json", work / "words.json")
+    return (
+        isinstance(rec, dict)
+        and rec.get("brand") == brand_id
+        and cut_sha is not None
+        and rec.get("segments_sha256") == cut_sha
+        and rec.get("edl_sha256") == _file_sha(work / "edl.json")
+        and None not in files.values()
+        and rec.get("files") == files
+        and check_record(job) is None
+        and is_fresh([work / "overlay.mov"], [p for p in inputs if p.is_file()])
     )
 
 
@@ -668,6 +744,8 @@ def stale_why(job: Path) -> str:
         why.append("the output format changed")
     if rec.get("cut_style", style := resolved_style(data)) != style:
         why.append(f"the cut style changed from {rec.get('cut_style')} to {style}")
+    if rec.get("redact_style", drawn := _redact_style_used(job)) != drawn:
+        why.append(f"personal data is now shown as {drawn}, not {rec.get('redact_style')}")
     if rec.get("target_s", target := data.get("target_s")) != target:
         why.append(
             f"the target length changed from {_length.label(rec.get('target_s'))} to "
@@ -1162,20 +1240,26 @@ def run(
     plan_feedback: str | None = None,
     cut_style: str | None = None,
     target: str | None = None,
+    vocab: list[str] | None = None,
+    redact_style: str | None = None,
 ) -> int:
     if not agent.shutil.which("claude"):
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
-              format_, cut_style, target)  # fmt: skip
+              format_, cut_style, target, vocab or None, redact_style)  # fmt: skip
     if feedback is not None and any(v is not None for v in others):
         raise RunError(
             "--feedback revises the finished reel; it cannot be combined with --plan-feedback, "
             "--replan, --recut, --brand, --type, --brief, --asset, --screen, --format, "
-            "--cut-style or --target"
+            "--cut-style, --target, --vocab or --redact-style"
         )
-    job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target)
+    if redact_style is not None:
+        _check_redact_style(redact_style)
+    job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target, vocab)
+    if redact_style is not None:
+        set_redact_style(job, redact_style, say)  # a reel in another style goes stale
     say(f"job: {job}")
     if feedback is not None:
         return revise(job, feedback, at_s, max_turns, say)
@@ -1272,12 +1356,34 @@ def run(
     if job_brand and (brand or not overlays_done(job, job_brand)):
         cut_sha = segments_sha(job)
         started = _fs_now(job)
-        prompt = OVERLAYS_PROMPT
-        old = read_job(job).get("overlays")
-        edl_caps = (json.loads(edl.read_text()).get("captions") if edl.is_file() else None) or []
-        if edl_caps and not (isinstance(old, dict) and old.get("segments_sha256") == cut_sha):
-            prompt += OVERLAYS_RECUT
-        claude(job, "overlays", prompt, max_turns, None, say)
+        pending = read_job(job).get("overlays_pending")
+        same_plan = isinstance(pending, dict) and pending.get("project_sha256") == approved_sha
+        if not brand and same_plan and overlays_resumable(job, job_brand, cut_sha):
+            say("overlays: the last overlay run finished; rendering and verifying again "
+                "without a new Claude run")  # fmt: skip
+            tool(job, "render")
+            tool(job, "verify", need_ok=False)  # flags are judged below, like after a run
+        else:
+            prompt = OVERLAYS_PROMPT
+            old = read_job(job).get("overlays")
+            edl_caps = (
+                json.loads(edl.read_text()).get("captions") if edl.is_file() else None
+            ) or []
+            if edl_caps and not (isinstance(old, dict) and old.get("segments_sha256") == cut_sha):
+                prompt += OVERLAYS_RECUT
+            update_job(job, overlays_pending=None)
+            claude(job, "overlays", prompt, max_turns, None, say)
+            # The Claude part is done: a failing render or verify below is resumed without it.
+            update_job(
+                job,
+                overlays_pending={
+                    "brand": job_brand,
+                    "project_sha256": approved_sha,
+                    "segments_sha256": cut_sha,  # the run must not change the cut
+                    "edl_sha256": _file_sha(edl),
+                    "files": _overlay_files(job),
+                },
+            )
         if project_sha(job) != approved_sha:
             raise RunError("work/project.md changed during the overlay run; approve it again")
         if segments_sha(job) != cut_sha:
@@ -1297,6 +1403,7 @@ def run(
                 "edl_sha256": _file_sha(job / "work" / "edl.json"),
                 "verify_ok": bool(verify.get("ok")),
             },
+            overlays_pending=None,
         )
     elif job_brand:
         say(f"overlays: already done for brand {job_brand} (--brand {job_brand} redoes them)")
@@ -1345,6 +1452,8 @@ def main(args) -> int:
             plan_feedback=args.plan_feedback,
             cut_style=args.cut_style,
             target=args.target_length,
+            vocab=args.vocab,
+            redact_style=args.redact_style,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

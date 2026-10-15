@@ -35,8 +35,9 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>` | `job.py` |
-| `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]` | `brand.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list` | `job.py` |
+| `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]`, `brand vocab <id> add\|remove\|list` | `brand.py` |
+| `vocab show [job]`, `vocab apply [job]`, `vocab suggest [job] [--all]` | `vocab.py` |
 | `captions [--force]` | `captions.py` |
 | `overlays [--no-render]` | `overlays.py` |
 | `ingest [--denoise]` | `ingest.py` |
@@ -68,6 +69,9 @@ snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
 job.json   id, created, source (relative), type, brief, status, approval, brand, assets,
            format (optional output format; absent = the default rule, resolved on read),
            cut_style (optional; absent = the default rule), lang (de|en, default de),
+           vocabulary (optional, the video's own terms; see Transcript vocabulary),
+           redact_style (optional auto|blur|crop|block; absent = the brand's
+           redaction.style, default auto),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
            format and cut style of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
@@ -91,6 +95,7 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            runs.jsonl, claude-plan.jsonl, claude-cut.jsonl                       videocut run
            revision_request.json, revision.json, revision_report.md,
            revisions.jsonl (one line per feedback run)                           revise run
+           redact_grown.json (redact boxes grown over the text they cut)        render
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
            verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg      verify
            history/reel-<k>.mp4 (the reel before a revision; the last five)       revise run
@@ -101,6 +106,14 @@ human). Approval stores the SHA-256 of `work/project.md`; `job show` reports `ap
 only while the plan is unchanged, so a new plan needs a new approval. The trusted record lives outside the
 agent-writable job folder, in `$VIDEOCUT_HOME/approvals/<id>.json` (job path, time, SHA-256);
 job.json only mirrors it for display, and `render` (also `--preview`) refuses without it.
+
+`job duplicate` (human only; `POST /api/jobs/{id}/duplicate`) makes `<id>-copy-N` with
+input/ hard-linked and work/, out/ copied (copy-on-write where possible; never hard links,
+tools rewrite files there). The approval record and the personal-data decision are copied
+(naming the new folder) only with `--keep-approval` / `keep_approval`, otherwise the copy
+needs its own approval; the overlay record always moves along (it is checked against the
+files' hashes). job.json gets `copy_of`; an optional `title` (`job title`, `PUT
+/api/jobs/{id}/title`) is the display title before the plan's.
 
 Ingest is idempotent: an output newer than its input is kept. DeepFilterNet runs with delay
 compensation (`-D`) so cleaned audio stays in sync with the picture. Transcribe keeps a
@@ -166,6 +179,49 @@ ignored.
 **speech_clipped** (`verify`, `_verify_audio.py`): a hard check on the reel's own audio: at
 every cut, speech level and spectral flux right before and after the cut tell a word cut off
 or started mid-syllable from a clean cut; it fails verify like a click.
+
+## Transcript vocabulary (`tools/vocab.py`)
+
+Names the transcriber gets wrong (the company name, a product, a customer in a demo):
+`[{term, variants, note?}]` in brand.json `vocabulary` (every job of the brand) and job.json
+`vocabulary` (this video). `brand check` / the brand PUT validate it: a non-empty term, literal
+variants (no pattern characters), no key used twice (key = case-folded letters and digits).
+The effective vocabulary is brand ∪ job; the job wins every conflict (same term: one entry
+with the job's spelling and both variant lists; a brand term the job lists as a variant is
+dropped; a variant claimed by both belongs to the job's term). `job show` reports it as
+`vocabulary_effective` and prints one line for the skills, which use the canonical spelling
+in every text they write (plan, reports, cards, captions fixes).
+
+- **Prompt:** turbo's initial prompt is the filler sample followed by the canonical terms,
+  as many as fit Whisper's 223 prompt tokens (counted with Whisper's own tokenizer, the job's
+  terms first), so the sample is never cut off. When decoding falls back to sampling, it
+  retries with the filler sample alone, then without a prompt. `transcribe.json`
+  `prompt_terms` lists the terms used. Measured on two generated clips (filler clip, a clip
+  with three invented names), 12 runs from 3 to 40 terms (37-222 tokens): 3/3 fillers every
+  time, no fallback; the names were all spelled right whenever they were in the prompt (one
+  of three was misspelled with the filler sample alone).
+- **Correction:** after transcription and alignment (every `transcribe`, also of a kept
+  transcript, and `vocab apply`), a word matching a variant or the term itself
+  (case-insensitive, punctuation stripped) becomes the term, the punctuation around it kept.
+  A match may span up to 4 consecutive words ("Sentro Via", the term split by the model;
+  only for keys of ≥ 5 characters and never across punctuation inside the span), keeps an
+  inflection ending (`s`, `es`, `'s`) and corrects parts of a hyphen compound; a longer word
+  that only contains a variant never matches. A corrected word keeps `w_asr` (the model's
+  text) and `vocab` (the term); words merged from a span keep the originals in `parts`
+  (fitted into the merged word's current times when restored), so every apply starts from
+  the transcript as the model wrote it and a removed variant goes back.
+  `transcribe.json` `vocabulary` = `{applied, terms: {term: n}, entries}`.
+- **Existing jobs:** `vocab apply` corrects `words.json` without transcribing again,
+  rewrites `candidates.json`/`takes_packed.md`, and corrects caption words in `edl.json` and
+  `overlays.json` (forwards only: captions may carry the agent's text). When captions changed,
+  job.json `overlays.stale = "vocabulary"`: `run.overlays_done` is false, the next run keeps
+  the cut and redoes only the overlay stage (the app: "Untertitel neu setzen", `POST
+  /api/jobs/{id}/overlays`). Nothing is re-rendered by `apply` itself.
+- **Suggestions:** `vocab suggest` reports words (and word pairs) within edit distance 1
+  (keys < 7 characters) or 2 of a term or variant that no variant covers, with conf < 0.9
+  (`--all`: any conf); they are never applied. The app shows them as "Meintest du …?".
+- Editing is human only (`job vocab`/`brand vocab` refuse inside an agent run; job.json and
+  the brands folder are outside what an agent run may write).
 
 ## Cut style and job language
 
@@ -327,7 +383,9 @@ brand colours survive into the yuv420p H.264 reel at ΔE ≈ 1 (CIE76, read as B
 Per inner cut: a luma jump score, audio click numbers and a picture. A jump cut in a talking
 head is expected: a clear jump is info `jump_cut` (plus `reframe` when the EDL changes crop or
 zoom at that cut). The flag `visual_jump` is raised only for a jump ≥ 3× (and ≥ 8) the median jump score
-of the reel's other cuts without a reframe; `click` for an audio step. Overlays: per drawn box
+of the reel's other cuts without a reframe; `click` for an audible (≥ −45 dBFS), isolated
+sample step at the cut, measured against the audible audio around it (the denoiser's
+digital silence is no baseline). Overlays: per drawn box
 (`work/overlay_boxes.json`) `overlay_in_safe_zone` and `overlay_on_face` (> 2 % of the face
 box at any face sample while visible) and `overlay_overlap` (an overlay and a caption on
 screen together share > 10 % of the smaller box); the full-frame `cta_end` plate is exempt
@@ -422,9 +480,32 @@ window is a plain crop + scale; a moving one goes through `perspective` (sense=s
 eval=frame) with the same piecewise function of the frame number that `window_at`
 computes in Python. (A per-frame `scale` followed by `crop` does not work: crop clamps to
 its input link size, fixed at configuration, so every zoom ended in the top-left corner.)
-`redact` blocks are drawn in `colors.bg` onto the screen frames before any scaling, on
-every frame that overlaps their range, snapped outward to even pixels. HDR cameras are
-tonemapped per branch (inset, split part) like the face path.
+`redact` blocks first **grow** so they never cut through text or a UI bar
+(`_redact_grow.py`, in `plan_all`, so render, overlays and verify share the boxes): local
+text recognition reads up to 5 distinct screen frames of each block's range around the
+box; a line the box cuts (≥ 10 % of its height inside, not wholly inside) pulls the box
+over the whole line plus 35 % of the line height; a band along a screen edge then moves
+its inner edge on to the next strong UI boundary (row/column median step ≥ 8 grey
+levels) within three text heights, e.g. the bottom of a browser's chrome; both repeat
+until nothing moves. Never smaller; cached in `work/redact_grown.json`; render.json
+`redaction.blocks[]` has `planned` (the box before) and `grown` (`text`, `band`). They are
+then drawn onto the screen frames before any scaling, on every frame that
+overlaps their range, snapped outward to even pixels, in the job's **redaction style**
+(`_redact_style.py`, see *Personal data*): `block` a solid block in `colors.bg`; `blur`
+the box pixelated into cells of the UI text height, or a quarter of its short side up to
+three text heights (`blur_cell`), nearest-neighbour back up and a gaussian of half a cell (split →
+crop → scale → overlay with `enable`, so it keeps its colours); `crop` a band along a
+screen edge (touches it within 1 %, spans 90 % of the other side; `auto` only top and
+bottom bands: browser tabs, address and bookmark bar) is cut off for the whole segment:
+the segment's screen is the rest of the recording (`Segment.origin`/`screen`), laid out
+by the same view rules, so zoom windows, targets and other boxes are in its coordinates.
+A crop that would remove more than 20 % of the screen height (or width) blurs those
+bands instead (render.json `redaction.blocks[].note`). Before the graph is built render
+reads every blurred box on its middle frame with local text recognition; while anything
+is readable the cell doubles (never smaller), and a box still readable as one cell is
+drawn as a block (fail closed). render.json `redaction` lists per block the segment,
+camera times, box, style used, edge (crop) and cell (blur). HDR cameras are tonemapped
+per branch (inset, split part) like the face path.
 
 **Sharpness rule.** A zoom window narrower than the view's width at the job's output size
 would upscale the screen (< 1 source px per output px); render widens it to that width,
@@ -453,8 +534,15 @@ demos) is drawn as tall as the safe area allows minus room for one caption block
 cover the speaker (`stage`: verify does not flag `overlay_on_face` for it).
 
 **Verify** (`_verify_screen.py`): every redact block is sampled on up to 5 output frames of
-its range through the drawn zoom window; ≥ 90 % of its pixels must be the brand background
-(`redaction_missing`). `coverage` checks the personal data itself (see *Personal data*
+its range through the drawn zoom window; ≥ 90 % of a solid block's pixels must be the brand
+background, a blurred box must show no sharp edges (≤ 0.5 % px with a grey step ≥ 40,
+seams where two blurred boxes meet left out) and text recognition must read nothing there
+(`redaction_missing`). A segment that cuts a band off must show, on its middle frame, the
+recording without the band clearly better (3 grey levels) than the uncropped window.
+`text_cut`: text recognition on output frames around each blocked or blurred box's
+planned position (before it grew) must read no line overlapping it (≥ 25 % of the line's
+height), and on the recording (first, middle, last frame) no line may cross an edge a
+crop cuts at: `redaction_partial`, a failure. `coverage` checks the personal data itself (see *Personal data*
 below): `redaction_leak`. The middle frame of each screen segment is compared with the screen
 recording at the mapped time and at ±0.5 s / ±1 s (`screen_time_mismatch` when another time
 matches clearly better). `screen_overlap` repeats the overlap rule of `edl check`. A cut
@@ -479,7 +567,14 @@ the screen segments it overlaps (render.json `redaction`: source `decision` or `
 overlays add enforced screenshot boxes to `screenshot_frame` items, and `edl check` /
 verify flag `redaction_missing` when the EDL itself lacks one (the cut must be explicit;
 `edl check` prints the exact block to add). An unreadable redaction.json fails closed (no
-approval, no render).
+approval, no render). How it is hidden is the human's choice too: job.json `redact_style`
+(`job redact-style`, `videocut run --redact-style`, the app's select "Schwärzen als" in the
+personal-data step and in the new-job form, `PUT /api/jobs/{id}/redact-style`; absent: the
+brand's `redaction.style`, default `auto`). A reel that hid personal data in another
+style is stale (job.json `cut.redact_style`; a record from before styles counts as
+`block` once the style is set). Screenshots know `blur` and `block` only (`crop`/`auto`
+blur them): overlays set `props.redact_style`, the renderer averages the box into cells
+and draws them smoothed back up over the solid fill.
 
 **Where personal data is: measured, not estimated** (`tools/redact.py`, `tools/_ocr.py`).
 Boxes estimated by eye from downscaled stills landed a text line too high in real runs (the
@@ -521,7 +616,9 @@ every screen segment (for all of them). On each, the text is searched on the scr
 that the reel shows there; every place found, and the track's text box of that time (or
 its area), is mapped through the layout and the zoom window to output px, and ≥ 98 % of
 the visible part (not under a pip bubble) must be the block colour (`colors.bg`, ±28 per
-channel). The reel frame's screen view is read as well: the text found there is readable.
+channel). The reel frame's screen view is read as well: the text found there is readable. Inside a blurred
+box the px count as hidden when that box shows no sharp edges; a place in a cropped band
+maps outside the view.
 Either flags `redaction_leak` (verify not ok) with output time, segment and candidate id.
 `redaction_unchecked` (not ok either): no text recognition, a reel or screen frame that
 cannot be read, an e-mail/phone/name candidate shown without `text`, or a text candidate
@@ -604,7 +701,10 @@ the neutral example, logo/font upload with `role`, cached preview sheet), `jobs`
 create by multipart upload, detail, delete to `$VIDEOCUT_HOME/trash`), `jobs/{id}/start`,
 `events` (server-sent events: `stage` (with `at`, the stage's start, ISO), `log`, `tool`,
 `gate`, `error`, `done`; replayed on connect, so a reloaded page keeps the stage's start),
-`cut-style` (PUT), `target` (PUT), `recut` (POST: cut + overlays again with the approved plan), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
+`cut-style` (PUT), `target` (PUT), `recut` (POST: cut + overlays again with the approved plan),
+`vocabulary` (GET: job/brand/effective terms, applied counts, suggestions; PUT: the job's
+terms, validated), `vocabulary/apply` (POST), `overlays` (POST: the overlay stage again on the
+kept cut, only while `overlays_stale`), job create takes a `vocabulary` field (JSON), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
 `media/{reel|preview|cover|screen_proxy|camera_proxy|history/reel-<k>.mp4}` (HTTP Range),
 `download`. Errors are `{"detail": {"message", "code"?, "errors"?}}`; 409 codes: `busy` (a
 run is queued or active), `stale` (the plan changed since it was read), `state`, `exists`,
@@ -619,7 +719,8 @@ running | waiting | done | error`, stage `prep, plan, approval, cut, overlays, v
 revise, plan_revise, error`, gate `plan | result | null`. The job detail also carries
 `stage_since` (start of the running stage), `failed_stage`, `has_screen`, `cut_style`
 (stored or `auto`), `cut_style_resolved`, `cut_stale`, `source_duration_s`, `lang`,
-`target_s`, `target_resolved`, `plan_target_stale` and `plan_target_s`; the
+`target_s`, `target_resolved`, `plan_target_stale`, `plan_target_s` and `overlays_stale`
+(captions changed by a vocabulary since the overlays were rendered); the
 app's "What is happening" line counts the time in the step from `stage_since`.
 
 Security model:
@@ -659,12 +760,15 @@ Security model:
   folders a killed server left behind are removed at start.
 
 `app/`: screens Home (job list), NewJob (type cards, drag & drop with upload progress, brand,
-format, one-line instruction), JobPage (stepper, live log, time, cost), PlanReview
+format, one-line instruction, collapsible terms for this video), JobPage (stepper, live log, time, cost), PlanReview
 (structured plan with stills or the markdown, editor with stale-sha handling, plan feedback
 with the change highlighted), PersonalData (redact everything by default, per item choice),
 Result (player, verify findings in plain words, feedback at the player position, versions,
 MP4/cover download), Brands (preview sheet per format, token editor with the server's
-validation, logo/font upload, new brand from the neutral example). German default, English
+validation, logo/font upload, new brand from the neutral example, Wörterbuch: terms with
+their misspellings as chips). The job page has a collapsible "Begriffe für dieses Video"
+panel (save and apply, suggestions added to the brand's Wörterbuch when the term is the
+brand's, else to the job) and the "Untertitel neu setzen" banner (`components/Vocabulary.tsx`). German default, English
 switch (`app/src/i18n.tsx`); verify flag and check ids map to plain words, unknown ids show
 as they are. `npm run dev:mock` runs the UI against an in-memory mock of the API.
 

@@ -13,6 +13,8 @@ import type {
   Stage,
   TargetRange,
   VideoType,
+  VocabEntry,
+  VocabSuggestion,
 } from "../api/types";
 import { brandSheet, coverPicture, personStill, screenStill } from "./pictures";
 
@@ -33,6 +35,10 @@ interface MockJob {
   cutWith?: string;
   /** The target length the plan was made for (null: automatic). */
   planTarget?: number | null;
+  /** The job's own transcript vocabulary, what was applied, and words heard close to a term. */
+  vocabulary?: VocabEntry[];
+  vocabApplied?: number;
+  heard?: VocabSuggestion[];
 }
 
 export interface MockState {
@@ -150,6 +156,8 @@ function baseDetail(id: string, over: Partial<JobDetail>): JobDetail {
     revisions: [],
     cut_style: "auto",
     cut_style_resolved: over.has_screen ? "calm" : "standard",
+    redact_style: "auto",
+    redact_style_default: true,
     cut_stale: false,
     source_duration_s: 64.2,
     has_screen: false,
@@ -258,6 +266,9 @@ function seedJobs(): Map<string, MockJob> {
     },
     planFor("Drei Tipps für den Start"),
   );
+  jobs.get("job-done")!.heard = [
+    { term: "Zentrovia", heard: "Sentrovia", distance: 1, count: 2, times: [3.2, 18.4], conf: 0.41 },
+  ];
   add("job-running", "Neue Funktion in 40 Sekunden", "2026-10-13T08:02:00", { type: "walkthrough", status: "running", stage: "prep", format: "16:9", format_resolved: "16:9", has_screen: true, source_duration_s: 251.8, runs: [] }, null);
   add(
     "job-overlays",
@@ -296,6 +307,23 @@ function seedJobs(): Map<string, MockJob> {
   return jobs;
 }
 
+/** The checks of tools/vocab.py check that the UI can trip over. */
+function vocabErrors(list: VocabEntry[] | undefined, path = "$.vocabulary"): string[] {
+  const errors: string[] = [];
+  if (list === undefined) return errors;
+  const seen = new Set<string>();
+  list.forEach((e, i) => {
+    if (!e.term?.trim()) errors.push(`${path}[${i}].term: required, a non-empty string`);
+    e.variants.forEach((v, j) => {
+      const k = v.toLowerCase();
+      if (/[\\^$|*?[\](){}]/.test(v)) errors.push(`${path}[${i}].variants[${j}]: '${v}' must be plain text, not a pattern`);
+      else if (seen.has(k)) errors.push(`${path}[${i}].variants[${j}]: '${v}' is already used`);
+      seen.add(k);
+    });
+  });
+  return errors;
+}
+
 export function createMock(opts: MockOptions = {}) {
   const step = opts.step ?? 700;
   const state: MockState = {
@@ -306,7 +334,7 @@ export function createMock(opts: MockOptions = {}) {
         ? []
         : ([
             ["light", { ...clone(EXAMPLE), name: "Beispiel hell", colors: { ...EXAMPLE.colors, accent: "#2F6FDE", surface: "#FFFFFF" } }],
-            ["dark", { ...clone(EXAMPLE), name: "Beispiel dunkel", colors: { bg: "#121417", surface: "#1E2228", text: "#F2F2F2", muted: "#9AA0A8", accent: "#E8B23A", accent_usage: "frei" } }],
+            ["dark", { ...clone(EXAMPLE), name: "Beispiel dunkel", colors: { bg: "#121417", surface: "#1E2228", text: "#F2F2F2", muted: "#9AA0A8", accent: "#E8B23A", accent_usage: "frei" }, vocabulary: [{ term: "Zentrovia", variants: ["Zentrowia"] }] }],
           ] as [string, Brand][])),
     ]),
     jobs: opts.seed === false ? new Map() : seedJobs(),
@@ -372,6 +400,7 @@ export function createMock(opts: MockOptions = {}) {
       status: d.status,
       stage: d.stage,
       title: j.title,
+      copy_of: d.copy_of ?? null,
       thumb_url: d.status === "new" ? null : `/api/jobs/${d.id}/stills/work/plan_stills/view-1.jpg`,
       target_s: d.target_s ?? null,
     };
@@ -407,6 +436,7 @@ export function createMock(opts: MockOptions = {}) {
           const v = tokens.colors?.[k];
           if (v !== undefined && !/^#[0-9a-fA-F]{6}$/.test(v)) errors.push(`$.colors.${k}: '${v}' is not a hex colour like #RRGGBB`);
         }
+        errors.push(...vocabErrors(tokens.vocabulary));
         if (errors.length) return json(422, { detail: { message: "brand is invalid", errors } });
         state.brands.set(id, { ...tokens, files: br.files });
         return json(200, state.brands.get(id));
@@ -432,6 +462,30 @@ export function createMock(opts: MockOptions = {}) {
       if (!b && method === "DELETE") {
         state.jobs.delete(id);
         return json(200, { ok: true });
+      }
+      if (b === "duplicate" && method === "POST") {
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        const req = body as { title?: string; keep_approval?: boolean };
+        const base = id.replace(/-copy-\d+$/, "");
+        let n = 1;
+        while (state.jobs.has(`${base}-copy-${n}`)) n++;
+        const nid = `${base}-copy-${n}`;
+        const copy: MockJob = clone(job);
+        const keep = !!req.keep_approval && d.approved;
+        copy.created = new Date().toISOString();
+        copy.title = req.title?.trim() || job.title;
+        copy.events = [];
+        Object.assign(copy.detail, { id: nid, title: copy.title, copy_of: id, approved: keep });
+        if (!keep) copy.detail.redaction = { ...copy.detail.redaction, decision: null };
+        state.jobs.set(nid, copy);
+        return json(200, summary(copy));
+      }
+      if (b === "title" && method === "PUT") {
+        const title = String((body as { title?: string })?.title ?? "").trim();
+        if (!title) return json(422, { detail: "the title is empty" });
+        job.title = title;
+        d.title = title;
+        return json(200, { id, title });
       }
       if (b === "start" && method === "POST") {
         if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
@@ -487,6 +541,14 @@ export function createMock(opts: MockOptions = {}) {
         d.cut_stale = !!d.outputs?.reel && d.approved && job.cutWith !== d.cut_style_resolved;
         return json(200, d);
       }
+      if (b === "redact-style" && method === "PUT") {
+        const v = String((body as { redact_style?: string })?.redact_style ?? "");
+        if (!["auto", "blur", "crop", "block"].includes(v)) return json(422, { detail: `unknown redact style '${v}'` });
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        d.redact_style = v as JobDetail["redact_style"];
+        d.redact_style_default = false;
+        return json(200, { id, redact_style: d.redact_style, cut_stale: !!d.cut_stale });
+      }
       if (b === "target" && method === "PUT") {
         const raw = (body as { target_s?: unknown })?.target_s;
         const v = raw === null || raw === undefined || raw === "auto" ? null : Number(raw);
@@ -501,6 +563,54 @@ export function createMock(opts: MockOptions = {}) {
         d.plan_target_s = stale ? (job.planTarget ?? null) : null;
         if (stale) d.approved = false;
         return json(200, { id, target_s: v, target_resolved: d.target_resolved, previous, plan_stale: stale, approval_revoked: revoked, reel_stale: !!d.outputs?.reel && v !== previous, approved: d.approved });
+      }
+      if (b === "vocabulary") {
+        const view = (extra: Record<string, unknown> = {}) => {
+          const brandWords = (d.brand && state.brands.get(d.brand)?.vocabulary) || [];
+          const own = job.vocabulary ?? [];
+          const effective = [...brandWords.filter((e) => !own.some((o) => o.term.toLowerCase() === e.term.toLowerCase())), ...own];
+          const known = new Set(effective.flatMap((e) => [e.term, ...e.variants]).map((x) => x.toLowerCase()));
+          return json(200, {
+            id,
+            vocabulary: own,
+            brand: d.brand,
+            brand_vocabulary: brandWords,
+            effective,
+            applied: job.vocabApplied ? { applied: job.vocabApplied, terms: {} } : null,
+            has_transcript: d.status !== "new",
+            suggestions: (job.heard ?? []).filter((s) => !known.has(s.heard.toLowerCase())),
+            overlays_stale: !!d.overlays_stale,
+            ...extra,
+          });
+        };
+        if (!c && method === "GET") return view();
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        if (!c && method === "PUT") {
+          const list = ((body as { vocabulary?: VocabEntry[] })?.vocabulary ?? []) as VocabEntry[];
+          const errors = vocabErrors(list, "$.vocabulary");
+          if (errors.length) return json(422, { detail: { message: "the vocabulary has problems", errors } });
+          job.vocabulary = list;
+          return view();
+        }
+        if (c === "apply" && method === "POST") {
+          if (d.status === "new") return json(409, { detail: { message: "work/words.json is missing", code: "state" } });
+          const brandWords = (d.brand && state.brands.get(d.brand)?.vocabulary) || [];
+          const words = [...brandWords, ...(job.vocabulary ?? [])];
+          const heard = new Set(words.flatMap((e) => e.variants.map((v) => v.toLowerCase())));
+          const applied = (job.heard ?? []).filter((s) => heard.has(s.heard.toLowerCase())).reduce((n, s) => n + s.count, 0);
+          const captions = d.outputs?.reel ? applied : 0;
+          job.vocabApplied = applied;
+          if (captions) d.overlays_stale = true;
+          return view({ result: { applied, terms: {}, caption_words: captions, overlays_stale: captions > 0 } });
+        }
+      }
+      if (b === "overlays" && method === "POST") {
+        if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        if (!d.overlays_stale) return json(409, { detail: { message: "the overlays of this job are not stale", code: "state" } });
+        void simulate(id, ["overlays", "verify"], "result", () => {
+          d.overlays_stale = false;
+        });
+        return json(202, { ok: true });
       }
       if (b === "recut" && method === "POST") {
         if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
@@ -554,12 +664,18 @@ export function createMock(opts: MockOptions = {}) {
       const fmt = String(form.get("format") ?? "auto");
       const title = camera.name.replace(/\.[^.]+$/, "");
       const style = String(form.get("cut_style") ?? "auto");
+      const redact = String(form.get("redact_style") ?? "auto");
       const target = String(form.get("target_s") ?? "auto");
+      const words = JSON.parse(String(form.get("vocabulary") ?? "[]")) as VocabEntry[];
+      const wordErrors = vocabErrors(words, "$.vocabulary");
+      if (wordErrors.length) return json(422, { detail: { message: "the vocabulary has problems", errors: wordErrors } });
       state.jobs.set(id, {
         detail: baseDetail(id, {
           has_screen: withScreen,
           target_s: target === "auto" ? null : Number(target),
           cut_style: style as JobDetail["cut_style"],
+          redact_style: redact as JobDetail["redact_style"],
+          redact_style_default: redact === "auto",
           cut_style_resolved: (style === "auto" ? (withScreen ? "calm" : "standard") : style) as JobDetail["cut_style_resolved"],
           type: String(form.get("type")),
           brand: (form.get("brand") as string) || null,
@@ -572,6 +688,7 @@ export function createMock(opts: MockOptions = {}) {
         title,
         plan: null,
         events: [{ t: "stage", stage: "prep" }],
+        vocabulary: words,
       });
       return json(201, { id });
     },

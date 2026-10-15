@@ -10,6 +10,11 @@ export type CutStyle = "calm" | "standard" | "tight";
 export type CutStyleChoice = "auto" | CutStyle;
 export const CUT_STYLES: CutStyleChoice[] = ["auto", "calm", "standard", "tight"];
 
+/** How personal data on the screen is hidden: auto (cut off full-width bars at the top or
+ * bottom of the screen, blur the rest), blur, crop (cut off bands along an edge) or block. */
+export type RedactStyle = "auto" | "blur" | "crop" | "block";
+export const REDACT_STYLES: RedactStyle[] = ["auto", "blur", "crop", "block"];
+
 /** Target length of the video in seconds; null (or "auto" in requests) lets the server
  * decide: by type for talking heads, as long as needed for demos. */
 export type TargetChoice = number | null;
@@ -66,8 +71,40 @@ export interface Brand {
   logo: { light?: string | null; dark?: string | null; placement?: string; [k: string]: unknown };
   captions: { pace?: string; style?: string; [k: string]: unknown };
   voice: { address?: string; [k: string]: unknown };
+  /** Transcript vocabulary: canonical spellings and their known misspellings. */
+  vocabulary?: VocabEntry[];
   files?: string[];
   [k: string]: unknown;
+}
+
+/** One transcript vocabulary entry (brand.json / job.json "vocabulary"). */
+export interface VocabEntry {
+  term: string;
+  variants: string[];
+  note?: string;
+}
+
+/** A possible misspelling `videocut tool vocab suggest` found (never applied by itself). */
+export interface VocabSuggestion {
+  term: string;
+  heard: string;
+  distance: number;
+  count: number;
+  times: number[];
+  conf: number | null;
+}
+
+/** GET /api/jobs/{id}/vocabulary. */
+export interface JobVocabulary {
+  id: string;
+  vocabulary: VocabEntry[];
+  brand: string | null;
+  brand_vocabulary: VocabEntry[];
+  effective: VocabEntry[];
+  applied: { applied: number; terms: Record<string, number> } | null;
+  has_transcript: boolean;
+  suggestions: VocabSuggestion[];
+  overlays_stale: boolean;
 }
 
 export interface JobSummary {
@@ -79,6 +116,8 @@ export interface JobSummary {
   status: Status;
   stage: Stage;
   title: string | null;
+  /** The id of the job this one was duplicated from. */
+  copy_of?: string | null;
   thumb_url: string | null;
   target_s?: number | null;
 }
@@ -172,13 +211,19 @@ export interface JobDetail {
   revisions: Revision[];
   versions?: Version[];
   title?: string | null;
+  copy_of?: string | null;
   brief?: string | null;
   created?: string;
   /** The stored choice (absent: automatic) and what it resolves to. */
   cut_style?: CutStyle | "auto" | null;
   cut_style_resolved?: CutStyle | null;
+  /** How personal data is hidden (resolved: the job's choice or the brand's default). */
+  redact_style?: RedactStyle | null;
+  redact_style_default?: boolean;
   /** The current reel was cut with another style or format than the resolved one. */
   cut_stale?: boolean;
+  /** A vocabulary changed the captions of the finished reel: set them again (/overlays). */
+  overlays_stale?: boolean;
   /** The chosen target length (null: automatic) and the range the plan aims for (null: no
    * fixed length, as long as the content needs). */
   target_s?: number | null;

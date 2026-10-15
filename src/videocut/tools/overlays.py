@@ -43,7 +43,7 @@ from .. import brand
 from ..edl import EdlError, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
 from ..redaction import asset_boxes, same_asset
-from . import _layouts, _plates
+from . import _layouts, _plates, _redact_style
 from . import _render_plan as plan_mod
 from ._geometry import face_track, framed, map_box, safe_zones, sized
 from .common import (
@@ -114,6 +114,7 @@ def build(job: Path) -> dict:
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
     cands, _ = redaction_enforced(job)
+    shot_style = _redact_style.screenshot(_redact_style.resolved(read_job(job)))
     track = sorted(face_track(plan, face, src_size) + _speaker_track(views, plan.fps),
                    key=lambda f: f["t"])  # fmt: skip
     doc = {
@@ -126,7 +127,7 @@ def build(job: Path) -> dict:
         "safe": safe_zones(edl.size),
         "face": track,
         "captions": edl.captions,
-        "overlays": [_redacted(job, o, cands) for o in plates.overlays],
+        "overlays": [_redacted(job, o, cands, shot_style) for o in plates.overlays],
         "plates": {
             "last_word": plates.last_word,
             "tail_s": round(float(plates.tail_frames / plan.fps), 3),
@@ -138,10 +139,11 @@ def build(job: Path) -> dict:
     return doc
 
 
-def _redacted(job: Path, item: dict, cands: list[dict]) -> dict:
+def _redacted(job: Path, item: dict, cands: list[dict], style: str = "block") -> dict:
     """A screenshot_frame item with the boxes of every enforced candidate of its image
     (however the path is spelled) added to props.redact (the safe default, also when the
-    EDL forgot one)."""
+    EDL forgot one), and props.redact_style = `style` ("blur" or "block", the job's
+    _redact_style.screenshot) when it redacts anything."""
     props = item.get("props") if isinstance(item, dict) else None
     if item.get("scene") != "screenshot_frame" or not isinstance(props, dict):
         return item
@@ -151,13 +153,13 @@ def _redacted(job: Path, item: dict, cands: list[dict]) -> dict:
         if "asset" in c and same_asset(job, props.get("file"), c["asset"])
         for b in asset_boxes(c)
     ]
-    if not boxes:
-        return item
     have = props.get("redact")
     have = have if isinstance(have, list) else ([] if have is None else have)
     if not isinstance(have, list):
         return item  # malformed: the renderer fails closed on it
-    return {**item, "props": {**props, "redact": [*have, *boxes]}}
+    if not boxes and not have:
+        return item
+    return {**item, "props": {**props, "redact": [*have, *boxes], "redact_style": style}}
 
 
 def _area(b: list[float]) -> float:

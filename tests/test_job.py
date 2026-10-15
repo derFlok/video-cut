@@ -345,3 +345,119 @@ def test_style_module_contract():
     assert "x" not in _style.STYLES["standard"]["splice_only"]
     with pytest.raises(_style.StyleError):
         _style.job_style({"cut_style": "slow"})
+
+
+CAND = {"id": 1, "kind": "email", "t0": 1.0, "t1": 2.0, "box": [0.1, 0.1, 0.4, 0.2]}
+
+
+def _approved_job(capsys, tmp_path, videocut_home, job_id="orig"):
+    """A job with a plan, a personal-data decision, an approval and some outputs."""
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", job_id)
+    job = videocut_home / "jobs" / job_id
+    (job / "work" / "project.md").write_text("# plan\n")
+    (job / "work" / "redaction.json").write_text(json.dumps({"candidates": [CAND]}))
+    (job / "out" / "reel.mp4").write_bytes(b"reel")
+    assert run_tool(capsys, "job", "redaction", job_id, "--all-demo")[0] == 0
+    assert run_tool(capsys, "job", "approve", job_id)[0] == 0
+    return job
+
+
+def test_duplicate_needs_its_own_approval(capsys, tmp_path, videocut_home):
+    from videocut import redaction as red
+    from videocut.tools.job import approval_path, is_approved
+
+    job = _approved_job(capsys, tmp_path, videocut_home)
+    code, s, out = run_tool(capsys, "job", "duplicate", "orig", "--title", "  Zentrovia  copy ")
+    assert code == 0, s
+    copy = videocut_home / "jobs" / "orig-copy-1"
+    assert s["id"] == "orig-copy-1" and s["copy_of"] == "orig" and s["title"] == "Zentrovia copy"
+    assert s["approval_kept"] is False and s["approved"] is False
+    assert "own approval" in out
+    data = json.loads((copy / "job.json").read_text())
+    assert data["id"] == "orig-copy-1" and data["copy_of"] == "orig"
+    assert data["status"] == "ingested" and "approval" not in data
+    assert data["source"] == "input/My Take 01.mov"
+    # input hard-linked, work and out copied (writing the copy leaves the original alone)
+    src, dst = job / "input" / "My Take 01.mov", copy / "input" / "My Take 01.mov"
+    assert dst.read_bytes() == src.read_bytes()
+    assert os.stat(dst).st_ino == os.stat(src).st_ino
+    assert (copy / "work" / "project.md").read_text() == "# plan\n"
+    (copy / "out" / "reel.mp4").write_bytes(b"changed")
+    assert (job / "out" / "reel.mp4").read_bytes() == b"reel"
+    plan = "work/project.md"
+    assert os.stat(copy / plan).st_ino != os.stat(job / plan).st_ino
+    # no human decision moved along; the original keeps its own
+    assert not approval_path(copy).exists() and red.read_decision(copy) is None
+    assert is_approved(job) and red.valid_decision(job) is not None
+    assert run_tool(capsys, "job", "show", "orig-copy-1")[1]["approved"] is False
+    # the next copy (also of a copy) counts on from the base id
+    assert run_tool(capsys, "job", "duplicate", "orig")[1]["id"] == "orig-copy-2"
+    code, s, _ = run_tool(capsys, "job", "duplicate", "orig-copy-1")
+    assert s["id"] == "orig-copy-3" and s["copy_of"] == "orig-copy-1"
+    assert s["title"] == "Zentrovia copy"  # a copy of a titled copy keeps the title
+
+
+def test_duplicate_keep_approval_takes_over_both_decisions(capsys, tmp_path, videocut_home):
+    from videocut import redaction as red
+    from videocut.tools.job import is_approved, read_approval
+
+    _approved_job(capsys, tmp_path, videocut_home)
+    code, s, _ = run_tool(capsys, "job", "duplicate", "orig", "--keep-approval")
+    assert code == 0, s
+    copy = videocut_home / "jobs" / "orig-copy-1"
+    assert s["approval_kept"] is True and s["approved"] is True and s["redaction_kept"] is True
+    assert is_approved(copy)
+    assert read_approval(copy)["job"] == str(copy.resolve())
+    assert red.valid_decision(copy)["demo"] == [1]
+    assert json.loads((copy / "job.json").read_text())["status"] == "approved"
+    # the copy's approval is its own: a changed plan there does not touch the original
+    (copy / "work" / "project.md").write_text("# other plan\n")
+    assert not is_approved(copy)
+    assert is_approved(videocut_home / "jobs" / "orig")
+
+
+def test_duplicate_and_title_are_human_only(capsys, tmp_path, videocut_home, monkeypatch):
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "h")
+    monkeypatch.setenv("VIDEOCUT_AGENT", "1")
+    code, s, _ = run_tool(capsys, "job", "duplicate", "h")
+    assert code == 1 and "human" in s["error"]
+    code, s, _ = run_tool(capsys, "job", "title", "h", "x")
+    assert code == 1 and "human" in s["error"]
+    assert not (videocut_home / "jobs" / "h-copy-1").exists()
+
+
+def test_title_sets_the_display_title(capsys, tmp_path, videocut_home):
+    run_tool(capsys, "job", "new", str(_video(tmp_path)), "--id", "t")
+    code, s, _ = run_tool(capsys, "job", "title", "t", "Zentrovia  in   one minute")
+    assert code == 0 and s["title"] == "Zentrovia in one minute"
+    assert json.loads((videocut_home / "jobs/t/job.json").read_text())["title"] == s["title"]
+    assert run_tool(capsys, "job", "title", "t", "   ")[0] == 1
+    assert run_tool(capsys, "job", "title", "t", "x" * 121)[0] == 1
+
+
+def test_copy_id_stays_a_valid_id():
+    from videocut.tools.common import ID_RE
+    from videocut.tools.job import copy_id
+
+    long = "a" * 80
+    cid = copy_id(long, taken=lambda i: False)
+    assert ID_RE.fullmatch(cid) and cid.endswith("-copy-1")
+    taken = {"x-copy-1", "x-copy-2"}
+    assert copy_id("x-copy-1", taken=taken.__contains__) == "x-copy-3"
+
+
+def test_a_reused_copy_id_inherits_no_stale_records(capsys, tmp_path, videocut_home):
+    """A deleted copy leaves its approval and decision outside the folder; the next copy
+    with the same id must not count as approved."""
+    import shutil
+
+    from videocut import redaction as red
+    from videocut.tools.job import is_approved
+
+    _approved_job(capsys, tmp_path, videocut_home)
+    assert run_tool(capsys, "job", "duplicate", "orig", "--keep-approval")[1]["approved"]
+    copy = videocut_home / "jobs" / "orig-copy-1"
+    shutil.move(copy, videocut_home / "trash-copy")  # what the app's delete does
+    code, s, _ = run_tool(capsys, "job", "duplicate", "orig")
+    assert code == 0 and s["id"] == "orig-copy-1" and s["approved"] is False
+    assert not is_approved(copy) and red.read_decision(copy) is None

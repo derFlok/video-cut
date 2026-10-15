@@ -943,6 +943,64 @@ progress {
   min-width: 200px;
 }
 
+/* job header: title, rename, menu */
+.titlebar-main {
+  min-width: 0;
+}
+.title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.title-edit {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.title-edit input {
+  width: min(480px, 100%);
+}
+.menu {
+  position: relative;
+}
+.menu-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  padding: 4px;
+}
+.menu-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.menu-list button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.badge-copy {
+  margin-left: 8px;
+  font-family: inherit;
+  font-weight: 500;
+}
+.modal-small {
+  width: min(520px, 100%);
+}
+
 /* personal data dialog */
 .modal-backdrop {
   position: fixed;
@@ -1215,4 +1273,82 @@ progress {
 }
 .hint-error {
   color: var(--error);
+}
+
+/* transcript vocabulary (brand Wörterbuch, terms of a video) */
+.vocab-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.vocab-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+@media (max-width: 640px) {
+  .vocab-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .vocab-row > .field:nth-child(2) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+.vchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 38px;
+  padding: 4px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.vchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  background: var(--surface-2);
+  color: var(--text);
+}
+.vchip-x {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 6px;
+  font-size: 1rem;
+  line-height: 1;
+}
+.vchip-x:hover {
+  color: var(--text);
+}
+.vchips .vchip-input {
+  flex: 1;
+  min-width: 8ch;
+  border: 0;
+  padding: 4px;
+  background: transparent;
+}
+.vocab-suggest {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.vocab-suggest li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
 }

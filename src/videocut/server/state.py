@@ -13,6 +13,7 @@ from ..tools.job import (
     plan_made_for,
     plan_target_stale,
     project_sha,
+    redact_style_view,
     resolved_format,
     resolved_range,
     resolved_style,
@@ -88,9 +89,10 @@ def plan_json(job: Path) -> dict | None:
 
 
 def title(job: Path, data: dict) -> str:
-    t = (plan_json(job) or {}).get("title")
-    if isinstance(t, str) and t.strip():
-        return t.strip()[:120]
+    """The display title: the human's (job.json "title"), else the plan's, else the brief."""
+    for t in (data.get("title"), (plan_json(job) or {}).get("title")):
+        if isinstance(t, str) and t.strip():
+            return t.strip()[:120]
     brief = (data.get("brief") or "").strip().splitlines()
     return brief[0][:120] if brief else job.name
 
@@ -168,6 +170,15 @@ def _cut_style(data: dict) -> tuple[str, str | None]:
     return data.get("cut_style") or "auto", resolved
 
 
+def _redact_style(data: dict) -> dict:
+    """How personal data is hidden: redact_style (the resolved one, null when job.json has
+    an invalid value) and whether it is the brand's default."""
+    try:
+        return redact_style_view(data)
+    except ToolError:
+        return {"redact_style": None, "redact_style_default": False}
+
+
 def _target(job: Path, data: dict) -> dict:
     """The target length as the API shows it: target_s (null: auto), target_resolved
     ({min_s, max_s} or null: no fixed range, also for an invalid value), and whether the
@@ -200,6 +211,34 @@ def cut_stale(job: Path) -> bool:
         return False
 
 
+def overlays_stale(job: Path) -> bool:
+    """The reel's captions/overlays were made before a vocabulary was applied to the
+    captions (job.json overlays.stale): the app offers to set them again (/overlays)."""
+    try:
+        rec = read_job(job).get("overlays")
+        return (
+            isinstance(rec, dict)
+            and bool(rec.get("stale"))
+            and is_approved(job)
+            and (job / MEDIA["reel"]).is_file()
+            and pipeline.cut_done(job)
+        )
+    except (ToolError, OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def transcribe_meta(job: Path) -> dict:
+    meta = _json(job / "work" / "transcribe.json")
+    return meta if isinstance(meta, dict) else {}
+
+
+def words(job: Path) -> list[dict] | None:
+    """work/words.json words, None before transcription."""
+    doc = _json(job / "work" / "words.json")
+    ws = doc.get("words") if isinstance(doc, dict) else None
+    return ws if isinstance(ws, list) else None
+
+
 def source_duration(job: Path) -> float | None:
     """Duration of the camera recording in seconds (work/probe.json), None before ingest."""
     d = (_json(job / "work" / "probe.json") or {}).get("duration")
@@ -224,6 +263,7 @@ def summary(job: Path, ch: Channel | None) -> dict:
         "queued": ch is not None and ch.state == "queued",
         "gate": gate(job, data) if st != "running" else None,
         "title": title(job, data),
+        "copy_of": data.get("copy_of"),
         "thumb_url": f"/api/jobs/{job.name}/media/cover" if cover else None,
     }
 
@@ -277,10 +317,13 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "cut_style": cut_style,
         "cut_style_resolved": style_resolved,
         "cut_stale": cut_stale(job),
+        "overlays_stale": overlays_stale(job),
         **_target(job, data),
+        **_redact_style(data),
         "source_duration_s": source_duration(job),
         "lang": job_lang(data),
         "title": title(job, data),
+        "copy_of": data.get("copy_of"),
         "status": st,
         "stage": stage,
         # when the running stage started (ISO), for "since ... in this step" after a reload

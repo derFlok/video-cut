@@ -2,10 +2,20 @@
 
     redaction       every redact block, mapped through the drawn zoom window into output
                     px, is checked on sampled output frames of its range (first, middle,
-                    last, up to REDACT_SAMPLES): at least REDACT_MIN_SHARE of its pixels
-                    must be the brand background. Flag `redaction_missing` otherwise
+                    last, up to REDACT_SAMPLES): at least REDACT_MIN_SHARE of a solid
+                    block's pixels must be the brand background; a blurred box must show
+                    no sharp edges (_redact_blur.EDGE_MAX) and no text recognition can read
+                    there; a segment that cuts a band off (crop style) must show the
+                    recording without it (its middle frame, _crop_docs). Flag
+                    `redaction_missing` otherwise
                     (a block zoomed fully out of the view, or under a landscape/square
                     speaker bubble, has nothing to hide there; the bubble is left out)
+    text_cut        text a redaction cuts through: text recognition on output frames
+                    around each blocked or blurred box's planned position (before
+                    _redact_grow grew it) must read no line that overlaps it, and on the
+                    recording no line may cross an edge a crop cuts at (first, middle,
+                    last frame of the segment): flag `redaction_partial` (a failure:
+                    half a line stays readable next to or below the box)
     screen time     per screen segment one output frame (its middle) is compared with the
                     screen recording at the mapped screen time (camera time + offset_s)
                     and at +-0.5 s / +-1 s, through the same zoom window: flag
@@ -25,8 +35,9 @@
                     REEL_OCR_STEP s of every screen segment for all of them), the text is
                     found again on the screen recording frame that segment shows (local
                     OCR, _ocr.py); each place it is shown, mapped through the drawn zoom
-                    window into output px, must be solid brand background
-                    (>= LEAK_MIN_SHARE of its px), and so must the candidate's measured
+                    window into output px, must be hidden: solid brand background or a
+                    blurred box without sharp edges (>= LEAK_MIN_SHARE of its px), or cut
+                    off by a crop (outside the view), and so must the candidate's measured
                     text box of that time (or its whole area) in any case. The reel
                     frame itself is read too: the text readable in the screen view is a
                     leak. Flag `redaction_leak` (a failure) with
@@ -56,7 +67,7 @@ import numpy as np
 from .. import edl as edl_mod
 from .. import redaction as red_mod
 from ..paths import tool_env
-from . import _layouts, _ocr
+from . import _image, _layouts, _ocr, _redact_blur, _redact_grow
 from . import _render_plan as plan_mod
 from ._geometry import framed, sized
 from .common import ToolError, binary
@@ -68,6 +79,10 @@ REDACT_SAMPLES = 5
 REDACT_MIN_SHARE = 0.9
 REDACT_TOL = 28  # max per-channel difference to the background colour (yuv420 + H.264)
 REDACT_INSET = 3  # px left out at each edge (chroma bleeding)
+CROP_MARGIN = 3.0  # grey levels the cropped reference must beat the uncropped one by
+PARTIAL_SAMPLES = 3  # output frames read around a box's planned position
+PARTIAL_CUT = 0.25  # share of a read line's height over that position that is a cut line
+PARTIAL_PAD = 24  # output px read around it (at least; and the box's height)
 LEAK_SAMPLES = 5
 LEAK_CHUNK = 32  # reel frames decoded at once by the coverage check
 LEAK_MIN_SHARE = 0.98  # of the text region's px that must be the block colour
@@ -131,7 +146,7 @@ def _frames(reel: Path, numbers: list[int], size: tuple[int, int]) -> dict[int, 
     if not numbers:
         return {}
     want = sorted(set(numbers))
-    sel = "+".join(f"eq(n\\,{n})" for n in want)
+    sel = _image.select_frames(want)
     out = _raw(
         ["-i", str(reel), "-an", "-vf", f"select='{sel}'", "-fps_mode", "passthrough"]
         + ["-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
@@ -149,7 +164,7 @@ def _frame_stream(reel: Path, numbers: list[int], size: tuple[int, int]):
     if not want:
         return
     w, h = size
-    sel = "+".join(f"eq(n\\,{n})" for n in want)
+    sel = _image.select_frames(want)
     cmd = [binary("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-i", str(reel),
            "-an", "-vf", f"select='{sel}'", "-fps_mode", "passthrough", "-f", "rawvideo",
            "-pix_fmt", "rgb24", "-"]  # fmt: skip
@@ -167,19 +182,23 @@ def _frame_stream(reel: Path, numbers: list[int], size: tuple[int, int]):
 
 
 def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
-    """Per redact block: the sampled output frames, the background share and flags."""
+    """Per redact block: the sampled output frames, the background share (solid blocks) or
+    the edge share and the text read there (blurred boxes), and flags. A band the segment
+    crops off is not on the screen view at all (the coverage check maps it outside)."""
     plan = ctx["plan"]
-    todo = []  # (doc, local n, output frame, rect, pip inset)
+    todo = []  # (doc, local n, output frame, rect, pip inset, other blurred boxes)
     docs = []
     for i, seg in ctx["segs"].items():
         r = plan.ranges[i]
-        for n0, n1, x, y, w, h in seg.redact:
+        boxes = [(*b, "block") for b in seg.redact] + [(*b[:6], "blur") for b in seg.blur]
+        for n0, n1, x, y, w, h, style in boxes:
             k = min(REDACT_SAMPLES, n1 - n0 + 1)
             ns = sorted({round(n0 + (n1 - n0) * j / max(k - 1, 1)) for j in range(k)})
             doc = {
                 "segment": r.seg,
                 "t0": round(float((ctx["starts"][i] + n0) / plan.fps), 3),
                 "t1": round(float((ctx["starts"][i] + n1 + 1) / plan.fps), 3),
+                "style": style,
                 "samples": [],
                 "flags": [],
             }
@@ -192,10 +211,11 @@ def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
                 rect = [x0 + REDACT_INSET, y0 + REDACT_INSET, x1 - REDACT_INSET, y1 - REDACT_INSET]
                 if rect[2] <= rect[0] or rect[3] <= rect[1]:
                     continue
-                todo.append((doc, n, ctx["starts"][i] + n, rect, seg.inset))
-    frames = _frames(reel, [f for _, _, f, _, _ in todo], size)
+                blurs = _blur_rects(seg, n) if style == "blur" else []
+                todo.append((doc, n, ctx["starts"][i] + n, rect, seg.inset, blurs))
+    frames = _frames(reel, [f for _, _, f, _, _, _ in todo], size)
     bg = _rgb(ctx["bg"])
-    for doc, _, f, rect, inset in todo:
+    for doc, _, f, rect, inset, blurs in todo:
         img = frames.get(f)
         if img is None:
             continue
@@ -204,12 +224,216 @@ def redaction(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
         seen = _uncovered(rect, inset)
         if not seen.any():  # wholly under the speaker bubble: nothing of it shows
             continue
-        share = float((np.abs(patch - bg).max(axis=2) <= REDACT_TOL)[seen].mean())
-        doc["samples"].append({"t": round(float(f / ctx["plan"].fps), 3), "box": rect,
-                               "bg_share": round(share, 3)})  # fmt: skip
-        if share < REDACT_MIN_SHARE and "redaction_missing" not in doc["flags"]:
+        sample = {"t": round(float(f / ctx["plan"].fps), 3), "box": rect}
+        if doc["style"] == "blur":
+            edges = _edge_share(patch, seen & ~_seams(blurs, img.shape)[y0:y1, x0:x1])
+            read = _redact_blur.readable(np.where(seen[..., None], patch, 0).astype(np.uint8))
+            sample |= {"edge_share": round(edges, 4), **({"read": read} if read else {})}
+            ok = edges <= _redact_blur.EDGE_MAX and not read
+        else:
+            share = float((np.abs(patch - bg).max(axis=2) <= REDACT_TOL)[seen].mean())
+            sample["bg_share"] = round(share, 3)
+            ok = share >= REDACT_MIN_SHARE
+        doc["samples"].append(sample)
+        if not ok and "redaction_missing" not in doc["flags"]:
+            doc["flags"].append("redaction_missing")
+    return docs + _crop_docs(reel, ctx, size)
+
+
+def _over(line: list[float], rect: list[int], cut: float) -> bool:
+    """Whether a read `line` [x0, y0, x1, y1] (px) overlaps `rect` by `cut` of its height
+    (and half its height across: a character)."""
+    lh = line[3] - line[1]
+    oy = min(line[3], rect[3]) - max(line[1], rect[1])
+    ox = min(line[2], rect[2]) - max(line[0], rect[0])
+    return lh > 0 and oy >= cut * lh and ox >= 0.5 * lh
+
+
+def _read_lines(img: np.ndarray, region: list[int]) -> list[tuple[list[float], str]]:
+    """Readable lines (_redact_blur.MIN_CHARS) in `region` of `img`, boxes in img px."""
+    x0, y0, x1, y1 = region
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        return []
+    out = []
+    for ln in _ocr.recognize(np.ascontiguousarray(img[y0:y1, x0:x1], dtype=np.uint8)):
+        if _redact_blur.readable_text(ln["text"]):
+            b = ln["box"]
+            out.append(([x0 + b[0] * (x1 - x0), y0 + b[1] * (y1 - y0),
+                         x0 + b[2] * (x1 - x0), y0 + b[3] * (y1 - y0)], ln["text"]))  # fmt: skip
+    return out
+
+
+def text_cut(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
+    """Text a redaction cut through (flag `redaction_partial`): per blocked or blurred box,
+    lines read on output frames around its planned position that overlap it; per crop,
+    lines on the recording that cross the edge it cuts at."""
+    plan = ctx["plan"]
+    todo, docs = [], []
+    for i, seg in ctx["segs"].items():
+        r = plan.ranges[i]
+        for n0, n1, x, y, w, h in seg.planned:
+            k = min(PARTIAL_SAMPLES, n1 - n0 + 1)
+            ns = sorted({round(n0 + (n1 - n0) * j / max(k - 1, 1)) for j in range(k)})
+            doc = {"segment": r.seg, "kind": "box",
+                   "t0": round(float((ctx["starts"][i] + n0) / plan.fps), 3),
+                   "t1": round(float((ctx["starts"][i] + n1 + 1) / plan.fps), 3),
+                   "samples": [], "flags": []}  # fmt: skip
+            docs.append(doc)
+            for n in ns:
+                rect = _out_rect(seg, n, x, y, w, h)
+                if rect is not None:
+                    todo.append((doc, ctx["starts"][i] + n, rect, seg.view))
+    frames = _frames(reel, [f for _, f, _, _ in todo], size)
+    for doc, f, rect, v in todo:
+        img = frames.get(f)
+        if img is None:
+            doc["flags"].append("redaction_partial")  # fail closed: nothing read
+            continue
+        pad = max(PARTIAL_PAD, rect[3] - rect[1])
+        region = [max(rect[0] - 3 * pad, v.x), max(rect[1] - pad, v.y),
+                  min(rect[2] + 3 * pad, v.x + v.w), min(rect[3] + pad, v.y + v.h)]  # fmt: skip
+        cut = [t for b, t in _read_lines(img, region) if _over(b, rect, PARTIAL_CUT)]
+        doc["samples"].append({"t": round(float(f / plan.fps), 3), "box": rect,
+                               **({"read": cut} if cut else {})})  # fmt: skip
+        if cut and "redaction_partial" not in doc["flags"]:
+            doc["flags"].append("redaction_partial")
+    return docs + _crop_cut_docs(ctx)
+
+
+def _crop_cut_docs(ctx: dict) -> list[dict]:
+    """Per segment that cuts a band off: text lines on the recording (first, middle, last
+    frame) that cross an edge the crop cuts at; flag `redaction_partial`."""
+    plan, sinfo = ctx["plan"], ctx["info"]
+    docs = []
+    for i, seg in ctx["segs"].items():
+        if seg.full_screen in (None, seg.screen):
+            continue
+        (ox, oy), (sw, sh), (fw, fh) = seg.origin, seg.screen, seg.full_screen
+        pad = math.ceil(_redact_grow.SEARCH * _redact_grow._text_px(seg.full_screen))
+        strips = []  # (rect read on the recording, the cut: axis, position)
+        if oy > 0:
+            strips.append(([0, max(oy - pad, 0), fw, min(oy + pad, fh)], 1, oy))
+        if oy + sh < fh:
+            strips.append(([0, max(oy + sh - pad, 0), fw, min(oy + sh + pad, fh)], 1, oy + sh))
+        if ox > 0:
+            strips.append(([max(ox - pad, 0), 0, min(ox + pad, fw), fh], 0, ox))
+        if ox + sw < fw:
+            strips.append(([max(ox + sw - pad, 0), 0, min(ox + sw + pad, fw), fh], 0, ox + sw))
+        doc = {"segment": plan.ranges[i].seg, "kind": "crop",
+               "t0": round(float(ctx["starts"][i] / plan.fps), 3),
+               "t1": round(float((ctx["starts"][i] + seg.frames) / plan.fps), 3),
+               "cuts": [c for _, _, c in strips], "samples": [], "flags": []}  # fmt: skip
+        docs.append(doc)
+        for n in sorted({0, seg.frames // 2, seg.frames - 1}):
+            t = float((seg.screen_frame + n) / plan.fps)
+            img = grab_screen(ctx["screen"], sinfo, t, float(plan.fps))
+            if img is None:
+                if 0 <= t <= sinfo["duration"]:
+                    doc["flags"].append("redaction_partial")  # fail closed
+                continue
+            cut = []
+            for region, axis, at in strips:
+                for b, text in _read_lines(img, region):
+                    lo, hi = b[axis + 0], b[axis + 2]
+                    m = _redact_grow.LINE_CUT * (hi - lo)
+                    if lo < at - m and hi > at + m:
+                        cut.append(text)
+            doc["samples"].append({"t": round(t, 3), **({"read": cut} if cut else {})})
+            if cut and "redaction_partial" not in doc["flags"]:
+                doc["flags"].append("redaction_partial")
+    return docs
+
+
+def _crop_docs(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
+    """Per segment that cuts a band off (crop style): its middle frame's screen view must
+    match the recording without the band (the window from the kept area's origin) clearly
+    better than the same window on the whole recording (what an uncropped view shows):
+    by CROP_MARGIN grey levels, or within MAP_MIN when both look alike (a plain screen).
+    Redacted boxes are left out. Flag `redaction_missing` otherwise (fail closed: also
+    when a frame cannot be read)."""
+    plan, sinfo = ctx["plan"], ctx["info"]
+    crops = {i: s for i, s in ctx["segs"].items() if s.full_screen not in (None, s.screen)}
+    frames = _frames(reel, [ctx["starts"][i] + s.frames // 2 for i, s in crops.items()], size)
+    docs = []
+    for i, seg in crops.items():
+        n = seg.frames // 2
+        img = frames.get(ctx["starts"][i] + n)
+        v = seg.view
+        doc = {"segment": plan.ranges[i].seg, "style": "crop",
+               "t0": round(float(ctx["starts"][i] / plan.fps), 3),
+               "t1": round(float((ctx["starts"][i] + seg.frames) / plan.fps), 3),
+               "kept": [*seg.origin, *seg.screen], "flags": []}  # fmt: skip
+        docs.append(doc)
+        t = float((seg.screen_frame + n) / plan.fps)
+        win = _layouts.window_at(seg, n)
+        refs = [_screen_view(ctx["screen"], t, w, v, sinfo) for w in (_in_recording(seg, win), win)]
+        if img is None or any(r is None for r in refs):
+            doc["flags"].append("redaction_missing")  # fail closed: nothing to compare
+            continue
+        mask = _uncovered([v.x, v.y, v.x + v.w, v.y + v.h], seg.inset)
+        for n0, n1, x, y, w, h, *_ in [*seg.redact, *seg.blur]:
+            rect = _out_rect(seg, n, x, y, w, h) if n0 <= n <= n1 else None
+            if rect:
+                mask[rect[1] - v.y : rect[3] - v.y, rect[0] - v.x : rect[2] - v.x] = False
+        shown = _grey(img[v.y : v.y + v.h, v.x : v.x + v.w].astype(float))
+        cropped, whole = (
+            round(float(np.abs(_grey(r) - shown)[mask].mean()) if mask.any() else 0.0, 2)
+            for r in refs
+        )
+        doc |= {"diff": cropped, "diff_uncropped": whole}
+        if not (cropped <= MAP_MIN or cropped + CROP_MARGIN <= whole):
             doc["flags"].append("redaction_missing")
     return docs
+
+
+def _edge_share(patch: np.ndarray, seen: np.ndarray) -> float:
+    """_redact_blur.edge_share of the px of `patch` in `seen` (not under the bubble)."""
+    g = patch[..., 0] * 0.299 + patch[..., 1] * 0.587 + patch[..., 2] * 0.114
+    if g.shape[0] < 2 or g.shape[1] < 2:
+        return 0.0
+    step = np.maximum(np.abs(np.diff(g, axis=1))[:-1, :], np.abs(np.diff(g, axis=0))[:, :-1])
+    inner = seen[:-1, :-1] & seen[1:, :-1] & seen[:-1, 1:]
+    return float((step >= _redact_blur.EDGE_LEVEL)[inner].mean()) if inner.any() else 0.0
+
+
+def _shown_rect(seg: _layouts.Segment, rect: tuple[int, int, int, int]):
+    """A rect (x, y, w, h) of the recording in px of the screen the segment shows (a crop
+    moves its origin; what lies in the cropped band maps outside the view)."""
+    x, y, w, h = rect
+    return x - seg.origin[0], y - seg.origin[1], w, h
+
+
+def _blur_rects(seg: _layouts.Segment, n: int) -> list[list[int]]:
+    """Output rects of the blurred boxes of `seg` drawn at local frame n."""
+    rects = (_out_rect(seg, n, x, y, w, h) for n0, n1, x, y, w, h, _ in seg.blur if n0 <= n <= n1)
+    return [r for r in rects if r is not None]
+
+
+def _seams(rects: list[list[int]], shape) -> np.ndarray:
+    """Mask of the output px within REDACT_INSET of an edge of one of `rects`: where two
+    overlapping blurred boxes meet, each blurred on its own, the step is no text."""
+    mask = np.zeros(shape[:2], bool)
+    k = REDACT_INSET
+    for x0, y0, x1, y1 in rects:
+        for a, b in ((y0, y0), (y1, y1)):
+            mask[max(a - k, 0) : b + k, max(x0 - k, 0) : x1 + k] = True
+        for a, b in ((x0, x0), (x1, x1)):
+            mask[max(y0 - k, 0) : y1 + k, max(a - k, 0) : b + k] = True
+    return mask
+
+
+def _blurred(seg: _layouts.Segment, n: int, img: np.ndarray) -> np.ndarray:
+    """Mask of the output px that lie in a blurred box of `seg` active at local frame n
+    and show no sharp edge there (a blur that was not drawn shows the text's edges)."""
+    mask = np.zeros(img.shape[:2], bool)
+    rects = _blur_rects(seg, n)
+    seams = _seams(rects, img.shape)
+    for x0, y0, x1, y1 in rects:
+        patch = img[y0:y1, x0:x1].astype(int)
+        seen = _uncovered([x0, y0, x1, y1], seg.inset) & ~seams[y0:y1, x0:x1]
+        if _edge_share(patch, seen) <= _redact_blur.EDGE_MAX:
+            mask[y0:y1, x0:x1] = True
+    return mask
 
 
 def _src_rect(box, size) -> tuple[int, int, int, int]:
@@ -304,6 +528,7 @@ def coverage(reel: Path, ctx: dict, size: tuple[int, int], cands: list[dict]) ->
         shown = _ocr.find_many(np.ascontiguousarray(img[v.y : v.y + v.h, v.x : v.x + v.w]),
                                needles)  # fmt: skip
         out = []
+        blurred = _blurred(seg, n, img)
         for j in sorted(idx):
             c = texts[j]
             # where the text is on the frame shown, and where the measurement says it is
@@ -314,15 +539,16 @@ def coverage(reel: Path, ctx: dict, size: tuple[int, int], cands: list[dict]) ->
                             "where": f"at {t_out} s (screen frame not readable)",
                             "flags": ["redaction_unchecked"]})  # fmt: skip
             for box, source in boxes:
-                rect = _out_rect(seg, n, *_src_rect(box, info["size"]))
+                rect = _out_rect(seg, n, *_shown_rect(seg, _src_rect(box, info["size"])))
                 if rect is None:
-                    continue  # zoomed out of the view
+                    continue  # zoomed out of the view, or cut off (crop)
                 seen = _uncovered(rect, seg.inset)
                 if not seen.any():
                     continue  # under the speaker bubble
                 x0, y0, x1, y1 = rect
                 patch = img[y0:y1, x0:x1].astype(int)
-                share = float((np.abs(patch - bg).max(axis=2) <= REDACT_TOL)[seen].mean())
+                hidden = (np.abs(patch - bg).max(axis=2) <= REDACT_TOL) | blurred[y0:y1, x0:x1]
+                share = float(hidden[seen].mean())
                 doc = {"id": c["id"], "segment": seg_no, "t": t_out, "source": source,
                        "box": rect, "share": round(share, 3), "flags": []}  # fmt: skip
                 if share < LEAK_MIN_SHARE:
@@ -434,6 +660,11 @@ def _screen_view(src: Path, t: float, win, view, sinfo: dict) -> np.ndarray | No
     return np.frombuffer(out, np.uint8).reshape(view.h, view.w, 3).astype(float)
 
 
+def _in_recording(seg: _layouts.Segment, win):
+    """A zoom window of the screen shown -> of the recording (a crop moves the origin)."""
+    return (win[0] + seg.origin[0], win[1] + seg.origin[1], win[2])
+
+
 def screen_time(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
     """Per screen segment: grey difference of its middle frame to the screen recording at
     the mapped time and at MAP_OFFSETS, and `screen_time_mismatch` when one is clearly
@@ -449,16 +680,19 @@ def screen_time(reel: Path, ctx: dict, size: tuple[int, int]) -> list[dict]:
             continue
         v = seg.view
         mask = _uncovered([v.x, v.y, v.x + v.w, v.y + v.h], seg.inset)
-        for n0, n1, x, y, w, h in seg.redact:
+        for n0, n1, x, y, w, h, *_ in [*seg.redact, *seg.blur]:
             rect = _out_rect(seg, n, x, y, w, h) if n0 <= n <= n1 else None
             if rect:
                 mask[rect[1] - v.y : rect[3] - v.y, rect[0] - v.x : rect[2] - v.x] = False
         reel_view = _grey(img[v.y : v.y + v.h, v.x : v.x + v.w].astype(float))
-        win = _layouts.window_at(seg, n)
+        win = _in_recording(seg, _layouts.window_at(seg, n))
         t = float((seg.screen_frame + n) / plan.fps)
+        # each reference is one seek into the full-size recording (~0.5 s): read them at once
+        offsets = (0.0, *MAP_OFFSETS)
+        asks = [(t + dt, win, v) for dt in offsets]
+        refs = _ocr.pmap(lambda a: _screen_view(ctx["screen"], *a, sinfo), asks)
         diffs = {}
-        for dt in (0.0, *MAP_OFFSETS):
-            ref = _screen_view(ctx["screen"], t + dt, win, v, sinfo)
+        for dt, ref in zip(offsets, refs, strict=True):
             if ref is None:
                 continue
             d = np.abs(_grey(ref) - reel_view)
@@ -569,9 +803,9 @@ def readability(ctx: dict) -> list[dict]:
 
 
 def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]) -> dict:
-    """All product-demo checks: {"coverage", "redaction", "screen_time", "clamped", "readability",
-    "overlap", "spans", "decision"}; only "decision" and the screenshot part of "coverage"
-    for a face-only EDL."""
+    """All product-demo checks: {"coverage", "redaction", "text_cut", "screen_time",
+    "clamped", "readability", "overlap", "spans", "decision"}; only "decision" and the
+    screenshot part of "coverage" for a face-only EDL."""
     try:
         gaps = decision_gaps(job, data)
         ctx = context(job, data, size)
@@ -583,6 +817,7 @@ def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]
         if ctx is None:
             return {k: v for k, v in (("decision", gaps), ("coverage", shots)) if v}
         red_docs, time_docs = redaction(reel, ctx, size), screen_time(reel, ctx, size)
+        cut_docs = text_cut(reel, ctx, size)
         cover = coverage(reel, ctx, size, cands) + shots
     except (ToolError, ValueError, _ocr.OcrError) as e:  # fail closed: unchecked is not ok
         return {"error": f"screen checks failed: {e}"}
@@ -590,6 +825,7 @@ def check(job: Path, data: dict, render: dict, reel: Path, size: tuple[int, int]
         "decision": gaps,
         "coverage": cover,
         "redaction": red_docs,
+        "text_cut": cut_docs,
         "screen_time": time_docs,
         "clamped": clamped_info(render),
         "readability": readability(ctx),

@@ -7,18 +7,26 @@ import type {
   Brand,
   BrandSummary,
   CutStyleChoice,
+  RedactStyle,
   Format,
   FormatChoice,
   JobDetail,
   JobEvent,
   JobSummary,
+  JobVocabulary,
   Plan,
   RedactionDecision,
   Session,
   TargetChoice,
   TargetRange,
   VideoType,
+  VocabEntry,
 } from "./types";
+
+/** POST /api/jobs/{id}/vocabulary/apply. */
+export type VocabularyApplied = JobVocabulary & {
+  result: { applied: number; terms: Record<string, number>; caption_words: number; overlays_stale: boolean };
+};
 
 /** PUT /api/jobs/{id}/target. */
 export interface TargetResult {
@@ -176,8 +184,11 @@ export const api = {
       format?: FormatChoice;
       brief?: string;
       cut_style?: CutStyleChoice;
+      redact_style?: RedactStyle;
       /** Seconds, or null for automatic (sent as "auto"). */
       target_s?: TargetChoice;
+      /** The video's own transcript vocabulary. */
+      vocabulary?: VocabEntry[];
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -188,7 +199,9 @@ export const api = {
     if (fields.format) form.append("format", fields.format);
     if (fields.brief) form.append("brief", fields.brief);
     if (fields.cut_style) form.append("cut_style", fields.cut_style);
+    if (fields.redact_style) form.append("redact_style", fields.redact_style);
     if (fields.target_s !== undefined) form.append("target_s", fields.target_s === null ? "auto" : String(fields.target_s));
+    if (fields.vocabulary?.length) form.append("vocabulary", JSON.stringify(fields.vocabulary));
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);
@@ -203,6 +216,10 @@ export const api = {
   },
   start: (id: string) => call<unknown>("POST", `${J(id)}/start`),
   remove: (id: string) => call<unknown>("DELETE", J(id)),
+  /** Copy the job; keep_approval takes over the approval and the personal-data decision. */
+  duplicate: (id: string, body: { title?: string; keep_approval: boolean }) =>
+    call<JobSummary>("POST", `${J(id)}/duplicate`, body),
+  setTitle: (id: string, title: string) => call<{ id: string; title: string }>("PUT", `${J(id)}/title`, { title }),
   events: (id: string, onEvent: (ev: JobEvent) => void, onError: () => void) =>
     transport.events(`${J(id)}/events`, onEvent, onError),
 
@@ -213,10 +230,20 @@ export const api = {
   approve: (id: string, plan_sha: string, redaction: RedactionDecision | null) =>
     call<unknown>("POST", `${J(id)}/approve`, redaction ? { plan_sha, redaction } : { plan_sha }),
   setCutStyle: (id: string, cut_style: CutStyleChoice) => call<JobDetail>("PUT", `${J(id)}/cut-style`, { cut_style }),
+  /** How personal data is hidden; a reel that hid it otherwise goes stale (recut). */
+  setRedactStyle: (id: string, redact_style: RedactStyle) =>
+    call<{ redact_style: RedactStyle; cut_stale: boolean }>("PUT", `${J(id)}/redact-style`, { redact_style }),
   recut: (id: string) => call<unknown>("POST", `${J(id)}/recut`),
   /** Store the target length; a plan made for another one goes stale (plan again). */
   setTarget: (id: string, target_s: TargetChoice) =>
     call<TargetResult>("PUT", `${J(id)}/target`, { target_s: target_s === null ? "auto" : target_s }),
+  vocabulary: (id: string) => call<JobVocabulary>("GET", `${J(id)}/vocabulary`),
+  saveVocabulary: (id: string, vocabulary: VocabEntry[]) =>
+    call<JobVocabulary>("PUT", `${J(id)}/vocabulary`, { vocabulary }),
+  /** Apply brand + job vocabulary to the existing transcript (and captions). */
+  applyVocabulary: (id: string) => call<VocabularyApplied>("POST", `${J(id)}/vocabulary/apply`),
+  /** Set captions and overlays again on the kept cut (after the vocabulary changed them). */
+  redoOverlays: (id: string) => call<unknown>("POST", `${J(id)}/overlays`),
   feedback: (id: string, text: string, at_s?: number) =>
     call<unknown>("POST", `${J(id)}/feedback`, at_s === undefined ? { text } : { text, at_s }),
 
