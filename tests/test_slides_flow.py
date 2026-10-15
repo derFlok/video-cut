@@ -342,6 +342,7 @@ def test_views_never_take_a_slide_layout():
 # ---------------------------------------------------------------- personal data on pages
 
 
+@pytest.mark.media
 def test_slide_pages_are_read_for_personal_data(monkeypatch, capsys):
     from videocut.tools import redact
 
