@@ -9,12 +9,12 @@ Licences checked on 2026-10-16.
 | Component | Use | Licence | How it gets here |
 |---|---|---|---|
 | [uv](https://github.com/astral-sh/uv) 0.13.0 | Python toolchain | MIT OR Apache-2.0 | downloaded |
-| [CPython](https://www.python.org) 3.12 ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)) | Python runtime | PSF-2.0 (bundled libraries under their own licences) | downloaded by uv |
+| [CPython](https://www.python.org) 3.12 ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)) | Python runtime | PSF-2.0 (bundled libraries under their own licences) | downloaded (3.12.15, SHA-256 pinned in `manifest/tools.json`), installed by uv |
 | [Node.js](https://nodejs.org) 24.21.0 | renderer runtime, UI build | MIT | downloaded |
 | [FFmpeg](https://ffmpeg.org) 9.0.2 `ffmpeg` + `ffprobe` (build by [Martin Riedl](https://ffmpeg.martin-riedl.de), [build script](https://git.martin-riedl.de/ffmpeg/build-script) Apache-2.0) | cutting, encoding, filters | GPL-3.0-or-later (configured `--enable-gpl --enable-version3`, no `--enable-nonfree`; includes libx264, libx265, OpenH264, VVenC and others) | downloaded at install time; **not redistributed** by this project |
 | [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) `deep-filter` 0.5.6, including the DeepFilterNet3 model compiled into the binary | noise reduction | MIT OR Apache-2.0 (the repository licence covers the bundled [models](https://github.com/Rikorose/DeepFilterNet/tree/main/models)) | downloaded |
 | [Playwright](https://playwright.dev) `playwright-core` 1.63.0 | drives the headless browser | Apache-2.0 | npm |
-| [Chrome Headless Shell](https://developer.chrome.com/blog/chrome-headless-shell) 153.0.8010.12 (Playwright revision 1243) | overlay rendering | BSD-3-Clause ([Chromium](https://www.chromium.org)) plus third-party components under their own licences, including LGPL-2.1 (see `LICENSE.headless_shell` in the download) | Playwright installer |
+| [Chrome Headless Shell](https://developer.chrome.com/blog/chrome-headless-shell) 153.0.8010.12 (Playwright revision 1243) | overlay rendering | BSD-3-Clause ([Chromium](https://www.chromium.org)) plus third-party components under their own licences, including LGPL-2.1 (see `LICENSE.headless_shell` in the download) | downloaded (SHA-256 pinned in `manifest/tools.json`) |
 | [React](https://react.dev) + React DOM 19.2.0 (+ `scheduler`) | local web UI | MIT | npm; compiled into the locally built UI |
 | [FastAPI](https://github.com/fastapi/fastapi), [Starlette](https://github.com/encode/starlette), [Uvicorn](https://github.com/encode/uvicorn), [python-multipart](https://github.com/Kludex/python-multipart) | local web server | MIT / BSD-3-Clause / BSD-3-Clause / Apache-2.0 | Python package |
 | [NumPy](https://numpy.org) | numerics | BSD-3-Clause (with bundled 0BSD, MIT, Zlib, CC0-1.0 parts) | Python package |
@@ -49,8 +49,13 @@ app bundle that contains `.tools/` or `.venv/`) must comply with the GPL-3.0 and
 The repository itself contains only this project's own code and text (Apache-2.0, see
 [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE)) plus the adapted parts credited below (MIT, compatible
 with Apache-2.0). It contains no fonts, images, icons, audio, video or model files: the neutral
-example brand uses the system font (`system-ui`). Anything of that kind added later (for example
-a launcher icon) must be generated or come from a permissive source and be listed here.
+example brand uses the system font (`system-ui`). Anything of that kind added later must be
+generated or come from a permissive source and be listed here.
+
+- Launcher icon (`Video Cut.app`): no image file in the repository. `videocut launcher` draws
+  it on the person's Mac from code (`src/videocut/launcher.py` `icon_png`: a grey rounded
+  square with a play triangle, Apache-2.0 like the rest of this project); no third-party
+  artwork.
 
 ## Design credits
 
