@@ -1304,7 +1304,7 @@ def run(
     slides_wish: str | None = None,
     plan_feedback_slide: str | None = None,
 ) -> int:
-    if not agent.shutil.which("claude"):
+    if not agent.claude_cli.exe():
         raise RunError("Claude Code is not installed (see docs/AUTH.md).")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")

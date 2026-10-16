@@ -28,7 +28,7 @@ __all__ = ["create_app", "serve"]
 def serve(port: int = 4300, open_browser: bool = True) -> None:
     import uvicorn
 
-    from .. import run
+    from .. import launcher, run
 
     run.install_stdout_router()  # run threads and request threads capture tool output
     from ..tools.common import home
@@ -36,14 +36,18 @@ def serve(port: int = 4300, open_browser: bool = True) -> None:
     # staging folders of uploads a killed server left behind (multi-GB possible)
     shutil.rmtree(home() / "uploads", ignore_errors=True)
     token = secrets.token_urlsafe(24)
-    app = create_app(token=token, port=port)
+    server: uvicorn.Server | None = None
+
+    def stop() -> None:  # POST /api/shutdown (the app's "Beenden" button)
+        if server is not None:
+            server.should_exit = True
+
+    app = create_app(token=token, port=port, on_shutdown=stop)
     url = f"http://127.0.0.1:{port}/?t={token}"
     print(f"Video Cut is running: {url}\nStop with Ctrl+C.", flush=True)
     if not app.state.ui_built:
         print("The app is not built yet: run ./start.sh (or `videocut setup`).", flush=True)
-    if open_browser:
-        webbrowser.open(url)
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host="127.0.0.1",
         port=port,
@@ -51,3 +55,12 @@ def serve(port: int = 4300, open_browser: bool = True) -> None:
         access_log=False,
         timeout_graceful_shutdown=2,
     )
+    server = uvicorn.Server(config)
+    # the launcher finds a running app here (port and this start's link, mode 0600)
+    launcher.write_state(port, token)
+    try:
+        if open_browser:
+            webbrowser.open(url)
+        server.run()
+    finally:
+        launcher.clear_state()

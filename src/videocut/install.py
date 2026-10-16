@@ -1,4 +1,8 @@
-"""Install pinned tools into .tools/ and models into ~/VideoCut/models. Idempotent."""
+"""Install pinned tools into .tools/ and models into ~/VideoCut/models.
+
+Idempotent and resumable: a finished step is recorded in .tools/installed.json and skipped;
+an interrupted download continues from its part file (download.py, .tools/downloads/).
+`./start.sh` prints steps 1-3 (this Mac, uv, Python); this module prints steps 4-7."""
 
 import json
 import os
@@ -36,8 +40,32 @@ def _make_exec(p: Path) -> None:
     p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+TOTAL_STEPS = 7
+DOWNLOADS = TOOLS / "downloads"  # archives while they download (resumable part files)
+
+
 def _step(msg: str) -> None:
-    print(f"\033[1m▸ {msg}\033[0m", flush=True)
+    print(f"  \033[1m▸\033[0m {msg}", flush=True)
+
+
+def _minutes(mb: float, mbit: int = 100) -> str:
+    """Rough download time on a typical line: 1.6 GB on 100 Mbit/s -> "about 2 minutes"."""
+    s = mb * 8 / mbit
+    return (
+        "under a minute"
+        if s < 60
+        else f"about {round(s / 60)} minute" + ("s" if round(s / 60) != 1 else "")
+    )
+
+
+def headline(n: int, what: str, mb: float | None = None, done: bool = False) -> None:
+    size = f", {_size(mb)}, {_minutes(mb)} on 100 Mbit/s" if mb and not done else ""
+    tail = " (already done)" if done else ""
+    print(f"\033[1mStep {n}/{TOTAL_STEPS}: {what}{size}{tail}\033[0m", flush=True)
+
+
+def _size(mb: float) -> str:
+    return f"{mb / 1000:.1f} GB" if mb >= 1000 else f"{mb:.0f} MB"
 
 
 def install_node() -> None:
@@ -47,9 +75,10 @@ def install_node() -> None:
         return
     _step(f"Installing Node {t['version']}")
     with tempfile.TemporaryDirectory(dir=TOOLS) as tmp:
-        archive = fetch(t["url"], t["sha256"], Path(tmp) / "node.tar.gz", "node")
+        archive = fetch(t["url"], t["sha256"], DOWNLOADS / f"node-{t['version']}.tar.gz", "node")
         with tarfile.open(archive) as tf:
             tf.extractall(tmp, filter="tar")
+        archive.unlink()
         extracted = next(p for p in Path(tmp).iterdir() if p.is_dir())
         shutil.rmtree(target, ignore_errors=True)
         shutil.move(extracted, target)
@@ -67,9 +96,10 @@ def install_zipped_binary(name: str) -> None:
         return
     _step(f"Installing {name} {t['version']}")
     with tempfile.TemporaryDirectory(dir=TOOLS) as tmp:
-        archive = fetch(t["url"], t["sha256"], Path(tmp) / f"{name}.zip", name)
+        archive = fetch(t["url"], t["sha256"], DOWNLOADS / f"{name}-{t['version']}.zip", name)
         with zipfile.ZipFile(archive) as zf:
             zf.extract(name, tmp)
+        archive.unlink()
         shutil.move(Path(tmp) / name, dest)
     _make_exec(dest)
     _mark(name, t["sha256"])
@@ -181,16 +211,51 @@ def install_model(name: str) -> None:
         _mark(f"model:{name}", m["sha256"])
 
 
+TOOL_NAMES = ("node", "ffmpeg", "ffprobe", "deep-filter")
+# Measured download sizes (MB) of the parts that are not single pinned files.
+RENDERER_MB = 120  # renderer npm packages + headless Chromium
+APP_MB = 60  # app npm packages (the build itself is local)
+
+
+def _tools_done() -> bool:
+    for name in TOOL_NAMES:
+        t = manifest.tool(name)
+        dest = TOOLS / f"node-{t['version']}" if name == "node" else BIN / name
+        if not _done(name, t["sha256"], dest):
+            return False
+    return True
+
+
 def run(models: bool = True) -> None:
     BIN.mkdir(parents=True, exist_ok=True)
     MODELS.mkdir(parents=True, exist_ok=True)
+    tools_mb = sum(manifest.tool(n).get("approx_size_mb", 0) for n in TOOL_NAMES)
+    headline(4, "tools: Node, FFmpeg, FFprobe, DeepFilterNet", tools_mb, _tools_done())
     install_node()
     install_zipped_binary("ffmpeg")
     install_zipped_binary("ffprobe")
     install_plain_binary("deep-filter")
+    from .download import sha256_of
+
+    lock = sha256_of(RENDERER / "package-lock.json")
+    r_done = _done("renderer", lock, RENDERER / "node_modules") and _done("chromium", lock)
+    headline(5, "overlay renderer and headless Chromium", RENDERER_MB, r_done)
     install_renderer()
+    headline(6, "the app (packages, then a local build)", APP_MB)
     build_app()
-    if models:
-        for name, m in manifest.models().items():
-            if m.get("default"):
-                install_model(name)
+    wanted = {n: m for n, m in manifest.models().items() if m.get("default")} if models else {}
+    if not wanted:
+        headline(7, "models (skipped: --no-models)", done=False)
+        return
+    mb = sum(m.get("approx_size_gb", 0) * 1000 for m in wanted.values())
+    all_done = all(_model_done(n) for n in wanted)
+    headline(7, f"models: speech recognition and face tracking, into {MODELS}", mb, all_done)
+    for name in wanted:
+        install_model(name)
+
+
+def _model_done(name: str) -> bool:
+    m = manifest.models()[name]
+    if m["kind"] == "huggingface":
+        return _done(f"model:{name}", m["revision"], MODELS / name)
+    return _done(f"model:{name}", m["sha256"], MODELS / m["filename"])

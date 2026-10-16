@@ -2,24 +2,39 @@
 
 import json
 import subprocess
+from pathlib import Path
 
-from .paths import HOME
+from .paths import state_dir
 
-FILE = HOME / "settings.json"
+
+def path() -> Path:
+    """$VIDEOCUT_HOME/settings.json, read at call time (tests set VIDEOCUT_HOME per test)."""
+    return state_dir().parent / "settings.json"
+
 KEYCHAIN_SERVICE = "videocut"
 KEYCHAIN_ACCOUNT = "anthropic-api-key"
 DEFAULTS = {"auth": "local", "model": None}
 
 
 def load() -> dict:
-    data = json.loads(FILE.read_text()) if FILE.exists() else {}
+    f = path()
+    data = json.loads(f.read_text()) if f.exists() else {}
     return {**DEFAULTS, **data}
+
+
+def setup_done() -> bool:
+    """The first-start screen was answered (or the mode was chosen with `videocut auth`
+    before the screen existed)."""
+    f = path()
+    data = json.loads(f.read_text()) if f.exists() else {}
+    return bool(data.get("setup_done")) or "auth" in data
 
 
 def save(**changes) -> dict:
     data = {**load(), **changes}
-    FILE.parent.mkdir(parents=True, exist_ok=True)
-    FILE.write_text(json.dumps(data, indent=2))
+    f = path()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(data, indent=2))
     return data
 
 

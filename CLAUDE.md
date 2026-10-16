@@ -1,5 +1,17 @@
 # CLAUDE.md — Video Cut
 
+## If you are a person's Claude Code helping them install or use Video Cut
+
+Someone asked you to install, start, repair, update or remove Video Cut on their Mac. Load
+the skill `install-videocut` (`.claude/skills/install-videocut/SKILL.md`) and follow it; the
+plain-language overview for the person is `INSTALL.md`. Short version: download the code
+with `curl` into `~/VideoCut/app` (never `git`, `sudo` or Homebrew), run `./start.sh`, then
+`videocut launcher`, and hand over to the app's first-start screen. On problems run
+`videocut doctor --json` and follow each failed check's `fix`. Never read `~/.claude` or the
+person's API key. The rules below are for developing Video Cut, not for installing it.
+
+## Developing Video Cut
+
 Read `docs/BRIEF.md` (target design) and `docs/ARCHITECTURE.md` (current state) before changing
 anything substantial.
 
