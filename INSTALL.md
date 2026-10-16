@@ -9,7 +9,7 @@
 - A Mac with Apple Silicon (M1 or newer) and macOS 14 or newer.
 - About 8 GB of free disk space (15 GB recommended).
 - Claude Code, already installed and signed in (the desktop app or the command line).
-- About 10 minutes. The installation downloads about 2.5 GB.
+- About 10 minutes. The installation downloads about 2.5 GB and uses about 5–6 GB of disk.
 
 You do not need a terminal, developer tools, Homebrew or an administrator password.
 
@@ -61,7 +61,7 @@ two ways to connect and the terms that apply.
 - Einen Mac mit Apple-Chip (M1 oder neuer) und macOS 14 oder neuer.
 - Etwa 8 GB freien Speicher (15 GB empfohlen).
 - Claude Code, schon installiert und angemeldet (die Desktop-App oder die Kommandozeile).
-- Etwa 10 Minuten. Die Installation lädt etwa 2,5 GB herunter.
+- Etwa 10 Minuten. Die Installation lädt etwa 2,5 GB herunter und belegt etwa 5–6 GB.
 
 Du brauchst kein Terminal, keine Entwicklerwerkzeuge, kein Homebrew und kein
 Administrator-Passwort.

@@ -16,7 +16,7 @@ Fixed facts:
 - Repository: `https://github.com/derFlok/video-cut`. Download it as a tarball with `curl`.
 - Needs a Mac with Apple Silicon (M1 or newer), macOS 14+, about 8 GB free disk (15 GB
   recommended). A first install downloads about 2.5 GB (tools ~0.9 GB, speech model 1.6 GB)
-  and takes about 5 minutes on 100 Mbit/s. On disk afterwards: about 4 GB.
+  and takes about 5 minutes on 100 Mbit/s. On disk afterwards: about 5–6 GB.
 
 Never:
 

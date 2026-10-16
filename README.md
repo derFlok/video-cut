@@ -19,7 +19,7 @@ You do not need any technical knowledge. Claude Code does the installation for y
 
    > Install https://github.com/derFlok/video-cut for me and guide me through it.
 
-3. **Follow what Claude Code says.** It downloads Video Cut to `~/VideoCut/app`, installs everything it needs (mostly downloads, about 6 GB), puts **Video Cut** into the *Applications* folder in your home folder and opens it.
+3. **Follow what Claude Code says.** It downloads Video Cut to `~/VideoCut/app`, installs everything it needs (it downloads about 2.5 GB and uses about 5–6 GB of disk), puts **Video Cut** into the *Applications* folder in your home folder and opens it.
 
 From then on you start Video Cut with a double-click on **Video Cut** in `~/Applications` (in Finder: *Applications* inside your home folder); you never need a terminal. If something does not work, or to update, just tell Claude Code, for example *"Video Cut does not start"* or *"Update Video Cut"*.
 
@@ -54,7 +54,7 @@ Video Cut is free and open source. Claude is paid through your own access:
 - A Mac with Apple Silicon (M1 or newer); Intel Macs are not supported
 - macOS 14 Sonoma or newer
 - 16 GB memory recommended
-- About 6 GB free disk space for the installation, plus room for your videos (the installer needs at least 8 GB free and recommends 15 GB)
+- About 5–6 GB of disk space for the installation (about 2.5 GB is downloaded), plus room for your videos (the installer needs at least 8 GB free and recommends 15 GB)
 - Claude Code, signed in with a Claude Pro or Max plan or an Anthropic API key
 
 ## Uninstall

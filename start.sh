@@ -62,7 +62,7 @@ free_gb=$(( $(df -k "$ROOT" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
 note "macOS $(sw_vers -productVersion), Apple Silicon, ${ram_gb} GB RAM, ${free_gb} GB free."
 if [[ ! -f "$TOOLS/installed.json" ]]; then
   note "A first install downloads about 2.3 GB (tools ~0.7 GB, speech model ~1.6 GB) and"
-  note "uses about 5 GB of disk: roughly 5 minutes on 100 Mbit/s. Nothing needs sudo."
+  note "uses about 5-6 GB of disk: roughly 5 minutes on 100 Mbit/s. Nothing needs sudo."
 fi
 
 # --- 2. uv (Python toolchain), pinned + checksum-verified ---------------------
