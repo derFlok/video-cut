@@ -28,9 +28,10 @@ Fixed facts:
 Never:
 
 - use `sudo`, Homebrew, MacPorts or Rosetta, or install the Xcode command line tools;
-- run `git` or `/usr/bin/python3`: on a fresh Mac both are stubs that open a large "install
-  developer tools" dialog. `curl`, `tar`, `plutil` and `open` are always there and are all you
-  need;
+- run `git`, `python3`, `pip`, `make`, `clang` or `brew` at all, not even with `--version`
+  to look around: on a fresh Mac `git` and `python3` are stubs that open a large "install
+  developer tools" dialog. `curl`, `tar`, `plutil`, `uname`, `sw_vers`, `df` and `open` are
+  always there and are all you need;
 - read, write or create anything in `~/.claude` (Claude Code's own settings and sign-in), and
   never read the person's API key; they type a key only into Video Cut's own settings page;
 - send the person to the Terminal or give them a command to type;
@@ -102,7 +103,8 @@ Ask the person only what is theirs to decide. A normal install needs no question
    - The two ways, if they ask: their own Claude subscription (for personal use, Anthropic's
      terms; for a team or a company an API key is the right way) or an API key from the
      Anthropic Console. That is their choice; do not decide it.
-8. **Final message.** Short, in their language, no paths, ports, tool names or sizes. German:
+8. **Final message.** Send exactly this, in their language, and nothing else (no paths,
+   ports, tool names, sizes or lists). German:
 
    > Video Cut ist installiert und im Browser geöffnet. Zum nächsten Start: Programme → Video
    > Cut. Bei Fragen oder Problemen sag mir einfach: „Video Cut startet nicht“ oder „Video Cut
@@ -114,8 +116,9 @@ Ask the person only what is theirs to decide. A normal install needs no question
    > Video Cut. If you have questions or problems, just tell me: "Video Cut does not start" or
    > "Update Video Cut".
 
-   You may add one line about the welcome screen (connect Claude, then the first video; tip:
-   record in 4K landscape or straight in portrait).
+   At most one more sentence: "The welcome screen in the browser now shows how to connect
+   Claude." / „Der Willkommens-Bildschirm im Browser zeigt dir jetzt, wie du Claude
+   verbindest.“
 
 ## Repair ("Video Cut startet nicht", errors, the launcher shows an alert)
 

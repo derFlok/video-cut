@@ -8,6 +8,7 @@
 |---|---|
 | `start.sh` | entry point: steps 1-3 (this Mac, `uv`, Python), then `videocut setup` (steps 4-7), `doctor`, a summary; resumable and idempotent |
 | `INSTALL.md`, `.claude/skills/install-videocut/` | the install path for a person's own Claude Code (install, repair, update, uninstall) |
+| `scripts/fresh-install-test.sh` | clean-environment install test (`env -i`), timings and sizes; `--claude` lets the official program install from the person's sentence; results in `docs/fresh-install-report.md` |
 | `manifest/tools.json` | pinned downloads: version, URL, SHA-256, licence |
 | `src/videocut/` | Python package and CLI (`setup`, `doctor`, `selftest`, `models pull`, `ui`, `auth`, `run`, `tool`) |
 | `src/videocut/run.py` | `videocut run`: prep → plan run → human approval → cut run → overlay run; `--plan-feedback` (revise the plan), `--feedback [--at]` (revise the reel) |
@@ -979,9 +980,13 @@ screenshots per step; not in CI).
 ## Install, launcher, first start (Phase 4)
 
 Distribution: no signed app, no binary release. A person asks their own Claude Code to
-install Video Cut; it follows `.claude/skills/install-videocut/SKILL.md` (linked into
-`~/.claude/skills/` at the end of the install, so later "Video Cut startet nicht" requests
-find it). Code in `~/VideoCut/app`, data in `~/VideoCut`. Nothing needs the Xcode command
+install Video Cut; it follows `.claude/skills/install-videocut/SKILL.md` and `INSTALL.md`.
+Nothing is written into `~/.claude`: later requests ("Video Cut startet nicht") are handled
+from `~/VideoCut/app`, where Claude Code reads the project's `CLAUDE.md` and skill (INSTALL.md
+tells a helper in another folder to `cd` there first). Sign-in happens only in the app's
+first-start screen, never in a terminal. Measured (`docs/fresh-install-report.md`): about
+2.5 GB downloaded, about 3.9 GB on disk, `start.sh` about 5 minutes on fast broadband, a
+Claude-driven install 3-4 minutes plus the model download, no question to the person. Code in `~/VideoCut/app`, data in `~/VideoCut`. Nothing needs the Xcode command
 line tools, Homebrew, Rosetta or sudo: start.sh uses `curl`, `shasum`, `tar`, `plutil`,
 `sw_vers`, `sysctl`, `df`; the code is fetched as a GitHub tarball (on a fresh Mac `git`
 and `python3` are stubs that open the developer tools installer).
@@ -1035,6 +1040,13 @@ the app (`videocut stop [--force]`, refused during a run), refuses to overwrite 
 checkout, and keeps the previous code (without its tools) as `app.old-<time>` until
 `start.sh` succeeds. The API key reaches the keychain through `security -i` on stdin,
 never as a command line argument.
+
+Human gate on the command line: `videocut run --approve` and `--demo-data` are the person's
+decisions. `run.human_flags_refused` refuses them inside an agent run (`VIDEOCUT_AGENT`) and
+whenever stdin is not a terminal, unless `VIDEOCUT_UI_SERVER=1` (set by `videocut ui` for its
+own process; the app's decisions come through its authenticated requests; `agent.command`
+removes it from agent runs). A helper such as the person's Claude Code, which runs commands
+without a terminal, therefore cannot approve a plan; the install skill also forbids cutting.
 
 ## Decisions
 

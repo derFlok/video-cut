@@ -36,7 +36,14 @@
   runs and the connection test set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; local mode
   passes `--no-bare` once the installed program offers it (2.1.301 does not).
 - `videocut stop [--force]` stops the running app (used by `uninstall.sh`, which also
-  removes the launcher and the helper skill link).
+  removes the launcher).
+- Human gate on the command line: `videocut run --approve` / `--demo-data` are refused
+  without a terminal (a helper running commands for the person) unless `VIDEOCUT_UI_SERVER=1`
+  (set by `videocut ui` for itself, removed for agent runs), and always inside an agent run.
+- From the fresh-install runs (`docs/fresh-install-proposals.md`): the skill announces size,
+  disk use and time first, speaks plainly, runs `start.sh` in the foreground, writes nothing
+  into `~/.claude`, leaves the sign-in to the app's welcome screen (never the Terminal), ends
+  with one fixed short message and never cuts or approves a video during an install.
 - Port: `VIDEOCUT_PORT`, else 4300, else the next free port (`ui`, `open`).
 - The API key goes to the keychain through `security -i` on stdin (no longer visible in
   the process list).
