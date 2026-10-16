@@ -24,15 +24,26 @@
 - `videocut update`: stops the app (not during a run unless `--force`), downloads the newest
   release tag (or `main`), swaps the code and keeps `.tools`/`.venv`/`node_modules`, runs
   `./start.sh`; a git checkout with the command line tools uses `git pull --ff-only`.
+- Pinned and verified like every other download (rule 6): CPython 3.12.15 (start.sh
+  fetches the python-build-standalone archive, checks its SHA-256 and lets uv install it
+  from a local `file://` mirror; `UV_PYTHON_DOWNLOADS=never` afterwards) and the renderer's
+  Chrome headless shell 153.0.8010.12 (install.py, instead of playwright's unverified
+  installer; the revision must match playwright-core's). `doctor` checks both.
+- End users get no developer tools (`UV_NO_DEV`); `./start.sh --dev`, `VIDEOCUT_DEV=1` or a
+  git checkout keep pytest and ruff.
+- The official `claude` program is also found in the Claude desktop app's own copy; a
+  missing `USER` (minimal environments) no longer makes it report "not signed in". Agent
+  runs and the connection test set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; local mode
+  passes `--no-bare` once the installed program offers it (2.1.301 does not).
 - `videocut stop [--force]` stops the running app (used by `uninstall.sh`, which also
   removes the launcher and the helper skill link).
 - Port: `VIDEOCUT_PORT`, else 4300, else the next free port (`ui`, `open`).
 - The API key goes to the keychain through `security -i` on stdin (no longer visible in
   the process list).
 - App: first-start screen (de/en) — the official `claude` program is asked in the
-  background (`claude auth status`; only its output is used, never its files), "Claude-Abo
-  erkannt" with the account it prints, choice of own subscription (with the one-sentence
-  terms note) or API key (keychain), "Verbindung prüfen" (one tiny `claude -p` call with
+  background (`claude auth status`; only its output is used, never its files), "Anmeldung
+  bei Claude gefunden" with the account it prints, choice of own subscription (with the
+  one-sentence terms note) or API key (keychain), "Verbindung prüfen" (one tiny `claude -p` call with
   the smallest model), then the "Dein erstes Video" tips. Settings page with the current
   mode and the same switch. "Beenden" stops the server (asks while a run is active).
 - API: `GET /api/setup/status`, `POST /api/setup/auth`, `POST /api/setup/test`,

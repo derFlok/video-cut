@@ -81,8 +81,9 @@ announce the download size, then go.
 
 8. **Hand over to the app.** The browser shows the first-start screen. Explain:
    - "Video Cut needs a connection to Claude. If you have a Claude subscription and the
-     `claude` program on this Mac is signed in, the screen shows 'Claude-Abo erkannt' and you
-     choose it. Otherwise you can paste an API key from the Anthropic Console there."
+     `claude` program on this Mac is signed in, the screen shows 'Anmeldung bei Claude
+     gefunden' (Claude sign-in found) and you choose it. Otherwise you can paste an API key
+     from the Anthropic Console there."
    - The subscription way is for the person's own, personal use (Anthropic's terms); for a
      team or a company an API key is the right way. That is their choice; do not decide it.
    - If the screen says no `claude` program was found and they want to use their

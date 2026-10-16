@@ -11,7 +11,7 @@ import sys
 from dataclasses import asdict, dataclass
 
 from . import claude_cli, launcher, manifest, settings
-from .paths import BIN, BROWSERS, HOME, MODELS, RENDERER, ROOT, tool_env
+from .paths import BIN, HOME, MODELS, RENDERER, ROOT, tool_env
 
 START = f"cd {ROOT} && ./start.sh"
 RESTART = f"run `{START}` again (finished steps are skipped)"
@@ -82,12 +82,22 @@ def check_ffmpeg_features() -> Check:
 
 
 def check_renderer() -> Check:
+    from . import install
+
     if not (RENDERER / "node_modules" / "playwright-core").exists():
         return Check("renderer", False, "packages missing", fix=RESTART)
-    shells = list(BROWSERS.glob("chromium_headless_shell-*"))
-    if not shells:
+    t = manifest.tool("chromium-headless-shell")
+    shell = install.chromium_dir()
+    if not (shell / "INSTALLATION_COMPLETE").exists():
         return Check("renderer", False, "headless Chromium missing", fix=RESTART)
-    return Check("renderer", True, f"playwright-core + {shells[0].name}")
+    if install._state().get("chromium-shell") != t["sha256"]:
+        return Check("renderer", False, "headless Chromium is not the pinned, verified build",
+                     fix=RESTART)  # fmt: skip
+    want = install.playwright_revision()
+    if want and want != t["revision"]:
+        detail = f"playwright-core wants revision {want}, manifest pins {t['revision']}"
+        return Check("renderer", False, detail, fix="update manifest/tools.json")
+    return Check("renderer", True, f"playwright-core + headless Chromium {t['version']}")
 
 
 def check_app() -> Check:
@@ -125,7 +135,7 @@ def check_claude() -> list[Check]:
     mode = conf.get("auth")
     checks = []
     if not st["installed"]:
-        checks.append(Check("claude", False, "the claude program was not found",
+        checks.append(Check("claude", False, claude_cli.NOT_FOUND,
                             required=False, fix=INSTALL_CLAUDE))  # fmt: skip
     else:
         checks.append(Check("claude", True, st["version"] or st["path"]))
@@ -181,7 +191,12 @@ def collect() -> list[Check]:
     t = manifest.load()["tools"]
     checks = [
         check_platform(),
-        Check("python", sys.version_info[:2] == (3, 12), sys.version.split()[0], fix=RESTART),
+        Check(
+            "python",
+            sys.version.split()[0] == t["python"]["version"],
+            sys.version.split()[0],
+            fix=f"pinned is {t['python']['version']}: delete {ROOT / '.venv'} and {RESTART}",
+        ),
         _binary("uv", ("--version",), t["uv"]["version"]),
         _binary("node", ("--version",), t["node"]["version"]),
         _binary("ffmpeg", ("-hide_banner", "-version"), t["ffmpeg"]["version"]),

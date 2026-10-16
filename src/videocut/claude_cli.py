@@ -10,19 +10,28 @@ usual install locations are searched as well.
 
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
-# The official installer, npm global installs and Homebrew put the program here.
+# Where the official program is installed (searched in this order after PATH):
+# the native installer (~/.local/bin), the older local install (~/.claude/local), Homebrew
+# and npm global installs, and last the copy the Claude desktop app keeps for itself (a
+# signed macOS bundle per version, the newest is used).
 KNOWN = (
     "~/.local/bin/claude",
     "~/.claude/local/claude",
     "/opt/homebrew/bin/claude",
     "/usr/local/bin/claude",
     "~/.npm-global/bin/claude",
+)
+DESKTOP = "~/Library/Application Support/Claude/claude-code"
+NOT_FOUND = (
+    "the claude program was not found (looked in PATH, ~/.local/bin, ~/.claude/local, "
+    "/opt/homebrew/bin, /usr/local/bin, ~/.npm-global/bin and the Claude desktop app)"
 )
 CONSOLE_URL = "https://console.anthropic.com/settings/keys"
 TEST_PROMPT = "Reply with the single word OK."
@@ -37,11 +46,58 @@ def exe() -> str | None:
         path = Path(p).expanduser()
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
+    return _desktop_copy()
+
+
+def _version_key(name: str) -> tuple:
+    return tuple(int(x) if x.isdigit() else 0 for x in name.split("."))
+
+
+def _desktop_copy() -> str | None:
+    """The desktop app's own program: <DESKTOP>/<version>/<id>/claude.app/Contents/MacOS/claude."""
+    root = Path(DESKTOP).expanduser()
+    try:
+        versions = sorted((d for d in root.iterdir() if d.is_dir()),
+                          key=lambda d: _version_key(d.name), reverse=True)  # fmt: skip
+    except OSError:
+        return None
+    for v in versions:
+        for exe in sorted(v.glob("*/claude.app/Contents/MacOS/claude")):
+            if os.access(exe, os.X_OK):
+                return str(exe)
     return None
 
 
+_HELP: dict[str, str] = {}
+
+
+def supports(flag: str) -> bool:
+    """Whether the installed program's --help lists a flag (asked once per process)."""
+    path = exe()
+    if not path:
+        return False
+    if path not in _HELP:
+        try:
+            out = subprocess.run([path, "--help"], capture_output=True, text=True, timeout=20,
+                                 env=_env())  # fmt: skip
+            _HELP[path] = out.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            _HELP[path] = ""
+    return flag in _HELP[path].split()
+
+
+def fill_env(env: dict[str, str]) -> dict[str, str]:
+    """The program finds its own sign-in by the user name: a minimal environment (env -i,
+    some launchers) lacks USER, and it then reports "not signed in"."""
+    if not env.get("USER") or not env.get("LOGNAME"):
+        name = pwd.getpwuid(os.getuid()).pw_name
+        env.setdefault("USER", name)
+        env.setdefault("LOGNAME", name)
+    return env
+
+
 def _env() -> dict[str, str]:
-    env = dict(os.environ)
+    env = fill_env(dict(os.environ))
     found = exe()
     if found:  # the program may need its own folder on PATH (node shims)
         env["PATH"] = f"{Path(found).parent}{os.pathsep}{env.get('PATH', '')}"
@@ -95,24 +151,35 @@ def status(timeout: float = 20) -> dict:
     return out
 
 
+NO_BARE = "--no-bare"
+
+
+def local_mode_flags() -> list[str]:
+    """Local mode needs the program's own sign-in, which --bare ignores. Claude Code
+    2.1.301 runs `-p` non-bare by default and has no opt-out flag; if a later version
+    makes --bare the default and offers the opt-out, pass it."""
+    return [NO_BARE] if supports(NO_BARE) else []
+
+
 def test_call(api_key: str | None, timeout: float = 90) -> dict:
     """One tiny headless call through the official program (no tools, one turn), the
     same way a job run connects: an API key runs in --bare mode, the own sign-in with the
     project's settings only. Returns {ok, message, seconds, cost_usd}."""
     path = exe()
     if not path:
-        return {"ok": False, "message": "the claude program is not installed", "seconds": 0}
+        return {"ok": False, "message": NOT_FOUND, "seconds": 0}
     cmd = [path, "-p", TEST_PROMPT, "--max-turns", "1", "--tools", "", "--output-format", "json"]
     cmd += ["--model", TEST_MODEL]
     cmd += ["--strict-mcp-config", "--mcp-config", '{"mcpServers": {}}']
     env = _env()
     env.pop("ANTHROPIC_API_KEY", None)
     env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
         cmd.append("--bare")
     else:
-        cmd += ["--setting-sources", "project"]
+        cmd += ["--setting-sources", "project", *local_mode_flags()]
     t0 = time.monotonic()
     with tempfile.TemporaryDirectory() as tmp:
         try:

@@ -34,3 +34,6 @@ __pycache__/
 /app/node_modules/
 /app/dist-mock/
 /app/e2e/out/
+
+# Claude Code session worktrees (the repository's .claude/skills/ stays tracked)
+/.claude/worktrees/

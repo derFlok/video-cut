@@ -6,6 +6,8 @@
 #   ./start.sh --selftest   same, then cut a generated test clip end to end
 #   ./start.sh --ui         same, then open the app in the browser
 #   ./start.sh --check      only run the doctor, install nothing
+#   ./start.sh --dev        also install the developer tools (pytest, ruff); kept
+#                           automatically in a git checkout or with VIDEOCUT_DEV=1
 #
 # Everything is installed into ./.tools and ./.venv: no Homebrew, no sudo, no Xcode command
 # line tools, no Rosetta. Only programs that ship with macOS are used (curl, shasum, tar,
@@ -17,7 +19,11 @@ TOOLS="$ROOT/.tools"
 BIN="$TOOLS/bin"
 MANIFEST="$ROOT/manifest/tools.json"
 STEPS=7
-PY_MB=450   # Python 3.12 + packages (download; about 1.5 GB on disk)
+PY_MB=450   # Python packages (download; about 1.5 GB on disk)
+MODE="${1:-}"
+DEV="${VIDEOCUT_DEV:-}"
+if [[ "$MODE" == "--dev" ]]; then DEV=1; MODE="${2:-}"; fi
+[[ -e "$ROOT/.git" ]] && DEV=1   # a developer checkout keeps pytest and ruff
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
@@ -28,12 +34,12 @@ step() { say "Step $1/$STEPS: $2"; }
 unset PYTHONPATH PYTHONHOME VIRTUAL_ENV CONDA_PREFIX NODE_OPTIONS npm_config_prefix
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
-if [[ "${1:-}" == "--check" ]]; then
+if [[ "$MODE" == "--check" ]]; then
   [[ -x "$BIN/uv" ]] || fail "Not installed yet: run ./start.sh"
   export UV_PYTHON_INSTALL_DIR="$TOOLS/python" UV_PYTHON_PREFERENCE="only-managed"
   export UV_CACHE_DIR="$TOOLS/uv-cache" UV_PROJECT_ENVIRONMENT="$ROOT/.venv"
   cd "$ROOT"
-  exec "$BIN/uv" run --frozen --quiet videocut doctor
+  exec "$BIN/uv" run --frozen --no-sync --quiet videocut doctor
 fi
 
 # --- 1. This Mac --------------------------------------------------------------
@@ -94,14 +100,33 @@ export UV_PYTHON_PREFERENCE="only-managed"   # same Python on every machine
 export UV_CACHE_DIR="$TOOLS/uv-cache"
 export UV_PROJECT_ENVIRONMENT="$ROOT/.venv"
 export UV_NO_PROGRESS=1
+[[ -n "$DEV" ]] || export UV_NO_DEV=1   # end users get no developer tools
 
-# --- 3. Python environment ----------------------------------------------------
+# --- 3. Python (pinned build, checksum-verified) + packages --------------------
 cd "$ROOT"
-if [[ -x "$ROOT/.venv/bin/python" ]]; then
-  step 3 "Python 3.12 and packages (checking)"
+py_ver="$(mf tools.python.version)"
+export UV_PYTHON="$py_ver"
+if [[ -x "$ROOT/.venv/bin/python" ]] && compgen -G "$TOOLS/python/cpython-$py_ver-macos-aarch64-*" >/dev/null; then
+  step 3 "Python $py_ver and packages (checking)"
 else
-  step 3 "Python 3.12 and packages, about $PY_MB MB, about 1 minute on 100 Mbit/s"
+  step 3 "Python $py_ver and packages, about $(( PY_MB + $(mf tools.python.approx_size_mb) )) MB, about 1 minute on 100 Mbit/s"
 fi
+if ! compgen -G "$TOOLS/python/cpython-$py_ver-macos-aarch64-*" >/dev/null; then
+  # uv installs Python from a local mirror holding exactly the pinned, verified archive.
+  mirror="$TOOLS/downloads/python-mirror"
+  py_file="$mirror/$(mf tools.python.release)/$(mf tools.python.filename)"
+  mkdir -p "$(dirname "$py_file")"
+  curl -fsSL --retry 4 --retry-delay 2 -C - -o "$py_file" "$(mf tools.python.url)" \
+    || curl -fsSL --retry 4 --retry-delay 2 -o "$py_file" "$(mf tools.python.url)" \
+    || fail "Could not download Python. Check the internet connection and run ./start.sh again."
+  if ! echo "$(mf tools.python.sha256)  $py_file" | shasum -a 256 -c --status; then
+    rm -f "$py_file"
+    fail "Python checksum mismatch (download damaged). Run ./start.sh again."
+  fi
+  UV_PYTHON_INSTALL_MIRROR="file://$mirror" "$BIN/uv" python install --quiet "$py_ver"
+  rm -rf "$mirror"
+fi
+export UV_PYTHON_DOWNLOADS=never   # never another Python than the pinned one
 sync_ok=0
 for attempt in 1 2 3; do
   if "$BIN/uv" sync --frozen --quiet; then sync_ok=1; break; fi
@@ -135,9 +160,9 @@ if (( ! doctor_ok )); then
   fail "Some required checks failed (see the lines with ✗ and the → fix below each)."
 fi
 
-if [[ "${1:-}" == "--selftest" ]]; then
+if [[ "$MODE" == "--selftest" ]]; then
   "$BIN/uv" run --frozen --quiet videocut selftest
-elif [[ "${1:-}" == "--ui" ]]; then
+elif [[ "$MODE" == "--ui" ]]; then
   exec "$BIN/uv" run --frozen --quiet videocut ui
 else
   note "Ready. Open the app with: ./start.sh --ui   (or create the double-click app: .tools/bin/uv run videocut launcher)"

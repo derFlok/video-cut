@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import manifest
 from .download import fetch
-from .paths import BIN, MODELS, RENDERER, ROOT, TOOLS, tool_env
+from .paths import BIN, BROWSERS, MODELS, RENDERER, ROOT, TOOLS, tool_env
 
 STATE = TOOLS / "installed.json"
 
@@ -130,21 +130,54 @@ def install_renderer() -> None:
             check=True,
         )
         _mark("renderer", key)
-    if not _done("chromium", key):
-        _step("Installing headless Chromium for the renderer")
-        subprocess.run(
-            [
-                str(BIN / "node"),
-                "node_modules/playwright-core/cli.js",
-                "install",
-                "--only-shell",
-                "chromium",
-            ],
-            cwd=RENDERER,
-            env=tool_env(),
-            check=True,
+    install_chromium()
+
+
+def playwright_revision() -> str | None:
+    """The headless shell revision the installed playwright-core expects."""
+    f = RENDERER / "node_modules" / "playwright-core" / "browsers.json"
+    try:
+        browsers = json.loads(f.read_text())["browsers"]
+    except (OSError, ValueError, KeyError):
+        return None
+    return next((b["revision"] for b in browsers if b["name"] == "chromium-headless-shell"), None)
+
+
+def chromium_dir() -> Path:
+    rev = manifest.tool("chromium-headless-shell")["revision"]
+    return BROWSERS / f"chromium_headless_shell-{rev}"
+
+
+def install_chromium() -> None:
+    """The renderer's headless Chromium, pinned and checksum-verified like every other tool
+    (playwright's own installer does not verify), unpacked where playwright looks for it."""
+    t = manifest.tool("chromium-headless-shell")
+    want = playwright_revision()
+    if want and want != t["revision"]:
+        raise RuntimeError(
+            f"playwright-core expects headless shell revision {want}, manifest/tools.json pins "
+            f"{t['revision']}: update the chromium-headless-shell entry (url, sha256) together"
         )
-        _mark("chromium", key)
+    dest = chromium_dir()
+    if _done("chromium-shell", t["sha256"], dest / "INSTALLATION_COMPLETE"):
+        return
+    _step(f"Installing headless Chromium {t['version']}")
+    archive = fetch(t["url"], t["sha256"], DOWNLOADS / f"chromium-{t['version']}.zip",
+                    "chromium")  # fmt: skip
+    new, old = dest.with_name(dest.name + ".new"), dest.with_name(dest.name + ".old")
+    shutil.rmtree(new, ignore_errors=True)
+    new.mkdir(parents=True)
+    # /usr/bin/unzip keeps the executable bits (zipfile does not)
+    subprocess.run(["/usr/bin/unzip", "-q", "-o", str(archive), "-d", str(new)], check=True)
+    (new / "DEPENDENCIES_VALIDATED").touch()
+    (new / "INSTALLATION_COMPLETE").touch()
+    shutil.rmtree(old, ignore_errors=True)
+    if dest.exists():
+        dest.rename(old)  # a running renderer keeps its open files
+    new.rename(dest)
+    shutil.rmtree(old, ignore_errors=True)
+    archive.unlink()
+    _mark("chromium-shell", t["sha256"])
 
 
 APP = ROOT / "app"  # the UI source (React + TypeScript + Vite)
@@ -238,7 +271,10 @@ def run(models: bool = True) -> None:
     from .download import sha256_of
 
     lock = sha256_of(RENDERER / "package-lock.json")
-    r_done = _done("renderer", lock, RENDERER / "node_modules") and _done("chromium", lock)
+    shell = manifest.tool("chromium-headless-shell")["sha256"]
+    r_done = _done("renderer", lock, RENDERER / "node_modules") and _done(
+        "chromium-shell", shell, chromium_dir() / "INSTALLATION_COMPLETE"
+    )
     headline(5, "overlay renderer and headless Chromium", RENDERER_MB, r_done)
     install_renderer()
     headline(6, "the app (packages, then a local build)", APP_MB)

@@ -439,3 +439,46 @@ def test_set_api_key_refuses_odd_characters(monkeypatch):
     monkeypatch.setattr(settings.subprocess, "run", lambda *a, **k: pytest.fail("ran security"))
     with pytest.raises(ValueError):
         settings.set_api_key("sk-ant-x -w other\nadd-generic-password")
+
+
+def test_claude_found_in_the_desktop_app_copy(tmp_path, monkeypatch):
+    from videocut import claude_cli
+
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr(claude_cli, "KNOWN", ())
+    root = tmp_path / "claude-code"
+    for v in ("2.1.9", "2.1.10"):
+        exe = root / v / "abc" / "claude.app" / "Contents" / "MacOS" / "claude"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+    monkeypatch.setattr(claude_cli, "DESKTOP", str(root))
+    assert "/2.1.10/" in claude_cli.exe()  # the newest version, not the lexically last
+    monkeypatch.setattr(claude_cli, "DESKTOP", str(tmp_path / "none"))
+    assert claude_cli.exe() is None
+    assert claude_cli.test_call(None)["message"] == claude_cli.NOT_FOUND
+
+
+def test_minimal_environment_gets_a_user_name():
+    from videocut import claude_cli
+
+    env = claude_cli.fill_env({"PATH": "/usr/bin:/bin"})
+    assert env["USER"] and env["LOGNAME"] == env["USER"]
+    assert claude_cli.fill_env({"USER": "x", "LOGNAME": "x"})["USER"] == "x"
+
+
+def test_python_and_chromium_are_pinned_and_used():
+    from videocut import manifest
+
+    py = manifest.tool("python")
+    assert py["filename"] in py["url"].replace("%2B", "+") and py["release"] in py["url"]
+    shell = manifest.tool("chromium-headless-shell")
+    assert shell["revision"].isdigit()
+    text = (ROOT / "start.sh").read_text()
+    for must in ("tools.python.sha256", "UV_PYTHON_INSTALL_MIRROR", "UV_PYTHON_DOWNLOADS=never",
+                 "UV_NO_DEV=1"):  # fmt: skip
+        assert must in text, must
+    from videocut import install
+
+    if install.playwright_revision():  # renderer packages installed
+        assert install.playwright_revision() == shell["revision"]

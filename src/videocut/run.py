@@ -1305,7 +1305,7 @@ def run(
     plan_feedback_slide: str | None = None,
 ) -> int:
     if not agent.claude_cli.exe():
-        raise RunError("Claude Code is not installed (see docs/AUTH.md).")
+        raise RunError(agent.claude_cli.NOT_FOUND + "; see docs/AUTH.md")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,

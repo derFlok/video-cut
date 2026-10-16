@@ -9,6 +9,15 @@
       "license": "MIT OR Apache-2.0",
       "approx_size_mb": 14
     },
+    "python": {
+      "version": "3.12.15",
+      "release": "20261009",
+      "filename": "cpython-3.12.15+20261009-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15%2B20261009-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "sha256": "233f8e15255b3e1d1fd47ea5dd5230dfed803f371138e896e54d98c60ae19f6f",
+      "approx_size_mb": 24,
+      "license": "PSF-2.0 (CPython), python-build-standalone build (MPL-2.0 scripts)"
+    },
     "node": {
       "version": "24.21.0",
       "url": "https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.gz",
@@ -36,6 +45,14 @@
       "sha256": "4601e7f4e4c03e59a4c5b5000216ef3add3e808799cfccd95e14e83ea4611081",
       "license": "MIT OR Apache-2.0",
       "approx_size_mb": 27
+    },
+    "chromium-headless-shell": {
+      "version": "153.0.8010.12",
+      "revision": "1243",
+      "url": "https://cdn.playwright.dev/builds/cft/153.0.8010.12/mac-arm64/chrome-headless-shell-mac-arm64.zip",
+      "sha256": "89d80a6d26ccd0ccfd51e22d9e1297283862af2b0cd91dce07459b35ca0059f2",
+      "approx_size_mb": 99,
+      "license": "BSD-3-Clause (Chromium); downloaded at install time, never redistributed"
     }
   },
   "models": {

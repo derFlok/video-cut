@@ -71,7 +71,7 @@ class Result:
 def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tuple[list[str], dict]:
     exe = claude_cli.exe()
     if not exe:
-        raise AgentError("Claude Code is not installed (see docs/AUTH.md).")
+        raise AgentError(claude_cli.NOT_FOUND + "; see docs/AUTH.md")
     conf = settings.load()
     cmd = [
         exe,
@@ -101,9 +101,10 @@ def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tupl
     if resume:
         cmd += ["--resume", resume]
 
-    env = tool_env()
+    env = claude_cli.fill_env(tool_env())
     env["PATH"] = f"{ROOT / '.venv' / 'bin'}{os.pathsep}{env['PATH']}{os.pathsep}{Path(exe).parent}"
     env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     env["VIDEOCUT_AGENT"] = "1"
     env.pop("ANTHROPIC_API_KEY", None)
     if conf["auth"] == "apikey":
@@ -113,7 +114,7 @@ def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tupl
         env["ANTHROPIC_API_KEY"] = key
         cmd.append("--bare")
     else:
-        cmd += ["--setting-sources", "project"]
+        cmd += ["--setting-sources", "project", *claude_cli.local_mode_flags()]
     return cmd, env
 
 

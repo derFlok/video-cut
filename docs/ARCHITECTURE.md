@@ -986,9 +986,16 @@ line tools, Homebrew, Rosetta or sudo: start.sh uses `curl`, `shasum`, `tar`, `p
 `sw_vers`, `sysctl`, `df`; the code is fetched as a GitHub tarball (on a fresh Mac `git`
 and `python3` are stubs that open the developer tools installer).
 
-`start.sh` steps: 1 this Mac, 2 uv, 3 Python + packages (`uv sync`, retried, then
-`uv cache prune --ci` with a 5 s lock timeout), 4 tools, 5 renderer + Chromium, 6 app
-build, 7 models (`install.py` prints 4-7 with sizes from `manifest/tools.json`
+`start.sh` steps: 1 this Mac, 2 uv, 3 Python + packages (CPython from
+`manifest/tools.json` `python`: curl + SHA-256 into `.tools/downloads/python-mirror/`, then
+`UV_PYTHON_INSTALL_MIRROR=file://… uv python install`, `UV_PYTHON=<version>`,
+`UV_PYTHON_DOWNLOADS=never`; `uv sync` with `UV_NO_DEV` unless `--dev`, `VIDEOCUT_DEV=1`
+or a git checkout; retried, then `uv cache prune --ci` with a 5 s lock timeout), 4 tools, 5 renderer + Chromium, 6 app
+build, 7 models (the renderer's Chrome headless shell is a pinned manifest entry too,
+`chromium-headless-shell`: fetched and verified by `install.py`, unpacked with
+`/usr/bin/unzip` into `.tools/ms-playwright/chromium_headless_shell-<revision>/` with
+playwright's marker files; the revision must equal playwright-core's `browsers.json`;
+`install.py` prints 4-7 with sizes from `manifest/tools.json`
 `approx_size_mb` / `approx_size_gb` and a time at 100 Mbit/s). Finished steps are recorded
 in `.tools/installed.json`; archives download to `.tools/downloads/*.part` and resume
 with HTTP Range (`download.fetch`, 4 attempts; a checksum mismatch deletes the part).
@@ -1002,6 +1009,13 @@ this start's link; 0600, removed at exit), checks the server with `X-Token`, els
 `videocut ui --no-open` detached (log `state/server.log`) and opens the link. The token
 on disk is readable only by the same user, who can already reach the app; it changes per
 start. Port: `--port`, `VIDEOCUT_PORT`, 4300, then the next free one.
+
+The `claude` program (`claude_cli.exe`): PATH, then `~/.local/bin`, `~/.claude/local`,
+`/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin`, then the Claude desktop app's own
+copy (`~/Library/Application Support/Claude/claude-code/<version>/<id>/claude.app/Contents/MacOS/claude`,
+newest version). A missing `USER`/`LOGNAME` is filled in (without it the program reports
+"not signed in"). Runs set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; local mode adds
+`--no-bare` when the installed program lists it (not in 2.1.301).
 
 First start: `GET /api/setup/status` → `done` (`settings.json` has `setup_done` or an
 `auth` chosen with `videocut auth`), `mode`, `api_key_stored`, `claude` (the background
