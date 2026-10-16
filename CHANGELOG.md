@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Added — transcript editor
+- `videocut tool transcript show|edit|undo`: the human changes single words of
+  `work/words.json` (text only, never timing). An edited word keeps `w_asr` (the model's
+  text) and `edit` (the human's); an empty edit hides the word from the captions
+  (`"hidden": true`, it stays in the timing data); text with spaces stays one timed token.
+  Human only (refused inside an agent run).
+- Edit record `$VIDEOCUT_HOME/state/<job>/transcript_edits.jsonl` (outside the job folder,
+  mirrored to `work/transcript_edits.jsonl`): every edit, undo, `vocab apply`,
+  `transcribe` and caption refresh replays it onto words.json, so an agent run cannot
+  rewrite the human's edits silently; `transcript show` reports drift.
+- Vocabulary composes with edits: a manual edit wins and survives `vocab apply` (edited
+  words are never matched, restored or suggested; edited caption words are never
+  re-corrected).
+- Captions without Claude: an edit marks the overlays stale (`overlays.stale =
+  "transcript"`); `POST /api/jobs/{id}/captions/refresh` (the app's "Untertitel neu
+  setzen") puts the edited text into the EDL caption blocks (or rebuilds them when a hidden
+  word comes back), then runs `overlays`, `render`, `verify` as tool steps. It refuses when
+  a render would re-snap the cut (a reel cut before cut-point snapping).
+- API: `GET /api/jobs/{id}/transcript` (source and reel time per word, `offset`/`limit`),
+  `PATCH …/transcript` {i, text, t0?} (≤ 60 characters, no control characters; `t0`
+  mismatch → 409 `stale`), `POST …/transcript/undo`; job detail `captions_stale`.
+- App: "Transkript" on the job page — sentences with timestamps, words of the cut only
+  (toggle "Auch herausgeschnittene Stellen"), click a word to edit it inline (Enter/Esc),
+  the player jumps there and plays, edited words marked (hover: the original), "Immer so
+  schreiben" adds the pair to the brand's Wörterbuch, search, undo, and the "Untertitel
+  neu setzen" banner (de/en).
+- Skills: plan, cut, overlays, revise treat edited words as the truth.
+
+### Changed — captions on the seam of a slide_split
+- No card, keyword, number, list or screenshot during any slide layout (slide_split
+  too): `videocut tool overlays` cuts an item to its longest part outside the slides or
+  drops it (overlays.json `slide_hidden`); the overlays and revise skills say so. The app
+  names the verify flag `overlay_on_slide_content` ("Einblendung verdeckt den Folientext").
+- Portrait, 4:5 and square `slide_split`: captions sit centred on the seam between the
+  slide part and the speaker part (renderer `placeBlock` position "seam", overlays.json
+  views `seam` and `content`) instead of on the speaker's mouth and chin; the slide's
+  content box keeps `SLIDE_SEAM` (12 % of the short side in 9:16, 9 % otherwise) free
+  above the seam for their upper half, and the face counts from the brow line down
+  there (hair and forehead may be covered). A caption group across the start or end of
+  such a stretch is cut there by its word times, so each part is placed for its own
+  layout. 16:9 (side by side) is unchanged.
+- Verify: a seam caption is judged on the slide's content box (`overlay_on_slide_content`,
+  also for any item that touches it) and on the face below the brow line; a caption on
+  the mouth or on slide text is still flagged.
+
 ### Added — slides and animations (job flow, skills, app)
 - job.json `slides` {mode none|upload|auto|both, wish}: `videocut tool job slides`,
   `videocut run --slides-mode --slides-wish`, the new-job form. Human only; a plan made

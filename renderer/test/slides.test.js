@@ -51,15 +51,26 @@ const CONTENT = {
 
 // Content boxes like the core's (tools/_layouts.slide_geometry): the safe area (slide_full),
 // above or beside the bubble (slide: two candidates, the renderer keeps the better), the
-// slide part of a split.
+// slide part of a split (stacked: SLIDE_SEAM of the short side kept free above the seam
+// for the captions).
+// The core's safe zones (tools/_format.py SAFE; the shared PRESETS have rounder fixtures).
+const CORE_SAFE = {
+  "9:16": { top: 250, bottom: 350, side: 65 },
+  "16:9": { top: 65, bottom: 130, side: 77 },
+  "1:1": { top: 76, bottom: 151, side: 54 },
+  "4:5": { top: 108, bottom: 203, side: 54 },
+};
+
 function areas(preset) {
-  const { size, safe } = PRESETS[preset];
+  const { size } = PRESETS[preset];
+  const safe = CORE_SAFE[preset];
   const [w, h] = size;
   const gap = 32;
   const full = [safe.side, safe.top, w - safe.side, h - safe.bottom];
   const land = w / h > 1.2;
   const portrait = h / w > 1.2;
-  const split = land ? [safe.side, safe.top, Math.round(w * 0.64) - gap, h - safe.bottom] : [safe.side, safe.top, w - safe.side, Math.round(h * 0.58) - gap];
+  const seamMargin = 2 * Math.round((Math.min(w, h) * (h / w >= 1.6 ? 0.12 : 0.09)) / 2);
+  const split = land ? [safe.side, safe.top, Math.round(w * 0.64) - gap, h - safe.bottom] : [safe.side, safe.top, w - safe.side, Math.round(h * 0.58) - seamMargin];
   const side = portrait ? Math.round(w * 0.34) : Math.round(h * 0.26);
   const by = h - safe.bottom - side;
   const bx = w - safe.side - side;

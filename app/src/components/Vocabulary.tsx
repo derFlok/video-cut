@@ -148,7 +148,8 @@ export function OverlaysStaleBanner({ live }: { live: Live }) {
   const { t } = useI18n();
   const job = live.job!;
   const [err, setErr] = useState<unknown>(null);
-  if (!job.overlays_stale || live.running) return null;
+  // transcript edits: the Transkript section offers its own refresh (no Claude run)
+  if (!job.overlays_stale || job.captions_stale || live.running) return null;
   const redo = async () => {
     setErr(null);
     try {

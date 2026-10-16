@@ -28,6 +28,7 @@ MODULES = [
     "redact",
     "vocab",
     "slides",
+    "transcript",
 ]
 
 

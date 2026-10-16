@@ -277,6 +277,51 @@ def test_overlay_boxes_flag_safe_zone_and_face():
     assert 0 < out[6]["face_overlap"] <= verify.FACE_OVERLAP_MAX
 
 
+def test_seam_captions_of_slide_split_are_judged_on_the_content_and_the_eyes():
+    # 9:16 slide_split over [0, 4] s: slide part to y 1114, content box to y 984; the face
+    # in the speaker part (brow line at 1290 + 0.25 * 320 = 1370).
+    views = [{"t0": 0.0, "t1": 4.0, "screen": [0, 0, 1080, 1114], "seam": 1114,
+              "content": [65, 250, 1015, 984]}]  # fmt: skip
+    face = [{"t": t / 10, "box": [380, 1290, 700, 1610]} for t in range(40)]
+    boxes = [
+        # on the seam, its lower edge over hair and forehead: fine
+        {"scene": "caption", "t0": 0.0, "t1": 1.0, "box": [200, 1040, 880, 1330]},
+        # on the seam, down to the eyes
+        {"scene": "caption", "t0": 1.0, "t1": 2.0, "box": [200, 1040, 880, 1420]},
+        # on the mouth (below the seam): the whole face box counts
+        {"scene": "caption", "t0": 2.0, "t1": 3.0, "box": [200, 1480, 880, 1560]},
+        # on the seam but reaching up into the slide's text
+        {"scene": "caption", "t0": 3.0, "t1": 4.0, "box": [200, 960, 880, 1200]},
+        # a card on the slide part's margin: still covers the slide part
+        {"scene": "keyword", "t0": 0.0, "t1": 1.0, "box": [200, 990, 880, 1036]},
+    ]
+    out = verify.overlay_checks(boxes, face, (1080, 1920), views=views)
+    assert [o["flags"] for o in out] == [
+        [], ["overlay_on_face"], ["overlay_on_face"], ["overlay_on_slide_content"],
+        ["overlay_on_screen"],
+    ]  # fmt: skip
+    assert out[0]["face_overlap"] == 0
+    # without the seam (an older overlays.json, a side-by-side split) the slide part is hard
+    plain = [{k: v for k, v in views[0].items() if k not in ("seam", "content")}]
+    flags = verify.overlay_checks(boxes[:1], face, (1080, 1920), views=plain)[0]["flags"]
+    assert flags == ["overlay_on_face", "overlay_on_screen"]
+
+
+def test_load_views_keeps_the_seam_of_a_slide_split(tmp_path):
+    (tmp_path / "work").mkdir()
+    views = [
+        {"t0": 0, "t1": 2, "layout": "slide_split", "screen": [0, 0, 1080, 1114],
+         "seam": 1114, "content": [65, 250, 1015, 984], "speaker": None},
+        {"t0": 2, "t1": 3, "layout": "split", "screen": [0, 0, 1080, 1114], "seam": 1114,
+         "content": [0, 0, 1, 1], "speaker": None},
+    ]  # fmt: skip
+    (tmp_path / "work" / "overlays.json").write_text(json.dumps({"views": views}))
+    got = _verify_screen.load_views(tmp_path)
+    assert got[0] == {"t0": 0, "t1": 2, "screen": [0, 0, 1080, 1114], "seam": 1114,
+                      "content": [65, 250, 1015, 984]}  # fmt: skip
+    assert got[1] == {"t0": 2, "t1": 3, "screen": [0, 0, 1080, 1114]}
+
+
 def test_caption_times_one_per_change_snapped_and_unique():
     caps = [{"t0": 0.0, "t1": 1.0}, {"t0": 1.0, "t1": 1.1}, {"t0": 1.0, "t1": 1.1}]
     caps.append({"t0": 2.95, "t1": 3.5})  # its frame lies beyond the reel

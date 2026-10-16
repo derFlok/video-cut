@@ -205,6 +205,10 @@ the slides after planning needs a new plan and a new approval. Personal data on 
 an e-mail address) is listed in the plan like on a screenshot; what you leave marked is
 covered in the video.
 
+While a slide is on screen, no card or keyword is shown on top: the slide carries the
+content. Captions stay where you talk next to a slide: in a portrait or square video
+they sit on the line between the slide and you, clear of the slide's text and your face.
+
 ## Brands
 
 Video Cut ships without any branding. You upload your own (logo, colours, fonts, optionally a brand guide and example posts) and every video adapts to it. You can keep several brands side by side and pick one per video. See [`docs/BRIEF.md`](docs/BRIEF.md) §9.
@@ -233,6 +237,21 @@ without transcribing again and offers to set the captions again. The job page al
 .venv/bin/videocut tool vocab apply <job>      # correct an existing transcript
 .venv/bin/videocut tool vocab suggest <job>    # possible misspellings (never applied)
 .venv/bin/videocut run take.mov --vocab "Zentrovia=Zentrowia,Sentro Via"
+```
+
+### Fixing single words
+
+One word wrong in a finished video? Open **Transkript** on the job page, click the word,
+type the correct text and press Enter (Esc cancels; empty hides the word from the
+captions). The video jumps to that moment. "Immer so schreiben" also adds the spelling to
+the brand's Wörterbuch. Then **Untertitel neu setzen** puts the corrected captions into
+the reel without Claude (a minute or two). Your edits stay when the vocabulary is applied
+again, and Claude treats them as the truth.
+
+```bash
+.venv/bin/videocut tool transcript show <job> --from 10 --to 20   # words with their index
+.venv/bin/videocut tool transcript edit <job> 84 "Riesen-Golfszene"
+.venv/bin/videocut tool transcript undo <job>
 ```
 
 ## Privacy

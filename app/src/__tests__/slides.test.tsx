@@ -133,3 +133,16 @@ describe("slides in the result", () => {
     expect(video.currentTime).toBeCloseTo(8.2);
   });
 });
+
+describe("verify flag of a seam caption", () => {
+  it("names overlay_on_slide_content in plain words (de/en)", async () => {
+    const { verifyLines } = await import("../screens/Result");
+    const { STRINGS: S } = await import("../i18n");
+    const v = { ok: false, overlay_flagged: [{ scene: "caption", t0: 3, flags: ["overlay_on_slide_content"] }] };
+    for (const lang of ["de", "en"] as const) {
+      const t = (k: string, vars?: Record<string, unknown>) =>
+        (S[lang] as Record<string, string>)[k].replace(/\{(\w+)\}/g, (_, x: string) => String(vars?.[x] ?? ""));
+      expect(verifyLines(v as never, t as never)[0]).toContain(S[lang]["flag.overlay_on_slide_content"]);
+    }
+  });
+});

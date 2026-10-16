@@ -1,9 +1,10 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api } from "../api/client";
 import type { JobDetail, Revision, VerifySummary, Version } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog } from "../components/LiveLog";
 import { SlideMarks } from "../components/Slides";
+import { SEEK_EVENT } from "../components/Transcript";
 import { clock, date, money, STRINGS, useI18n, type T, type TKey } from "../i18n";
 import { isInterim, lockReason } from "../progress";
 import type { Live } from "./JobPage";
@@ -51,6 +52,20 @@ export function Result({ live }: { live: Live }) {
   const [sending, setSending] = useState(false);
   const [playing, setPlaying] = useState<Version | null>(null);
   const [duration, setDuration] = useState(0);
+
+  // a word clicked in the Transkript: show that moment of the current reel and play it
+  useEffect(() => {
+    const onSeek = (e: Event) => {
+      const t = (e as CustomEvent<{ t: number }>).detail?.t;
+      const v = player.current;
+      if (!v || typeof t !== "number") return;
+      setPlaying(null);
+      v.currentTime = t;
+      void v.play?.()?.catch(() => undefined);
+    };
+    window.addEventListener(SEEK_EVENT, onSeek);
+    return () => window.removeEventListener(SEEK_EVENT, onSeek);
+  }, []);
 
   const bust = String(job.revisions.length);
   const versions = versionsOf(job);

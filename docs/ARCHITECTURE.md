@@ -38,6 +38,7 @@
 | `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list`, `job slides [job] [--mode] [--wish]`, `job slides-import <job> FILE… [--replace]` | `job.py`, `_job_slides.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]`, `brand vocab <id> add\|remove\|list` | `brand.py` |
 | `vocab show [job]`, `vocab apply [job]`, `vocab suggest [job] [--all]` | `vocab.py` |
+| `transcript show [job] [--from t --to t]`, `transcript edit <job> <i> <text>`, `transcript undo <job>` | `transcript.py` |
 | `captions [--force]` | `captions.py` |
 | `overlays [--no-render]` | `overlays.py` |
 | `ingest [--denoise]` | `ingest.py` |
@@ -228,6 +229,57 @@ in every text they write (plan, reports, cards, captions fixes).
   (`--all`: any conf); they are never applied. The app shows them as "Meintest du …?".
 - Editing is human only (`job vocab`/`brand vocab` refuse inside an agent run; job.json and
   the brands folder are outside what an agent run may write).
+
+## Transcript edits (`tools/transcript.py`)
+
+The human fixes single words (the vocabulary is for systematic misspellings, a revise run
+for changes to the cut). `transcript edit <job> <i> <text>` / `PATCH
+/api/jobs/{id}/transcript` change the text of word `i` of `work/words.json`, never its
+times: the word keeps `w_asr` (the model's text, the vocabulary's convention) and gets
+`edit` (the human's text, also in `w`). An empty edit hides the word from the captions
+(`"hidden": true`, `w` stays the model's text, the word stays in the timing data for cuts,
+fillers and alignment); text with spaces stays one timed token. Text: ≤ 60 characters, no
+control characters, whitespace collapsed. Human only (`VIDEOCUT_AGENT` refuses).
+
+- **Record:** every edit and undo is a line `{at, i, t0, asr, from, to, prev}` (`undo:
+  true`) in `$VIDEOCUT_HOME/state/<job>/transcript_edits.jsonl`, outside what an agent run
+  may write, mirrored to `work/transcript_edits.jsonl` for reading only (the mirror is
+  never read back: an agent could write it). An entry is recorded only together with its
+  words.json save (a failed save takes it back). Replaying the record gives each edited
+  word's text; words are found again by the model's text and the nearest start within
+  3 s, so indices may shift (vocabulary merges, the video time shift). `enforce` writes
+  exactly the record onto words.json on every edit, undo, `vocab apply`, `transcribe`
+  (through it), caption refresh and after every Claude run (`run.claude`); without a
+  record (no human edit in this folder) it changes nothing. `transcript show` and the
+  GET report `drift` (words that differ; the app warns). Undo takes back the last edit not
+  yet undone (the word's previous edit, or none).
+- **Vocabulary:** an edited word is never restored, matched or suggested by `vocab.py`,
+  and an edited caption word is never re-corrected: the manual edit wins and survives
+  every `vocab apply`. After an edit or undo the vocabulary is applied again around it.
+- **Captions:** `captions` leaves hidden words out and shows an edited word's text. An
+  edit on a job whose reel has captions sets job.json `overlays.stale = "transcript"`
+  (also over "vocabulary": the refresh covers both; `vocab apply` keeps "transcript");
+  job detail `captions_stale`; `POST /overlays` (a Claude run) is refused while it is set.
+  After an overlay or revise run records the overlays, caption words that do not show the
+  human's text make them stale again. `refresh` (`POST /api/jobs/{id}/captions/refresh`, run kind
+  `captions`; the app's "Untertitel neu setzen", no Claude) puts the edited text into the
+  EDL's caption blocks by output time (keeping the agent's blocks and emphasis; hidden
+  words dropped, an undone edit back to the transcript's text) or, when a word the human
+  edited is in the cut but not in the captions (a hide taken back) or a patched block is
+  longer than the brand's pace allows, rebuilds them with `captions --force` (and marks
+  the human's words again); then `overlays`, `render`, `verify` and the overlay record (no
+  longer stale). A failure puts edl.json back as it was, so the refresh can be retried. It refuses before anything runs when `edl snap --dry-run` would move a
+  cut point (a reel cut before snapping; render would change the cut) and fails when the
+  segments changed anyway. Measured on a copy of a 27 s 9:16 demo job (2 words): 61 s
+  wall at load average ~17 (164 s at ~70: overlays 72 s, render 68 s, verify 23 s);
+  verify flags identical to the reel before, exactly the 2 caption words changed, the
+  cut unchanged. That job was cut before cut-point snapping: refresh refused it (0.8 s,
+  "would move 17 cut points") until its cut was brought up to date.
+- **Read:** `GET /api/jobs/{id}/transcript[?offset&limit]` returns every word with its
+  source time and, when the finished reel keeps it, its reel time (the captions' mapping
+  rule, one pass), plus `edits`, `can_undo`, `edits_at`, `drift`, `captions_stale`.
+- Skills (plan, cut, overlays, revise): an edited word is the truth, hidden words never
+  appear in a caption, and the skills never edit `words.json` text or the edit log.
 
 ## Cut style and job language
 
@@ -669,8 +721,11 @@ the pip inset) above the bottom safe zone, with two candidate content boxes (abo
 the bubble; the renderer takes the one with the larger scale); `slide_split` puts the slide
 beside (16:9) or above (portrait, square) the speaker part from the split geometry, face
 tracked like `split`. Captions: overlays.json `views` carry `hide: true` for slide and
-slide_full stretches (the renderer draws no captions or overlays there); in slide_split the
-slide part is a block, so captions and keywords stay in the speaker part. Slides never
+slide_full stretches (the renderer draws no captions or overlays there); no overlay item
+(card, keyword, number, list, screenshot) shows during any slide layout, slide_split too
+(`overlays.off_slides`: an item keeps its longest part outside the slides, or is dropped
+below 0.5 s; overlays.json `slide_hidden` lists the cuts; the end card stays); in
+slide_split captions sit on the seam (portrait, square) or in the speaker part (16:9). Slides never
 replace a personal-data redaction: redaction applies to screen layouts only and a slide
 segment shows no screen.
 
@@ -713,10 +768,25 @@ gets `env.canvas` for it). Verify rebuilds the spec with the same boxes, so a cl
 before a candidate existed is `slide_stale`.
 
 **Captions around slides.** `slide` and `slide_full` views are `hide` (no caption, no
-item). In `slide_split` the view's `screen` (the slide part) is a hard block in the
-renderer (`render.js` `hardDuring`, `layout.placeBlock` `hard`): a caption or card covers
-the face before it covers the slide. In 9:16 the speaker part lies mostly in the bottom
-safe zone, so a caption there usually overlaps the face (verify: `overlay_on_face`).
+item), and `overlays` keeps every overlay item off all slide stretches (see above), so
+only captions show during a `slide_split`. Its view's `screen` (the slide part) is a hard
+block in the renderer (`render.js` `hardDuring`, `layout.placeBlock` `hard`). Stacked (9:16, 4:5, 1:1) the speaker part lies mostly in the
+bottom safe zone, so a caption in it would land on the mouth: captions go on the seam
+instead. The view carries `seam` (output y of the boundary, `_layouts.slide_seam`) and
+`content` (the slide's content box); the caption scene asks for `seamDuring` and
+`placeBlock` position "seam" centres the block on that y (pushed down below the content
+box if it reaches lower), with only the content box hard and the face counted from the
+brow line down (`FOREHEAD` = top 25 % of the face box: hair and forehead may be covered,
+eyes and mouth not); when the face still gets in the way it falls back to below the face.
+A caption group on screen across the start or end of such a view is cut there by its word
+times (`lib/seams.js` `splitAtSeams`; a part under 0.4 s gives its words to its neighbour),
+so the part in the face layout is not left on the seam over the face.
+`slide_geometry` keeps `SLIDE_SEAM` of the short side (12 % in tall frames, 9 % in 4:5
+and 1:1) free above the seam for the block's upper half; every template still fits its
+smaller box at >= 60 % (renderer tests). Verify judges a caption whose box crosses a
+view's seam on the content box (`overlay_on_slide_content`, which also flags any other
+item touching it) and on the face below the brow line, not on the whole slide part
+(`overlay_on_screen` stays for cards there). Side by side (16:9) nothing changes.
 
 **Plan.** The plan skill writes `work/slides.json` (`{slides: [{id, template, content,
 source, why}]}`, checked by `slides check`) and `plan.json` `slides` (the same plus `t0`/`t1`,
@@ -819,7 +889,9 @@ create by multipart upload, detail, delete to `$VIDEOCUT_HOME/trash`), `jobs/{id
 `gate`, `error`, `done`; replayed on connect, so a reloaded page keeps the stage's start),
 `cut-style` (PUT), `target` (PUT), `recut` (POST: cut + overlays again with the approved plan),
 `vocabulary` (GET: job/brand/effective terms, applied counts, suggestions; PUT: the job's
-terms, validated), `vocabulary/apply` (POST), `overlays` (POST: the overlay stage again on the
+terms, validated), `vocabulary/apply` (POST), `transcript` (GET, PATCH {i, text, t0?}), `transcript/undo`
+(POST), `captions/refresh` (POST: the tool-only caption refresh run, only while the
+overlays are stale), `overlays` (POST: the overlay stage again on the
 kept cut, only while `overlays_stale`), job create takes a `vocabulary` field (JSON), `plan` (GET/PUT, sha-checked), `plan/feedback`, `approve`, `feedback`, `stills/<path>`,
 `media/{reel|preview|cover|screen_proxy|camera_proxy|history/reel-<k>.mp4}` (HTTP Range),
 `download`. Errors are `{"detail": {"message", "code"?, "errors"?}}`; 409 codes: `busy` (a
@@ -836,7 +908,8 @@ revise, plan_revise, error`, gate `plan | result | null`. The job detail also ca
 `stage_since` (start of the running stage), `failed_stage`, `has_screen`, `cut_style`
 (stored or `auto`), `cut_style_resolved`, `cut_stale`, `source_duration_s`, `lang`,
 `target_s`, `target_resolved`, `plan_target_stale`, `plan_target_s` and `overlays_stale`
-(captions changed by a vocabulary since the overlays were rendered); the
+(captions changed by a vocabulary or a transcript edit since the overlays were rendered),
+`captions_stale` (by a transcript edit: the app offers the refresh without Claude); the
 app's "What is happening" line counts the time in the step from `stage_since`.
 
 Security model:
@@ -884,7 +957,14 @@ MP4/cover download), Brands (preview sheet per format, token editor with the ser
 validation, logo/font upload, new brand from the neutral example, Wörterbuch: terms with
 their misspellings as chips). The job page has a collapsible "Begriffe für dieses Video"
 panel (save and apply, suggestions added to the brand's Wörterbuch when the term is the
-brand's, else to the job) and the "Untertitel neu setzen" banner (`components/Vocabulary.tsx`). German default, English
+brand's, else to the job) and the "Untertitel neu setzen" banner (`components/Vocabulary.tsx`). The "Transkript" panel
+(`components/Transcript.tsx`) lists the words as sentences with times (only what the cut
+keeps unless "Auch herausgeschnittene Stellen"), edits a word inline (Enter saves, Esc
+cancels; the result player seeks there through a window event), marks edited words (hover:
+the original), "Immer so schreiben" adds term = new text / variant = old text to the brand's
+Wörterbuch (the job's terms without an own brand) and applies it, search, undo; after edits
+the "Untertitel neu setzen" banner runs `captions/refresh`. One plain button per word,
+sentences memoized, so ~1500 words stay fast. German default, English
 switch (`app/src/i18n.tsx`); verify flag and check ids map to plain words, unknown ids show
 as they are. `npm run dev:mock` runs the UI against an in-memory mock of the API.
 

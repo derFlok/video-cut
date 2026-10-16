@@ -229,8 +229,37 @@ def test_slide_geometry_every_format(fmt, layout):
         assert overlap(r.box(), p.box()) == 0
         if out[0] / out[1] > 1.2:
             assert r.h == out[1] and p.x == r.w
+            assert _layouts.slide_seam(layout, out) is None
         else:
             assert r.w == out[0] and p.y == r.h
+            # the captions' seam: a free margin above it (their upper half goes there)
+            assert _layouts.slide_seam(layout, out) == p.y
+            share = 0.12 if out[1] / out[0] >= 1.6 else 0.09
+            assert p.y - g.area[3] >= round(min(out) * share) - 1, g.area
+    if layout != "slide_split":
+        assert _layouts.slide_seam(layout, out) is None
+
+
+def test_slide_split_views_carry_the_seam_and_the_content_box():
+    from videocut.tools import overlays as overlays_mod
+
+    segs = [
+        {"in": 0, "out": 1},
+        {"in": 1, "out": 3, "layout": "slide_split", "slide": "s2"},
+        {"in": 3, "out": 4, "layout": "slide_full", "slide": "s1"},
+    ]
+    for size in ((1080, 1920), (1080, 1350), (1920, 1080)):
+        e, plan = _plan(segs, size)
+        slides = _layouts.plan_slides(e, plan, (1920, 1080), None, tuple(e.size), {})["segs"]
+        views = overlays_mod._slide_views(plan, slides, None, (1920, 1080))
+        split, full = views
+        g = _layouts.slide_geometry("slide_split", size)
+        assert split["screen"] == g.rect.box() and "seam" not in full
+        if size[0] > size[1]:  # side by side: no seam, the slide part stays hard
+            assert "seam" not in split and "content" not in split
+        else:
+            assert split["seam"] == g.speaker.y and split["content"] == list(g.area)
+            assert split["content"][3] < split["seam"]
 
 
 def test_brand_pip_token_moves_and_sizes_the_bubble():
@@ -355,3 +384,32 @@ def test_spec_hash_follows_the_bytes_of_an_uploaded_page(tmp_path):
     assert slides_mod.spec_sha(sp, tmp_path) == first
     page.write_bytes(b"two")  # same path, corrected page
     assert slides_mod.spec_sha(sp, tmp_path) != first
+
+
+def test_no_overlay_item_during_any_slide_layout():
+    from videocut.tools import overlays as overlays_mod
+
+    views = [
+        {"t0": 2.0, "t1": 5.0, "layout": "slide_split"},
+        {"t0": 8.0, "t1": 9.0, "layout": "slide_full"},
+        {"t0": 12.0, "t1": 14.0, "layout": "screen"},
+    ]
+    items = [
+        {"scene": "keyword", "t0": 0.5, "t1": 1.5},  # before the slides: kept
+        {"scene": "list_item", "t0": 1.0, "t1": 4.0},  # into slide_split: 1.0-2.0 kept
+        {"scene": "big_number", "t0": 2.5, "t1": 4.5},  # inside slide_split: dropped
+        {"scene": "keyword", "t0": 4.8, "t1": 8.3},  # around: the longer part 5.0-8.0
+        {"scene": "keyword", "t0": 7.8, "t1": 9.2},  # only short parts outside: dropped
+        {"scene": "keyword", "t0": 12.5, "t1": 13.5},  # a screen view is no slide: kept
+        {"scene": "cta_end", "t0": 8.5, "t1": 10.0},  # a plate stays
+    ]
+    kept, hidden = overlays_mod.off_slides(items, views)
+    assert [(o["scene"], o["t0"], o["t1"]) for o in kept] == [
+        ("keyword", 0.5, 1.5),
+        ("list_item", 1.0, 2.0),
+        ("keyword", 5.0, 8.0),
+        ("keyword", 12.5, 13.5),
+        ("cta_end", 8.5, 10.0),
+    ]
+    assert [h["kept"] for h in hidden] == [[1.0, 2.0], None, [5.0, 8.0], None]
+    assert overlays_mod.off_slides(items, [views[2]]) == (items, [])

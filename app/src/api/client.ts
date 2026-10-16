@@ -20,6 +20,7 @@ import type {
   SlidesMode,
   TargetChoice,
   TargetRange,
+  TranscriptView,
   VideoType,
   VocabEntry,
 } from "./types";
@@ -254,6 +255,13 @@ export const api = {
   applyVocabulary: (id: string) => call<VocabularyApplied>("POST", `${J(id)}/vocabulary/apply`),
   /** Set captions and overlays again on the kept cut (after the vocabulary changed them). */
   redoOverlays: (id: string) => call<unknown>("POST", `${J(id)}/overlays`),
+  transcript: (id: string) => call<TranscriptView>("GET", `${J(id)}/transcript`),
+  /** One word's new text ("" hides it from the captions); `t0` guards against a changed transcript. */
+  editWord: (id: string, i: number, text: string, t0?: number) =>
+    call<TranscriptView>("PATCH", `${J(id)}/transcript`, t0 === undefined ? { i, text } : { i, text, t0 }),
+  undoWord: (id: string) => call<TranscriptView>("POST", `${J(id)}/transcript/undo`),
+  /** Set the captions again with the edited transcript (tool steps, no Claude run). */
+  refreshCaptions: (id: string) => call<unknown>("POST", `${J(id)}/captions/refresh`),
   feedback: (id: string, text: string, at_s?: number) =>
     call<unknown>("POST", `${J(id)}/feedback`, at_s === undefined ? { text } : { text, at_s }),
 
