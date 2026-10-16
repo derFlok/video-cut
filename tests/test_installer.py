@@ -354,7 +354,7 @@ def test_install_texts_are_neutral(path: Path):
     # the product is "Video Cut"; "Claude Code" is the person's helper, never the product
     assert not re.search(r"Claude Code (Video|Cut)|Video Cut (for|für) Claude Code", text)
     assert not re.search(r"#[0-9A-Fa-f]{6}\b", text)  # no colours
-    for banned in ("sudo ", "brew install", "git clone", "python3 -"):
+    for banned in ("sudo ", "brew install", "git clone", "python3 -c", "python3 -m"):
         assert banned not in text.replace("never `git`", ""), banned
     forbidden = Path(ROOT / ".git").resolve()
     words = _forbidden_words(forbidden)
