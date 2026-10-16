@@ -143,6 +143,35 @@ Claude Code reads as relative to the project, so they had no effect there; the r
 `~/.claude/skills` in both runs came from Claude Code's built-in protection of its settings
 folder. Fixed in the harness (`//` for absolute paths).
 
+## Claude-driven install after the proposals (`installer` `11ac9ff`, 2026-10-16, English)
+
+Same setup as above (local tarball, `--keep-models`, CLI default model). Three runs while the
+install text was revised; the last one on the final text:
+
+| | Run 1 (`a30f5b5`) | Run 2 | Run 3 (`11ac9ff`, final text) |
+|---|---|---|---|
+| Result | installed | installed | **installed**, doctor green, launcher opened |
+| Wall clock | 3 min 16 s | 3 min 28 s | **3 min 00 s** |
+| Turns / cost | – / $1.56 | – / $1.35 | 13 / $1.10 |
+| Questions to the person | 0 | 0 | 0 |
+| Permission prompts | 0 | 0 (4 harness deny-rule hits) | 0 (1 harness deny-rule hit, see below) |
+| `~/.claude` touched | no | no | no |
+| Sent to the Terminal | no | no | no |
+| Final message exact | no (too long) | yes | yes, plus the allowed sentence about the welcome screen |
+| Announcement as its own first message | no | no | **no** |
+| `python3 --version` / `command -v` probe | yes | yes | **yes**, after reading INSTALL.md and the skill |
+
+The permission prompts about `~/.claude/skills` are gone, the person is no longer sent to the
+Terminal and the final message names no ports or tools. Two gaps remain in print mode (`claude -p`),
+although INSTALL.md, the skill and CLAUDE.md all say otherwise: the first message is about
+"extracting the archive" instead of the size/time announcement, and the helper probes
+`python3 --version` and friends before starting. On a Mac with the developer tools (all test
+runs) the probe is harmless; on a Mac without them it would open the "install developer tools"
+dialog once (the person can cancel it; the install does not need it). Whether an interactive
+conversation follows the text better is part of the fresh-account test below. The one denial in
+run 3 is the harness's deny rule on the real `~/VideoCut` (the helper's `~` resolved to the real
+home in one command before it switched to the test home), not a prompt a person would see.
+
 ## What a human must test on a fresh account
 
 We have no second Mac. A fresh macOS user account on the same Mac is the closest thing: no
