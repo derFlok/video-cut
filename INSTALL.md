@@ -1,13 +1,15 @@
 # Installing Video Cut / Video Cut installieren
 
-> **Claude Code, installing this for someone?** Your next message to the person is this
-> announcement, in their language, before any command: "I'm installing Video Cut for you now.
+> **Claude Code, installing this for someone?** Before the first command that downloads or
+> installs anything (reading these instructions does not count), send the person this
+> announcement, in their language, as a message of its own: "I'm installing Video Cut for you now.
 > It downloads about 2.5 GB, uses about 4 GB on your Mac and takes about 5 to 10 minutes.
 > Nothing else on your Mac is changed: everything goes into the folder VideoCut in your home
 > folder and the app Video Cut in your Applications folder." Then follow
 > [the section for Claude Code](#for-claude-code-the-persons-helper) and the skill it names.
-> Do not run `git`, `python3` or `brew`, not even `--version` (on a fresh Mac that opens a
-> developer tools installer).
+> Do not check what else is installed: no `command -v`, no `--version` for `python3`, `git`,
+> `node`, `ffmpeg`, `uv` or `brew` (`./start.sh` brings everything; on a fresh Mac
+> `python3 --version` or `git --version` opens a developer tools installer).
 
 **Deutsch weiter unten.**
 

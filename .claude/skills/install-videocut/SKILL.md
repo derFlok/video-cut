@@ -11,8 +11,9 @@ with "du"), short plain sentences, no jargon: never mention archives, tarballs, 
 Python, FFmpeg, Node, background jobs, logs, permissions or what something costs you. Do the
 technical work yourself; tell them what is happening and how long it takes.
 
-**Your first message, before any command,** is the announcement in Install step 1 (in their
-language). Then work without narrating each command.
+**Before the first command that downloads or installs anything** (reading these instructions
+does not count), send the announcement in Install step 1 as a message of its own, in their
+language. Then work without narrating each command.
 
 Fixed facts:
 
@@ -58,8 +59,10 @@ Ask the person only what is theirs to decide. A normal install needs no question
    > Benutzerordner und die App „Video Cut“ in deinen Programme-Ordner. Deine Aufnahmen
    > verlassen deinen Mac nie.
 
-2. **Check the Mac** (no questions): `uname -m` must be `arm64`, `sw_vers -productVersion` 14
-   or newer, `df -g ~ | tail -1` at least 8 GB free in the "Avail" column. If something fails,
+2. **Check the Mac** with exactly these three commands (no questions, and nothing else: do not
+   look for Python, git, Node, FFmpeg, uv or Homebrew, `./start.sh` brings what it needs):
+   `uname -m` must be `arm64`, `sw_vers -productVersion` 14 or newer, `df -g ~ | tail -1` at
+   least 8 GB free in the "Avail" column. If something fails,
    explain it plainly and stop (an Intel Mac cannot run Video Cut).
 3. **Already installed?** If `~/VideoCut/app/start.sh` exists, this is a repair or an update:
    go to "Repair" below instead.
