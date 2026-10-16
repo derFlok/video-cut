@@ -392,3 +392,50 @@ def test_start_sh_needs_nothing_outside_macos():
         # as a command: at the start of a statement, not inside a message
         assert not re.search(rf"(^|[;&|(]|then|do)\s*{banned}\b", code, re.M), banned
     assert 'uv" cache prune --ci' in code
+
+
+def test_update_refuses_to_overwrite_a_git_checkout(monkeypatch, tmp_path):
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(update, "ROOT", tmp_path)
+    monkeypatch.setattr(update, "has_git", lambda: False)  # no command line tools
+    monkeypatch.setattr(update, "stop_server", lambda force: pytest.fail("stopped the app"))
+    with pytest.raises(update.UpdateError, match="git checkout"):
+        update.run(root=tmp_path)
+
+
+def test_update_downloads_before_it_stops_the_app(monkeypatch, tmp_path):
+    root = tmp_path / "app"
+    root.mkdir()
+    order = []
+
+    def broken(ref, into):
+        order.append("download")
+        raise OSError("offline")
+
+    monkeypatch.setattr(update, "ROOT", root)
+    monkeypatch.setattr(update, "download_tree", broken)
+    monkeypatch.setattr(update, "stop_server", lambda force: order.append("stop"))
+    with pytest.raises(OSError):
+        update.run(ref="main", root=root)
+    assert order == ["download"]
+
+
+def test_open_app_accepts_a_lost_start_race(monkeypatch):
+    answers = iter([None, {"pid": 1, "port": 4391, "url": "http://u/?t=x"}])
+    monkeypatch.setattr(launcher, "running", lambda timeout=2: next(answers))
+    monkeypatch.setattr(launcher, "free_port", lambda p: 4391)
+
+    class Exited:
+        def poll(self):
+            return 1
+
+    monkeypatch.setattr(launcher, "start_background", lambda p: Exited())
+    monkeypatch.setattr(launcher.time, "sleep", lambda s: None)
+    monkeypatch.setattr(launcher, "open_url", lambda u: None)
+    assert launcher.open_app() == 0
+
+
+def test_set_api_key_refuses_odd_characters(monkeypatch):
+    monkeypatch.setattr(settings.subprocess, "run", lambda *a, **k: pytest.fail("ran security"))
+    with pytest.raises(ValueError):
+        settings.set_api_key("sk-ant-x -w other\nadd-generic-password")

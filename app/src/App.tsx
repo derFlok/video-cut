@@ -16,6 +16,8 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null);
   // null: not known yet; the first-start screen shows until the connection is chosen once
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
+  // the welcome screen stays (with its first-video tips) after saving, until it is left
+  const [welcome, setWelcome] = useState(false);
   const [stopped, setStopped] = useState(false);
   const [quitErr, setQuitErr] = useState<unknown>(null);
 
@@ -24,9 +26,16 @@ export function App() {
     void loadSession();
     api
       .setupStatus()
-      .then((s) => setSetupDone(s.done))
+      .then((s) => {
+        setSetupDone(s.done);
+        setWelcome(!s.done);
+      })
       .catch(() => setSetupDone(true)); // an older server without the screen: go on
   }, []);
+  useEffect(() => {
+    // saved and moved on (e.g. the nav): the welcome screen is done
+    if (welcome && setupDone && route.name !== "home") setWelcome(false);
+  }, [welcome, setupDone, route.name]);
   useEffect(() => {
     document.documentElement.lang = lang;
   }, [lang]);
@@ -47,7 +56,11 @@ export function App() {
       </main>
     );
 
-  const firstStart = setupDone === false && route.name !== "settings";
+  const saved = () => {
+    setSetupDone(true);
+    void loadSession();
+  };
+  const firstStart = welcome && route.name !== "settings" && (setupDone === false || route.name === "home");
   const showApp = setupDone !== null && !firstStart; // no flash of the job list before the check
   const section =
     route.name === "brands" || route.name === "brand" ? "brands" : route.name === "settings" ? "settings" : "jobs";
@@ -104,13 +117,21 @@ export function App() {
       <main id="main" className="main" tabIndex={-1}>
         {firstStart && (
           <Welcome
+            onSaved={saved}
             onDone={() => {
-              setSetupDone(true);
-              void loadSession();
+              setWelcome(false);
+              saved();
             }}
           />
         )}
-        {showApp && route.name === "settings" && <Settings />}
+        {showApp && route.name === "settings" && (
+          <Settings
+            onSaved={() => {
+              setWelcome(false);
+              saved();
+            }}
+          />
+        )}
         {showApp && route.name === "home" && <Home />}
         {showApp && route.name === "new" && <NewJob />}
         {showApp && route.name === "job" && <JobPage key={route.id} id={route.id} />}

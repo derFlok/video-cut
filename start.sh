@@ -121,7 +121,7 @@ doctor_ok=1
 "$BIN/uv" run --frozen --quiet videocut doctor || doctor_ok=0
 
 # --- summary ------------------------------------------------------------------
-kb() { du -sk "$@" 2>/dev/null | awk '{s += $1} END {print s + 0}'; }
+kb() { { du -sk "$@" 2>/dev/null || true; } | awk '{s += $1} END {print s + 0}'; }
 DATA="${VIDEOCUT_HOME:-$HOME/VideoCut}"
 tools_kb=$(kb "$TOOLS" "$ROOT/.venv" "$ROOT/renderer/node_modules" "$ROOT/app/node_modules")
 models_kb=$(kb "$DATA/models")

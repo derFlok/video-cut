@@ -142,29 +142,41 @@ def swap(new: Path, root: Path = ROOT) -> Path:
         for rel in moved:  # put the tools back where they were
             (new / rel).rename(root / rel)
         raise
-    new.rename(root)
+    try:
+        new.rename(root)
+    except OSError:
+        old.rename(root)
+        for rel in moved:
+            (new / rel).rename(root / rel)
+        raise
     return old
 
 
 def run(force: bool = False, ref: str | None = None, root: Path = ROOT) -> int:
-    stopped = stop_server(force)
+    old = None
     if has_git():
+        stopped = stop_server(force)
         print(f"Updating the git checkout in {root} …", flush=True)
         what = git_update(root)
-        old = None
+    elif (root / ".git").exists():
+        # a developer checkout without the command line tools: never overwrite it
+        raise UpdateError(
+            f"{root} is a git checkout; update it with git (needs the command line tools)"
+        )
     else:
         what = ref or latest_ref()
         print(f"Downloading Video Cut ({what}) …", flush=True)
         staging = root.with_name(f".{root.name}-update")
         shutil.rmtree(staging, ignore_errors=True)
-        new = download_tree(what, staging)
+        new = download_tree(what, staging)  # before stopping: no network, app keeps running
         (new / SOURCE_FILE).write_text(json.dumps({"ref": what, "updated": time.time()}))
+        stopped = stop_server(force)
         old = swap(new, root)
         shutil.rmtree(staging, ignore_errors=True)
     print(f"Now at {what}. Running ./start.sh …", flush=True)
     code = subprocess.run([str(root / "start.sh")], cwd=root).returncode
     if code != 0:
-        hint = f" The previous version is kept in {old}." if old else ""
+        hint = f" The previous code (without its tools) is in {old}." if old else ""
         print(f"start.sh failed (exit {code}).{hint} Run `videocut doctor`.", flush=True)
         return code
     if old is not None:

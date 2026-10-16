@@ -84,11 +84,14 @@ export function ConnectClaude({ status, onSaved, onRecheck }: { status: SetupSta
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<SetupTest | null>(null);
   const [howOpen, setHowOpen] = useState(false);
+  const [touched, setTouched] = useState(false);
+  const choose = (m: AuthMode) => (setTouched(true), setMode(m));
 
-  // The detection finished after the first render: suggest the subscription it found.
+  // The detection finished after the first render: suggest the subscription it found,
+  // unless the person already chose.
   useEffect(() => {
-    if (!status.done && signedIn) setMode("local");
-  }, [status.done, signedIn]);
+    if (!status.done && signedIn && !touched) setMode("local");
+  }, [status.done, signedIn, touched]);
 
   const save = async () => {
     setKeyErr(null);
@@ -138,7 +141,8 @@ export function ConnectClaude({ status, onSaved, onRecheck }: { status: SetupSta
               name="auth-mode"
               value="local"
               checked={mode === "local"}
-              onChange={() => setMode("local")}
+              onChange={() => choose("local")}
+              onClick={() => setTouched(true)}
               aria-labelledby="mode-local"
               aria-describedby="mode-local-desc"
             />
@@ -163,7 +167,8 @@ export function ConnectClaude({ status, onSaved, onRecheck }: { status: SetupSta
               name="auth-mode"
               value="apikey"
               checked={mode === "apikey"}
-              onChange={() => setMode("apikey")}
+              onChange={() => choose("apikey")}
+              onClick={() => setTouched(true)}
               aria-labelledby="mode-apikey"
               aria-describedby="mode-apikey-desc"
             />
@@ -245,7 +250,7 @@ export function FirstVideo({ onLater }: { onLater: () => void }) {
 }
 
 /** Shown instead of the app until the connection is chosen once. */
-export function Welcome({ onDone }: { onDone: () => void }) {
+export function Welcome({ onSaved, onDone }: { onSaved: () => void; onDone: () => void }) {
   const { t } = useI18n();
   const [status, err, reload] = useSetupStatus();
   const [savedOnce, setSavedOnce] = useState(false);
@@ -257,7 +262,14 @@ export function Welcome({ onDone }: { onDone: () => void }) {
       {!status && !err && <p className="muted">{t("common.loading")}</p>}
       {status && (
         <section className="panel">
-          <ConnectClaude status={status} onSaved={() => setSavedOnce(true)} onRecheck={() => reload(true)} />
+          <ConnectClaude
+            status={status}
+            onSaved={() => {
+              setSavedOnce(true);
+              onSaved();
+            }}
+            onRecheck={() => reload(true)}
+          />
         </section>
       )}
       {savedOnce && <FirstVideo onLater={onDone} />}
@@ -265,7 +277,7 @@ export function Welcome({ onDone }: { onDone: () => void }) {
   );
 }
 
-export function Settings() {
+export function Settings({ onSaved }: { onSaved?: () => void }) {
   const { t } = useI18n();
   const [status, err, reload] = useSetupStatus();
   const [version, setVersion] = useState<string | null>(null);
@@ -281,7 +293,14 @@ export function Settings() {
         <section className="panel stack" aria-labelledby="conn-title">
           <h2 id="conn-title">{t("settings.connection")}</h2>
           {status.done && <p className="muted">{status.mode === "apikey" ? t("settings.mode.apikey") : t("settings.mode.local")}</p>}
-          <ConnectClaude status={status} onSaved={() => reload()} onRecheck={() => reload(true)} />
+          <ConnectClaude
+            status={status}
+            onSaved={() => {
+              reload();
+              onSaved?.();
+            }}
+            onRecheck={() => reload(true)}
+          />
         </section>
       )}
       {version && <p className="muted">{t("settings.version", { v: version })}</p>}

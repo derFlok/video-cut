@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added — Phase 4: install by your own Claude Code, launcher, first-start screen
+- Install path without IT knowledge: the person tells their own Claude Code "Install
+  https://github.com/derFlok/video-cut for me and guide me through it." It follows the skill
+  `.claude/skills/install-videocut` (install, repair, update, uninstall; `curl` tarball into
+  `~/VideoCut/app`, never `git`, `python3`, `sudo` or Homebrew), `INSTALL.md` (de/en) and
+  the new top section of `CLAUDE.md`.
+- `start.sh` / `install.py`: numbered steps 1-7 with size and time ("Step 7/7: models …,
+  1.6 GB, about 2 minutes on 100 Mbit/s"), "already done" for finished steps, a summary
+  (time, disk use, folders); downloads resume from a `.part` file (HTTP Range) and retry;
+  `uv sync` retries; `uv cache prune --ci` after the sync (~1.4 GB less); the person's
+  `PYTHONPATH`/`VIRTUAL_ENV`/`NODE_OPTIONS` are ignored; Rosetta terminals are refused
+  with a plain message. Tool sizes in `manifest/tools.json` (`approx_size_mb`).
+- `videocut doctor`: a concrete `fix` per failed check (this Mac, app build, claude sign-in,
+  API key, launcher); `--json` for a helper.
+- `videocut launcher [--system] [--at-login]`: writes `~/Applications/Video Cut.app` on the
+  machine (bash stub, generated neutral icon, no quarantine, no signing); double-click =
+  `videocut open` (start the server in the background if needed, open the link). The
+  server records port and link in `$VIDEOCUT_HOME/state/server.json` (0600). Start at login
+  only when asked; `--remove` (also run by `uninstall.sh`).
+- `videocut update`: stops the app (not during a run unless `--force`), downloads the newest
+  release tag (or `main`), swaps the code and keeps `.tools`/`.venv`/`node_modules`, runs
+  `./start.sh`; a git checkout with the command line tools uses `git pull --ff-only`.
+- `videocut stop [--force]` stops the running app (used by `uninstall.sh`, which also
+  removes the launcher and the helper skill link).
+- Port: `VIDEOCUT_PORT`, else 4300, else the next free port (`ui`, `open`).
+- The API key goes to the keychain through `security -i` on stdin (no longer visible in
+  the process list).
+- App: first-start screen (de/en) — the official `claude` program is asked in the
+  background (`claude auth status`; only its output is used, never its files), "Claude-Abo
+  erkannt" with the account it prints, choice of own subscription (with the one-sentence
+  terms note) or API key (keychain), "Verbindung prüfen" (one tiny `claude -p` call with
+  the smallest model), then the "Dein erstes Video" tips. Settings page with the current
+  mode and the same switch. "Beenden" stops the server (asks while a run is active).
+- API: `GET /api/setup/status`, `POST /api/setup/auth`, `POST /api/setup/test`,
+  `POST /api/shutdown` (all behind the session cookie + Origin check).
+- The `claude` program is also found outside PATH (`~/.local/bin`, Homebrew, npm), so the
+  launcher (started by Finder with a minimal PATH) finds it.
+
 ### Added — transcript editor
 - `videocut tool transcript show|edit|undo`: the human changes single words of
   `work/words.json` (text only, never timing). An edited word keeps `w_asr` (the model's

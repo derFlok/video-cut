@@ -153,6 +153,11 @@ def open_app(port: int | None = None, browser: bool = True, wait_s: float = 60) 
         deadline = time.monotonic() + wait_s
         while info is None and time.monotonic() < deadline:
             if proc.poll() is not None:
+                # a second double-click lost the race for the port: the first one runs
+                time.sleep(1)
+                info = running()
+                if info is not None:
+                    break
                 print(f"Video Cut stopped at start (see {log_file()}).", file=sys.stderr)
                 return 1
             time.sleep(0.3)
@@ -231,9 +236,12 @@ def bundle(dest_dir: Path, port: int | None = None, root: Path = ROOT) -> Path:
                                        port_arg=port_arg))  # fmt: skip
     stub.chmod(0o755)
     (res / "icon.icns").write_bytes(icon_icns())
+    old = dest_dir / f".{APP_NAME}.old"
+    shutil.rmtree(old, ignore_errors=True)
     if app.exists():
-        shutil.rmtree(app)
+        app.rename(old)  # never a moment without an app if this process dies
     tmp.rename(app)
+    shutil.rmtree(old, ignore_errors=True)
     os.utime(app)  # Finder picks up the new icon
     return app
 
@@ -247,6 +255,7 @@ def _version() -> str:
 def set_login_item(app: Path | None, enabled: bool, agents: Path = LOGIN_ITEM) -> Path:
     """Start the server (without opening the browser) at login. Off by default."""
     if not enabled:
+        _bootout(agents)
         agents.unlink(missing_ok=True)
         return agents
     assert app is not None
@@ -275,9 +284,17 @@ def remove(dirs: list[Path] | None = None, agents: Path = LOGIN_ITEM) -> list[Pa
             shutil.rmtree(app)
             gone.append(app)
     if agents.exists():
+        _bootout(agents)
         agents.unlink()
         gone.append(agents)
     return gone
+
+
+def _bootout(agents: Path) -> None:
+    """Unload a loaded login item now (else it stays loaded until the next login)."""
+    if agents.exists() and agents == LOGIN_ITEM:
+        subprocess.run(["/bin/launchctl", "bootout", f"gui/{os.getuid()}", str(agents)],
+                       capture_output=True, check=False)  # fmt: skip
 
 
 # ------------------------------------------------------------------ the icon (generated)

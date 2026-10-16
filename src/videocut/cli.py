@@ -54,6 +54,8 @@ def main(argv: list[str] | None = None) -> int:
         help="start Video Cut in the background at login (off unless asked)",
     )
     la.add_argument("--remove", action="store_true", help="remove the launcher and login item")
+    st = sub.add_parser("stop", help="stop the running app")
+    st.add_argument("--force", action="store_true", help="also while a job is running")
     up = sub.add_parser("update", help="get the newest Video Cut and install it")
     up.add_argument("--force", action="store_true", help="stop a running job to update")
     up.add_argument("--ref", help="a release tag or branch instead of the newest release")
@@ -200,6 +202,15 @@ def main(argv: list[str] | None = None) -> int:
         return launcher.open_app(a.port, browser=not a.no_browser)
     if a.cmd == "launcher":
         return _launcher(a)
+    if a.cmd == "stop":
+        from . import update
+
+        try:
+            print("Stopped." if update.stop_server(a.force) else "Video Cut was not running.")
+        except update.UpdateError as e:
+            print(e, file=sys.stderr)
+            return 1
+        return 0
     if a.cmd == "update":
         from . import update
 
@@ -220,7 +231,11 @@ def main(argv: list[str] | None = None) -> int:
             if not key.startswith("sk-ant-"):
                 print("That does not look like an Anthropic API key.", file=sys.stderr)
                 return 1
-            settings.set_api_key(key)
+            try:
+                settings.set_api_key(key)
+            except (ValueError, RuntimeError, OSError) as e:
+                print(f"Not stored: {e}", file=sys.stderr)
+                return 1
             settings.save(auth="apikey")
         mode = settings.load()["auth"]
         print("Mode: " + ("API key (keychain)" if mode == "apikey" else "own Claude Code sign-in"))

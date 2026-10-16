@@ -65,6 +65,32 @@ describe("first start", () => {
     expect(screen.getByLabelText(t("setup.key.label"))).toHaveAttribute("type", "password");
   });
 
+  it("after saving, leaving the welcome screen goes to the app (not back to the welcome)", async () => {
+    installMock({ step: 0, setup: { done: false } });
+    const user = userEvent.setup();
+    wrap(<App />);
+    await screen.findByText(t("setup.detected"));
+    await user.click(screen.getByRole("button", { name: t("setup.save") }));
+    await screen.findByRole("heading", { name: t("first.title") });
+    window.location.hash = "#/brands";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: t("setup.title") })).not.toBeInTheDocument());
+    window.location.hash = "#/";
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(await screen.findByRole("heading", { name: STRINGS.de["home.title"] })).toBeInTheDocument();
+  });
+
+  it("a choice made before the detection finishes is kept", async () => {
+    const mock = installMock({ step: 0, setup: { done: false, claude: { state: "checking", installed: undefined, signed_in: undefined } } });
+    const user = userEvent.setup();
+    wrap(<App />);
+    await screen.findByText(t("setup.checking"));
+    await user.click(screen.getByRole("radio", { name: t("setup.apikey") }));
+    mock.state.setup = { ...mock.state.setup, claude: { state: "done", installed: true, signed_in: true, account: null } };
+    expect(await screen.findByText(t("setup.detected"), {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: t("setup.apikey") })).toBeChecked();
+  });
+
   it("the test button reports a failed connection", async () => {
     installMock({ step: 0, testOk: false });
     const user = userEvent.setup();

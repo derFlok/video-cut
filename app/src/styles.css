@@ -318,6 +318,7 @@ fieldset:disabled .filebutton .btn {
   cursor: pointer;
 }
 input[type="text"],
+input[type="password"],
 input:not([type]),
 select,
 textarea {

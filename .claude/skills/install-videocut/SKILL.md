@@ -140,6 +140,6 @@ Tell the person what will be removed and what stays, then do it:
   the person asks: `security delete-generic-password -s videocut -a anthropic-api-key`.
 
 ```sh
-cd ~/VideoCut/app && .tools/bin/uv run --frozen videocut launcher --remove
-rm -rf ~/VideoCut/app ~/.claude/skills/install-videocut
+cd ~/VideoCut/app && ./uninstall.sh       # stops the app, removes launcher, tools, skill link
+rm -rf ~/VideoCut/app
 ```
