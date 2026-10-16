@@ -16,6 +16,7 @@ Runs: one pipeline run at a time (a queue, src/videocut/server/runs.py); the run
 lines become events on the job's server-sent-event channel.
 """
 
+import os
 import secrets
 import shutil
 import webbrowser
@@ -36,6 +37,7 @@ def serve(port: int = 4300, open_browser: bool = True) -> None:
     # staging folders of uploads a killed server left behind (multi-GB possible)
     shutil.rmtree(home() / "uploads", ignore_errors=True)
     token = secrets.token_urlsafe(24)
+    os.environ[run.UI_SERVER_ENV] = "1"  # see run.human_flags_refused
     server: uvicorn.Server | None = None
 
     def stop() -> None:  # POST /api/shutdown (the app's "Beenden" button)

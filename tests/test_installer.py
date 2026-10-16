@@ -482,3 +482,48 @@ def test_python_and_chromium_are_pinned_and_used():
 
     if install.playwright_revision():  # renderer packages installed
         assert install.playwright_revision() == shell["revision"]
+
+
+# ------------------------------------------------------------------ human gate on the CLI
+
+
+def _args(approve=False, demo=False):
+    import argparse
+
+    return argparse.Namespace(approve=approve, demo_data=demo)
+
+
+def test_approve_needs_a_terminal_unless_the_app_server_runs(monkeypatch):
+    from videocut import run
+
+    monkeypatch.delenv("VIDEOCUT_AGENT", raising=False)
+    monkeypatch.delenv(run.UI_SERVER_ENV, raising=False)
+    assert run.human_flags_refused(_args(), stdin_tty=False) is None
+    msg = run.human_flags_refused(_args(approve=True), stdin_tty=False)
+    assert msg and "--approve" in msg and "terminal" in msg
+    assert "--demo-data" in run.human_flags_refused(_args(demo=True), stdin_tty=False)
+    assert run.human_flags_refused(_args(approve=True), stdin_tty=True) is None
+    monkeypatch.setenv(run.UI_SERVER_ENV, "1")
+    assert run.human_flags_refused(_args(approve=True, demo=True), stdin_tty=False) is None
+    monkeypatch.setenv("VIDEOCUT_AGENT", "1")  # never inside an agent run, terminal or not
+    assert "agent run" in run.human_flags_refused(_args(approve=True), stdin_tty=True)
+
+
+def test_cli_refuses_approve_without_a_terminal(monkeypatch, capsys):
+    from videocut import run
+    from videocut.cli import main
+
+    monkeypatch.delenv(run.UI_SERVER_ENV, raising=False)
+    monkeypatch.setattr(run.sys.stdin, "isatty", lambda: False, raising=False)
+    monkeypatch.setattr(run, "run", lambda *a, **k: pytest.fail("ran the pipeline"))
+    assert main(["run", "some-job", "--approve"]) == 2
+    assert "needs a person at a terminal" in capsys.readouterr().err
+
+
+def test_agent_runs_never_inherit_the_app_flag(monkeypatch):
+    from videocut import agent
+
+    monkeypatch.setattr(agent.shutil, "which", lambda _: "/usr/local/bin/claude")
+    monkeypatch.setenv("VIDEOCUT_UI_SERVER", "1")
+    _, env = agent.command("x")
+    assert "VIDEOCUT_UI_SERVER" not in env and env["VIDEOCUT_AGENT"] == "1"

@@ -157,8 +157,8 @@ Mac that never had them (or a reinstall) shows it.
 - [ ] Paste the sentence from INSTALL.md exactly ("Install <repository URL> for me and guide me
       through it."), and once more the German one in a second fresh account, or after removing
       `~/VideoCut` and `~/Applications/Video Cut.app`.
-- [ ] When the install runs: does a "Claude wants to edit a sensitive file" dialog appear for
-      `~/.claude/skills`? Note its exact wording and whether Claude explained it first.
+- [ ] When the install runs: no permission dialog should appear at all (the skill no longer
+      writes into `~/.claude`). Note the exact wording of any that does.
 - [ ] Desktop app only: does the welcome screen find the `claude` program the desktop app brings,
       or does it say none was found?
 - [ ] Note the clock time when you press Enter and when Video Cut opens in the browser.
@@ -169,7 +169,7 @@ Mac that never had them (or a reinstall) shows it.
       dialog appeared. If the dialog appeared: note what Claude ran just before it.
 - [ ] `~/Applications/Video Cut.app` exists, has a neutral icon, and double-clicking it opens
       Video Cut (the first time macOS may ask whether to open it: note the exact wording).
-- [ ] The app shows "Claude-Abo erkannt" (or the two ways to connect Claude) without asking for
+- [ ] The app shows "Anmeldung bei Claude gefunden" (or the two ways to connect Claude) without asking for
       a password or a key you do not have.
 - [ ] Quit the browser tab, log out and in again, double-click the launcher: Video Cut opens again.
 - [ ] Tell Claude "Video Cut startet nicht" while the app is closed: it starts or explains it in

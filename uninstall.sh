@@ -11,9 +11,6 @@ if [[ -x "$ROOT/.venv/bin/python" ]]; then
   (cd "$ROOT" && "$ROOT/.venv/bin/python" -m videocut.cli stop --force) || true
   (cd "$ROOT" && "$ROOT/.venv/bin/python" -m videocut.cli launcher --remove) || true
 fi
-# The helper skill link made by the install (only if it points into this folder).
-skill="$HOME/.claude/skills/install-videocut"
-if [[ -L "$skill" && "$(readlink "$skill")" == "$ROOT"/* ]]; then rm "$skill"; fi
 rm -rf "$ROOT/.tools" "$ROOT/.venv" "$ROOT/renderer/node_modules" "$ROOT/app/node_modules"
 echo "Removed installed tools from $ROOT."
 

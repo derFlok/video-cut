@@ -19,7 +19,7 @@ Du brauchst keine technischen Kenntnisse. Claude Code übernimmt die Installatio
 
    > Installiere https://github.com/derFlok/video-cut für mich und führe mich durch die Einrichtung.
 
-3. **Den Anweisungen von Claude Code folgen.** Es lädt Video Cut nach `~/VideoCut/app`, installiert alles Nötige (es lädt rund 2,5 GB herunter und belegt rund 5–6 GB Speicher), legt **Video Cut** in den Ordner *Programme* in deinem Benutzerordner und öffnet es.
+3. **Den Anweisungen von Claude Code folgen.** Es lädt Video Cut nach `~/VideoCut/app`, installiert alles Nötige (es lädt rund 2,5 GB herunter und belegt rund 4 GB Speicher), legt **Video Cut** in den Ordner *Programme* in deinem Benutzerordner und öffnet es.
 
 Ab dann startest du Video Cut mit einem Doppelklick auf **Video Cut** in `~/Applications` (Finder: *Programme* in deinem Benutzerordner); ein Terminal brauchst du nie. Wenn etwas nicht klappt oder du aktualisieren willst, sag es einfach Claude Code, z. B. *„Video Cut startet nicht“* oder *„Video Cut aktualisieren“*.
 
@@ -54,7 +54,7 @@ Video Cut ist kostenlos und Open Source. Claude bezahlst du über deinen eigenen
 - Ein Mac mit Apple-Chip (M1 oder neuer); Intel-Macs werden nicht unterstützt
 - macOS 14 Sonoma oder neuer
 - 16 GB Arbeitsspeicher empfohlen
-- Rund 5–6 GB Speicher für die Installation (rund 2,5 GB werden heruntergeladen), dazu Platz für deine Videos (der Installer braucht mindestens 8 GB frei und empfiehlt 15 GB)
+- Rund 4 GB Speicher für die Installation (rund 2,5 GB werden heruntergeladen), dazu Platz für deine Videos (der Installer braucht mindestens 8 GB frei und empfiehlt 15 GB)
 - Claude Code, angemeldet mit einem Claude-Pro- oder -Max-Abo oder einem Anthropic-API-Key
 
 ## Deinstallieren

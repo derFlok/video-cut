@@ -106,6 +106,7 @@ def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tupl
     env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     env["VIDEOCUT_AGENT"] = "1"
+    env.pop("VIDEOCUT_UI_SERVER", None)  # an agent run never inherits the app's flag
     env.pop("ANTHROPIC_API_KEY", None)
     if conf["auth"] == "apikey":
         key = settings.api_key()
