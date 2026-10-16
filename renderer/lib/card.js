@@ -175,6 +175,7 @@ function layoutCard(env, item, measure, { position = "center", stage = false, la
       h: Math.ceil(m.h),
       face: stage ? null : env.faceDuring(item.t0, item.t1),
       avoid: env.blocksDuring(item.t0, item.t1),
+      hard: env.hardDuring ? env.hardDuring(item.t0, item.t1) : [],
       position,
       anchor,
       margin: reach,

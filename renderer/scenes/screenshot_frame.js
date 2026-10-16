@@ -200,4 +200,4 @@ function draw(ctx, t, item, env) {
   });
 }
 
-module.exports = { name, assets, layout, layoutFirst, draw, focusRect, blurCell };
+module.exports = { name, assets, layout, layoutFirst, draw, focusRect, blurCell, redacted, normBox, STYLES };

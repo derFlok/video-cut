@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import type { JobDetail, Revision, VerifySummary, Version } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog } from "../components/LiveLog";
+import { SlideMarks } from "../components/Slides";
 import { clock, date, money, STRINGS, useI18n, type T, type TKey } from "../i18n";
 import { isInterim, lockReason } from "../progress";
 import type { Live } from "./JobPage";
@@ -49,6 +50,7 @@ export function Result({ live }: { live: Live }) {
   const [err, setErr] = useState<unknown>(null);
   const [sending, setSending] = useState(false);
   const [playing, setPlaying] = useState<Version | null>(null);
+  const [duration, setDuration] = useState(0);
 
   const bust = String(job.revisions.length);
   const versions = versionsOf(job);
@@ -112,8 +114,18 @@ export function Result({ live }: { live: Live }) {
           preload="metadata"
           playsInline
           onTimeUpdate={(e) => setNow(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
         />
       </div>
+      {!playing && (
+        <SlideMarks
+          marks={job.slides?.marks ?? []}
+          duration={duration}
+          onSeek={(s) => {
+            if (player.current) player.current.currentTime = s;
+          }}
+        />
+      )}
       {playing && (
         <p className="hint" role="status">
           {t("result.version.playing", { n: playing.version })} ·{" "}

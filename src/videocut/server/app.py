@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, agent, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format, _length, _redact_style, _style, vocab
+from ..tools import _format, _job_slides, _length, _redact_style, _style, vocab
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
@@ -42,7 +42,18 @@ from ..tools.job import (
 from . import brands, state
 from .runs import Busy, Runs
 from .security import Guard
-from .uploads import ASSET_EXT, VIDEO_EXT, UploadError, check_image, check_video, read_form
+from .uploads import (
+    ASSET_EXT,
+    MAX_SLIDE_BYTES,
+    MAX_SLIDE_FILES,
+    SLIDE_EXT,
+    VIDEO_EXT,
+    UploadError,
+    check_image,
+    check_slide,
+    check_video,
+    read_form,
+)
 
 # Video types offered as cards (BRIEF §7). `needs`/`optional` name the inputs of the job
 # form: camera (the recording), screen (a screen recording of the same take), assets
@@ -141,9 +152,13 @@ class Pipeline:
         """After /approve: the approval is recorded, so run() goes on to cut + overlays."""
         return pipeline.run(str(job), say=say, ask=ask)
 
-    def plan_feedback(self, job: Path, text: str, say, ask) -> int:
-        """`videocut run <job> --plan-feedback <text>`: the plan run revises the plan."""
-        return pipeline.run(str(job), replan=True, plan_feedback=text, say=say, ask=ask)
+    def plan_feedback(self, job: Path, text: str, say, ask, slide: str | None = None) -> int:
+        """`videocut run <job> --plan-feedback <text>`: the plan run revises the plan
+        (`slide`: the id of the plan's slide the feedback is about)."""
+        return pipeline.run(
+            str(job), replan=True, plan_feedback=text, plan_feedback_slide=slide, say=say,
+            ask=ask,
+        )  # fmt: skip
 
     def feedback(self, job: Path, text: str, at_s: float | None, say, ask) -> int:
         """`videocut run <job> --feedback <text> [--at <output_s>]`: run.revise()."""
@@ -199,6 +214,10 @@ class PlanEdit(BaseModel):
 
 class TextBody(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_TEXT)
+
+
+class PlanFeedbackBody(TextBody):
+    slide: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
 
 
 class FeedbackBody(TextBody):
@@ -331,7 +350,12 @@ def create_app(
         try:
             form = await read_form(
                 request,
-                {"camera": VIDEO_EXT, "screen": VIDEO_EXT, "assets": ASSET_EXT},
+                {
+                    "camera": VIDEO_EXT,
+                    "screen": VIDEO_EXT,
+                    "assets": ASSET_EXT,
+                    "slides": SLIDE_EXT,
+                },  # fmt: skip
                 {
                     "type",
                     "brand",
@@ -342,7 +366,10 @@ def create_app(
                     "target_s",
                     "vocabulary",
                     "redact_style",
+                    "slides_mode",
+                    "slides_wish",
                 },  # fmt: skip
+                field_caps={"slides": (MAX_SLIDE_FILES, MAX_SLIDE_BYTES)},
             )
         except UploadError as e:
             raise HTTPException(e.status, str(e)) from None
@@ -463,6 +490,8 @@ def create_app(
         plan = state.plan_json(job)
         if plan is not None and is_approved(job) and not approved_plan_json(job):
             plan = None
+        if plan is not None:
+            plan = state.with_slide_stills(job, plan)
         return {
             "markdown": project.read_text(errors="replace"),
             "plan": plan,
@@ -490,17 +519,27 @@ def create_app(
 
     @app.post("/api/jobs/{job_id}/plan/feedback")
     @decision
-    def plan_feedback(job_id: str, body: TextBody) -> dict:
+    def plan_feedback(job_id: str, body: PlanFeedbackBody) -> dict:
         job = job_or_404(job_id)
         if not (job / "work" / "project.md").is_file():
             raise conflict("state", "there is no plan to revise yet; start the job first")
+        slide = body.slide
+        if slide is not None:
+            ids = [s.get("id") for s in (state.plan_json(job) or {}).get("slides") or []
+                   if isinstance(s, dict)]  # fmt: skip
+            if slide not in ids:
+                raise HTTPException(400, f"the plan has no slide {slide!r}")
         not_running(job)
         if read_approval(job):
             revoke_approval(job)  # the plan will change; approve the new one
         text = body.text.strip()
-        return submit(
-            job, "plan_feedback", lambda say, ask: run_with.plan_feedback(job, text, say, ask)
-        )
+
+        def go(say, ask):
+            if slide is None:
+                return run_with.plan_feedback(job, text, say, ask)
+            return run_with.plan_feedback(job, text, say, ask, slide=slide)
+
+        return submit(job, "plan_feedback", go)
 
     # -------------------------------------------------------------- approve, feedback
 
@@ -796,12 +835,24 @@ def _new_job(form) -> dict:
         raise HTTPException(400, str(e)) from None
     screen = form.file("screen")
     assets = form.files.get("assets", [])
+    slide_files = form.files.get("slides", [])
+    try:
+        slides_mode = _job_slides.parse_mode(
+            f.get("slides_mode") or ("upload" if slide_files else "none")
+        )
+        slides_wish = _job_slides.parse_wish(f.get("slides_wish"))
+    except ToolError as e:
+        raise HTTPException(400, str(e)) from None
+    if slide_files and slides_mode in ("none", "auto"):
+        raise HTTPException(400, f"slide files need slides_mode upload or both, not {slides_mode}")
     try:
         check_video(camera, need_audio=True)
         if screen is not None:
             check_video(screen, need_audio=False)
         for a in assets:
             check_image(a)
+        for sl in slide_files:
+            check_slide(sl)
     except UploadError as e:
         raise HTTPException(e.status, str(e)) from None
     try:
@@ -818,6 +869,21 @@ def _new_job(form) -> dict:
         )
     except pipeline.RunError as e:
         raise HTTPException(400, str(e)) from None
+    try:
+        _new_job_settings(job, brand_ref, words, f, slide_files, slides_mode, slides_wish)
+    except HTTPException:
+        shutil.rmtree(job, ignore_errors=True)  # no half-made job is left behind
+        raise
+    except BaseException as e:
+        shutil.rmtree(job, ignore_errors=True)
+        if isinstance(e, OSError):
+            raise HTTPException(500, f"could not finish the new job: {e}") from None
+        raise
+    return {"id": job.name}
+
+
+def _new_job_settings(job, brand_ref, words, f, slide_files, slides_mode, slides_wish) -> None:
+    """Everything set on a new job after `job new`; the caller removes the job on failure."""
     fields = {}
     if brand_ref:
         fields["brand"] = brand_ref
@@ -826,7 +892,13 @@ def _new_job(form) -> dict:
     if fields:
         update_job(job, **fields)
     _new_job_redact_style(job, f.get("redact_style"))
-    return {"id": job.name}
+    try:
+        if slide_files:  # rasterised on this machine into input/slides/ (untrusted files)
+            _job_slides.import_slides(job, slide_files, say=lambda _: None)
+        if slides_mode != "none" or slides_wish:
+            _job_slides.set_slides(job, slides_mode, slides_wish, say=lambda _: None)
+    except ToolError as e:  # a broken PDF (the caller removes the job)
+        raise HTTPException(415 if slide_files else 400, f"slides: {e}") from None
 
 
 def _new_job_redact_style(job, value) -> None:

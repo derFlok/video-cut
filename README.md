@@ -181,6 +181,30 @@ new approval.
 them, and run the second command. Claude matches each screenshot to the sentence about it
 and shows it with a zoom onto the part you mention; personal data in it is covered.
 
+## Slides and animations
+
+Claude can show what you say as slides: steps, a list, a big number, a comparison, a
+timeline, a bar chart, a quote or the call to action, built from your brand's look
+(nothing is generated as code; every slide is a template filled with words you said). Or
+you bring your own slides (a PDF export or images) and Claude puts each page where you
+talk about it. In the app: **"Folien & Animationen"** in *Neues Video* — none, upload your
+own, Claude creates them, or both, plus "What should be shown?". The plan lists every
+slide with a preview, the moment it belongs to and its layout (slide large with you in a
+circle, side by side, or slide only); remove one or ask for a change before approving.
+
+```bash
+.venv/bin/videocut run ~/Movies/me.mov --brand my-brand --slides-mode auto \
+  --slides-wish "the three steps as a flow"
+.venv/bin/videocut tool job slides-import <id> ~/Desktop/deck.pdf   # your own pages
+.venv/bin/videocut tool job slides <id> --mode both                 # then: videocut run <id>
+```
+
+PDF pages are turned into pictures on this Mac (its own PDF engine); nothing is uploaded.
+Claude never puts a number or claim on a slide that you did not say or ask for. Changing
+the slides after planning needs a new plan and a new approval. Personal data on your pages (a name,
+an e-mail address) is listed in the plan like on a screenshot; what you leave marked is
+covered in the video.
+
 ## Brands
 
 Video Cut ships without any branding. You upload your own (logo, colours, fonts, optionally a brand guide and example posts) and every video adapts to it. You can keep several brands side by side and pick one per video. See [`docs/BRIEF.md`](docs/BRIEF.md) §9.

@@ -108,6 +108,10 @@ function planFor(title: string, variant = 0, note?: string): Plan {
       { id: 1, kind: "email", t0: 18.0, t1: 24.1, box: [0.55, 0.3, 0.92, 0.38], reason: "E-Mail-Adresse in der Kontaktliste sichtbar.", still: "work/plan_stills/pd-1.jpg" },
       { id: 2, kind: "name", asset: "input/shot-1.png", box: [0.06, 0.42, 0.45, 0.5], reason: "Vor- und Nachname in der Kopfzeile.", still: "work/plan_stills/pd-2.jpg" },
     ],
+    slides: [
+      { id: "s1", template: "steps", content: { steps: ["Anfrage", "Prüfen", "Antworten"] }, t0: 13.0, t1: 19.5, layout: "slide", why: "Der Ablauf in drei Schritten.", source: "auto", still: "work/slides/stills/s1.jpg" },
+      { id: "s2", template: "image", content: { asset: "input/slides/page_02.png" }, t0: 52.0, t1: 56.0, layout: "slide_full", why: "Deine Folie zum Schluss.", source: "upload", still: "work/slides/stills/s2.jpg" },
+    ],
     risks: ["Bildschirmaufnahme bei 0:31 ist klein; Zoom auf höchstens 1,6×.", "Ton am Ende leicht hallig."],
     estimated_s: variant > 0 ? 44 : 41,
   };
@@ -241,6 +245,7 @@ function seedJobs(): Map<string, MockJob> {
       stage: "done",
       approved: true,
       outputs: { reel: "out/reel.mp4", preview: "out/preview.mp4", cover: "out/cover.jpg" },
+      slides: { mode: "auto", wish: "Die drei Tipps als Aufzählung", pages: 0, stale: false, marks: [{ id: "s1", t0: 8.2, t1: 14.6, layout: "slide" }] },
       verify: {
         ok: false,
         checks: { loudness: { ok: true }, duration: { ok: true } },
@@ -509,6 +514,9 @@ export function createMock(opts: MockOptions = {}) {
       if (b === "plan" && c === "feedback" && method === "POST") {
         if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
         const text = String((body as { text?: string }).text ?? "");
+        const slide = (body as { slide?: string }).slide;
+        if (slide && !(job.plan?.plan?.slides ?? []).some((s) => s.id === slide))
+          return json(400, { detail: { message: `the plan has no slide '${slide}'` } });
         d.approved = false;
         void simulate(id, ["plan_revise"], "plan", () => {
           job.plan = planFor(job.title ?? "Neues Video", 1, `Auf deinen Wunsch: ${text}`);

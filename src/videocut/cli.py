@@ -101,6 +101,18 @@ def main(argv: list[str] | None = None) -> int:
         "existing job a finished reel is rendered again",
     )
     r.add_argument(
+        "--slides-mode",
+        metavar="MODE",
+        help="slides and animations: none (default), upload (your own pages, added with "
+        "`videocut tool job slides-import`), auto (Claude proposes slides for what is said), "
+        "both; for an existing job a plan made for other slides is planned again",
+    )
+    r.add_argument(
+        "--slides-wish",
+        metavar="TEXT",
+        help='what the slides should show, in plain words (e.g. "the three steps as a flow")',
+    )
+    r.add_argument(
         "--feedback",
         metavar="TEXT",
         help="revise the finished reel: what to change, in plain words (no new approval)",

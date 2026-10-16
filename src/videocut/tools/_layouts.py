@@ -45,6 +45,23 @@ v px wide is TEXT_PT * ui_scale * v / w; below TEXT_MIN_PX it is flagged
 `screen_text_small` (information for the cut agent, never a failure: zoom closer, or pick
 a wider format).
 
+Slides (every job type, tools/slides.py renders one opaque clip per slide id):
+
+    slide        the slide clip fills the frame; the speaker is a round bubble
+                 (`inset_side`, or the brand token pip.size) in a bottom corner above the
+                 bottom safe zone (right, or pip.corner "left"); the slide's content goes
+                 above the bubble or beside it, whichever lets its text be larger (the
+                 renderer tries both, `areas`)
+    slide_split  portrait/square: the slide in the top SPLIT_TOP, the speaker below
+                 (face-centred, like split); landscape: the slide in the left SPLIT_SIDE,
+                 the speaker right of it
+    slide_full   the slide clip fills the frame (the voice goes on)
+
+The content area keeps inside the safe zones and SLIDE_GAP of the short side away from the
+speaker (`slide_geometry`). A slide on several segments shows its clip continuously: each
+range starts at the clip frame where the previous range of that slide ended (its clock
+runs on in output time, no restart at the cut).
+
 Time: segment in/out stay CAMERA time; the screen frame shown at camera time t is screen
 time t + work/sync.json offset_s (+ drift_ppm applied at the segment start). Screen time 0
 is the recording's first video frame (setpts=PTS-STARTPTS, like the proxy and sync). The
@@ -125,6 +142,9 @@ CROP_MAX = 0.2  # a segment's crop removes at most this share of the screen heig
 BLUR_DIV = 4  # blur cells are at least the box's short side / this (and the text height),
 BLUR_MAX_TEXT = 3  # ... that part at most this many text heights (a panel stays a blur)
 DEFAULT_BRAND = brand.EXAMPLE_ID
+SLIDE_LAYOUTS = edl_mod.SLIDE_LAYOUTS
+SLIDE_GAP = 0.03  # slide content keeps this share of the short side off the speaker
+PIP_TOKEN_SIZE = (0.15, 0.45)  # brand pip.size is clamped to this range
 
 
 @dataclass
@@ -175,6 +195,31 @@ class Segment:
     redaction: list[dict] = field(default_factory=list)  # per redact block: style used
     planned: list[tuple[int, int, int, int, int, int]] = field(default_factory=list)
     # ^ the boxes before _redact_grow (n0, n1, x, y, w, h) of the blocked and blurred ones
+
+
+@dataclass
+class SlideGeo:
+    """Where a slide layout puts the slide clip and the speaker in an output frame."""
+
+    layout: str
+    rect: Rect  # the slide clip's place (its size is the clip size)
+    area: list[int]  # the slide's content box, px of the frame (the largest candidate)
+    speaker: Rect | None = None  # slide: the bubble; slide_split: the speaker part
+    round: bool = False  # the speaker is a circle (the bubble)
+    areas: list[list[int]] = field(default_factory=list)  # every candidate content box
+
+
+@dataclass
+class SlideSeg:
+    """How one slide range is drawn; frames are local to the range."""
+
+    layout: str
+    frames: int
+    slide: str  # slide id
+    clip_frame: int  # frame of the slide clip shown on local frame 0
+    geo: SlideGeo
+    camera: Window | None = None  # camera crop for the bubble / the speaker part
+    speaker_px: float | None = None  # camera source px per output px of the speaker
 
 
 # --- job inputs ---------------------------------------------------------------------------
@@ -343,6 +388,54 @@ def speaker_rect(out: tuple[int, int]) -> Rect:
         return Rect(0, top, ow, oh - top)
     left = _even(ow * SPLIT_SIDE)
     return Rect(left, 0, ow - left, oh)
+
+
+def _pip_token(tokens: dict | None) -> tuple[str, float | None]:
+    """(corner "right"|"left", size fraction or None) from the brand's optional `pip`
+    token {"corner", "size"} (size: of the width in portrait, of the height otherwise)."""
+    pip = (tokens or {}).get("pip")
+    pip = pip if isinstance(pip, dict) else {}
+    corner = "left" if str(pip.get("corner", "")).lower().startswith("left") else "right"
+    size = pip.get("size")
+    ok = isinstance(size, int | float) and not isinstance(size, bool) and math.isfinite(size)
+    return corner, (min(max(float(size), PIP_TOKEN_SIZE[0]), PIP_TOKEN_SIZE[1]) if ok else None)
+
+
+def slide_geometry(layout: str, out: tuple[int, int], tokens: dict | None = None) -> SlideGeo:
+    """The SlideGeo of a slide `layout` in an `out`-sized frame (brand `tokens` for pip)."""
+    ow, oh = out
+    z = safe_zones(out)
+    gap = _even(min(out) * SLIDE_GAP)
+    full = Rect(0, 0, ow, oh)
+    if layout == "slide_full":
+        return SlideGeo(layout, full, [z["side"], z["top"], ow - z["side"], oh - z["bottom"]])
+    if layout == "slide":
+        corner, size = _pip_token(tokens)
+        if size is None:
+            side = inset_side(out)
+        else:
+            side = _even((ow if _stacked("pip", out) else oh) * size)
+        y = oh - z["bottom"] - side
+        right = corner == "right"
+        x = ow - z["side"] - side if right else z["side"]
+        above = [z["side"], z["top"], ow - z["side"], y - gap]
+        beside = (
+            [z["side"], z["top"], x - gap, oh - z["bottom"]]
+            if right
+            else [x + side + gap, z["top"], ow - z["side"], oh - z["bottom"]]
+        )
+        areas = sorted((above, beside), key=lambda b: -(b[2] - b[0]) * (b[3] - b[1]))
+        return SlideGeo(layout, full, areas[0], Rect(x, y, side, side), True, areas)
+    if layout != "slide_split":
+        raise ValueError(f"not a slide layout: {layout}")
+    part = speaker_rect(out)
+    if _stacked("split", out):
+        rect = Rect(0, 0, ow, part.y)
+        area = [z["side"], z["top"], ow - z["side"], part.y - gap]
+    else:
+        rect = Rect(0, 0, part.x, oh)
+        area = [z["side"], z["top"], part.x - gap, oh - z["bottom"]]
+    return SlideGeo(layout, rect, area, part)
 
 
 def view_aspect(layout: str, out: tuple[int, int], screen: tuple[int, int]) -> float:
@@ -660,7 +753,7 @@ def grown_redaction(job: Path, edl, plan, sync_doc: dict, src: Path, info: dict)
     from . import _redact_grow
 
     todo = []  # (segment index, block index, block with offset)
-    for si in sorted({r.seg for r in plan.ranges if r.layout != "face"}):
+    for si in sorted({r.seg for r in plan.ranges if edl_mod.is_screen(r.layout)}):
         seg = edl.segments[si]
         off, _ = segment_offset(sync_doc, seg.start, seg.duration, plan.fps)
         todo += [(si, j, {**r, "offset": off}) for j, r in enumerate(seg.redact)]
@@ -673,13 +766,16 @@ def grown_redaction(job: Path, edl, plan, sync_doc: dict, src: Path, info: dict)
 
 
 def with_redaction(edl, cands: list[dict]):
-    """`edl` (edl.Edl) whose non-face segments also carry a redact block for every screen
-    candidate of redaction.enforced that overlaps them (the safe default: render, verify)."""
+    """`edl` (edl.Edl) whose screen segments also carry a redact block for every screen
+    candidate of redaction.enforced that overlaps them (the safe default: render, verify).
+    A slide segment shows no screen content, so it needs none."""
     from .. import redaction
 
     segs = []
     for s in edl.segments:
-        extra = redaction.screen_blocks(cands, s.start, s.end) if s.layout != "face" else []
+        extra = (
+            redaction.screen_blocks(cands, s.start, s.end) if edl_mod.is_screen(s.layout) else []
+        )
         extra = [b for b in extra if not redaction.covered(b, s.redact)]
         segs.append(replace(s, redact=[*s.redact, *extra]) if extra else s)
     return replace(edl, segments=segs)
@@ -706,7 +802,7 @@ def plan_all(
     face: dict | None,
     full_out: tuple[int, int] | None = None,
 ) -> dict:
-    """Every non-face range of `plan` (a _render_plan.Plan of the framed `edl`) drawn:
+    """Every screen range of `plan` (a _render_plan.Plan of the framed `edl`) drawn:
     {"segs": {range index: Segment}, "clamped": [{"segment", "t", "zoom", "max_zoom"}],
     "speaker": [{"segment", "layout", "px_ratio"}], "warnings": [str] (upscaled speaker
     crops), "screen": the recording, "info": probe_screen, "sync": work/sync.json,
@@ -724,7 +820,7 @@ def plan_all(
     segs, clamped, speaker, warnings, redaction = {}, [], [], [], []
     grown = grown_redaction(job, edl, plan, sync_doc, src, info)
     for i, r in enumerate(plan.ranges):
-        if r.layout == "face":
+        if not edl_mod.is_screen(r.layout):
             continue
         seg_in = edl.segments[r.seg]
         if r.seg in grown:
@@ -757,6 +853,62 @@ def plan_all(
         "screen": src, "info": info, "sync": sync_doc,
         "redact_style": style, "redaction": redaction,
     }  # fmt: skip
+
+
+def slide_runs(edl, plan) -> dict[str, list[dict]]:
+    """Per slide id, in output order, every range of `plan` that shows it: {"range",
+    "segment", "layout", "out_frame" (first output frame), "frames", "clip_frame" (the
+    slide clip's frame shown first: the frames of that slide shown before)}."""
+    runs: dict[str, list[dict]] = {}
+    f0 = 0
+    for i, r in enumerate(plan.ranges):
+        if edl_mod.is_slide(r.layout):
+            sid = edl.segments[r.seg].slide
+            have = runs.setdefault(sid, [])
+            clip = sum(x["frames"] for x in have)
+            have.append({"range": i, "segment": r.seg, "layout": r.layout, "out_frame": f0,
+                         "frames": r.frames, "clip_frame": clip})  # fmt: skip
+        f0 += r.frames
+    return runs
+
+
+def plan_slides(
+    edl,
+    plan,
+    camera: tuple[int, int],
+    face: dict | None,
+    full_out: tuple[int, int] | None = None,
+    tokens: dict | None = None,
+) -> dict:
+    """Every slide range of `plan` drawn: {"segs": {range index: SlideSeg}, "speaker":
+    [{"segment", "layout", "px_ratio"}], "warnings": [str]}. The speaker (bubble, split
+    part) is cropped like pip/split: face-centred, head and shoulders, at least
+    SPEAKER_MIN_PX camera px per output px at the job size `full_out`."""
+    full_out = tuple(full_out or edl.size)
+    segs, speaker, warnings = {}, [], []
+    for sid, runs in slide_runs(edl, plan).items():
+        for rn in runs:
+            i, seg = rn["range"], edl.segments[rn["segment"]]
+            geo = slide_geometry(rn["layout"], plan.out_size, tokens)
+            s = SlideSeg(rn["layout"], rn["frames"], sid, rn["clip_frame"], geo)
+            if geo.speaker is not None:
+                part = slide_geometry(rn["layout"], full_out, tokens).speaker
+                crop = seg.crop
+                cx, cy = (crop.cx, crop.cy) if crop else (0.5, 0.5)
+                box = segment_box(face, seg.start, seg.end) if face else None
+                zoom = crop.zoom if crop else 1.0
+                s.camera = speaker_crop(camera, (part.w, part.h), box, cx, cy, zoom)
+                s.speaker_px = round(s.camera.h / part.h, 2)
+                speaker.append(
+                    {"segment": rn["segment"], "layout": rn["layout"], "px_ratio": s.speaker_px}
+                )
+                if s.speaker_px < 1:
+                    warnings.append(
+                        f"segment {rn['segment']} ({rn['layout']}): the speaker is upscaled "
+                        f"({s.speaker_px} camera px per output px)"
+                    )
+            segs[i] = s
+    return {"segs": segs, "speaker": speaker, "warnings": warnings}
 
 
 def ui_scale(screen: tuple[int, int]) -> int:
@@ -991,30 +1143,96 @@ def compose(
     return lines
 
 
+def compose_slide(
+    i: int,
+    seg: SlideSeg,
+    src_in: float,
+    fps: Fraction,
+    out: tuple[int, int],
+    *,
+    slide_label: str,
+    camera_label: str | None,
+    bg: str,
+    matrix: str,
+    cam_sdr: str,
+) -> list[str]:
+    """Filter lines that draw slide range i as [vc{i}] (out-sized): the slide clip from
+    its frame `clip_frame` on (BT.709 -> the reel's matrix, scaled to its rect), on the
+    brand background, plus the speaker (a round bubble, or the split part)."""
+    ow, oh = out
+    n, g = seg.frames, seg.geo
+    r = g.rect
+    lines = [
+        f"[{slide_label}]trim=start_frame={seg.clip_frame}:end_frame={seg.clip_frame + n},"
+        f"setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop=-1,trim=end_frame={n},"
+        f"scale={r.w}:{r.h}:flags=lanczos:in_color_matrix=bt709:in_range=tv"
+        f":out_color_matrix={matrix}:out_range=tv,format=yuv420p,setsar=1[sl{i}];"
+    ]
+    base = f"sl{i}"
+    if (r.x, r.y, r.w, r.h) != (0, 0, ow, oh):
+        lines += [
+            f"color=c={bg}:s={ow}x{oh}:r={fps},trim=end_frame={n},format=rgb24,"
+            f"scale=out_color_matrix={matrix}:out_range=tv,format=yuv420p[sb{i}];",
+            f"[sb{i}][sl{i}]overlay=x={r.x}:y={r.y}[sp{i}];",
+        ]
+        base = f"sp{i}"
+    if g.speaker is None:
+        return [*lines, f"[{base}]setsar=1[vc{i}];"]
+    p, w = g.speaker, seg.camera
+    cam = ",".join(f for f in [*camera_cut(src_in, n, fps), cam_sdr] if f)
+    if g.round:
+        return [
+            *lines,
+            f"[{camera_label}]{cam},crop={w.w}:{w.h}:{w.x}:{w.y},"
+            f"scale={p.w}:{p.h}:flags=lanczos,format=yuva420p[pc{i}];",
+            mask(p.w, fps, n, BUBBLE_RADIUS) + f"[pm{i}];",
+            f"[pc{i}][pm{i}]alphamerge[pi{i}];",
+            f"[{base}][pi{i}]overlay=x={p.x}:y={p.y},setsar=1[vc{i}];",
+        ]
+    return [
+        *lines,
+        f"[{camera_label}]{cam},crop={w.w}:{w.h}:{w.x}:{w.y},"
+        f"scale={p.w}:{p.h}:flags=lanczos,setsar=1[pc{i}];",
+        f"[{base}][pc{i}]overlay=x={p.x}:y={p.y},setsar=1[vc{i}];",
+    ]
+
+
 def video_chain(
     plan,
     segs: dict[int, Segment],
     face_filters,
     video_in: str,
-    screen_in: str,
+    screen_in: str | None,
     *,
     bg: str,
     matrix: str,
     cam_sdr: str,
     screen_sdr: str,
+    slides: dict[int, SlideSeg] | None = None,
+    slide_in: dict[int, str] | None = None,
 ) -> list[str]:
     """Video lines of a render with layouts, joined as [v] like _render_plan.video_chain.
-    `segs` maps a range index of `plan` to its drawn segment (ranges not in it are face
-    ranges, cut by `face_filters(range)`); HDR camera frames are tonemapped per branch."""
+    `segs` maps a range index of `plan` to its drawn screen segment, `slides` to its
+    slide range (its clip is input `slide_in[range]`); the other ranges are face ranges,
+    cut by `face_filters(range)`. HDR camera frames are tonemapped per branch."""
     fps = plan.fps
-    cams = [i for i, _ in enumerate(plan.ranges) if i not in segs or segs[i].layout != "screen"]
+    slides, slide_in = slides or {}, slide_in or {}
+
+    def needs_camera(i: int) -> bool:
+        if i in segs:
+            return segs[i].layout != "screen"
+        if i in slides:
+            return slides[i].geo.speaker is not None
+        return True
+
+    cams = [i for i, _ in enumerate(plan.ranges) if needs_camera(i)]
     if cams:
         lines = [  # PTS-STARTPTS: video time, as in _render_plan.video_chain
             f"[{video_in}]setpts=PTS-STARTPTS,split={len(cams)}"
             + "".join(f"[c{i}]" for i in cams)
             + ";"
         ]
-    else:  # screen only: the camera gives just the audio
+    else:  # screen / slides only: the camera gives just the audio
         lines = [f"[{video_in}]nullsink;"]
     if segs:
         lines.append(
@@ -1023,7 +1241,13 @@ def video_chain(
             + ";"
         )
     for i, r in enumerate(plan.ranges):
-        if i in segs:
+        if i in slides:
+            lines += compose_slide(
+                i, slides[i], r.src_in, fps, plan.out_size, slide_label=slide_in[i],
+                camera_label=f"c{i}" if i in cams else None, bg=bg, matrix=matrix,
+                cam_sdr=cam_sdr,
+            )  # fmt: skip
+        elif i in segs:
             lines += compose(
                 i, segs[i], r.src_in, fps, plan.out_size,
                 screen_label=f"s{i}", camera_label=f"c{i}" if i in cams else None,

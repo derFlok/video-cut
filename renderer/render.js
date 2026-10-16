@@ -4,6 +4,15 @@
 //
 //   node render.js <overlays.json> [--out <overlay.mov>] [--boxes <boxes.json>]
 //                  [--still <t> <png>] [--sheet <jpg>] [--blur <subframes>]
+//   node render.js <slide.json> [--out <slide.mov>] [--still <t> <png>] [--report <json>]
+//
+// A spec with "mode": "slide" is one slide (renderer/slides/<template>.js) as an OPAQUE
+// clip on the brand background (ProRes 422 HQ, BT.709): "size" is the clip (the slide's
+// part of the frame), "unit" the short side of the output frame (the type scale),
+// "slide" {template, content, area (content box in clip px), reveal (clip seconds)}.
+// --still draws the whole output frame when the spec has "frame" {size, rect, speaker}
+// (the slide in its place, the speaker's place as a plain shape); --report writes the
+// layout (scale, fits, every text with its box) the core checks.
 //
 // Image files scenes ask for (screenshots, logos) are read only from inside the job
 // folder: $VIDEOCUT_JOB_DIR, else the folder of overlays.json. Logos may also come
@@ -45,6 +54,7 @@ function parseArgs(argv) {
     if (arg === "--out") [a.out] = take(arg);
     else if (arg === "--boxes") [a.boxes] = take(arg);
     else if (arg === "--sheet") [a.sheet] = take(arg);
+    else if (arg === "--report") [a.report] = take(arg);
     else if (arg === "--still") {
       const [t, png] = take(arg, 2);
       a.still = { t: Number(t), png };
@@ -58,7 +68,7 @@ function parseArgs(argv) {
     else throw new UsageError(`unexpected argument ${arg}`);
   }
   if (!a.input) throw new UsageError("missing <overlays.json>");
-  if (!a.out && !a.still && !a.sheet) throw new UsageError("nothing to do: pass --out, --still or --sheet");
+  if (!a.out && !a.still && !a.sheet && !a.report) throw new UsageError("nothing to do: pass --out, --still, --sheet or --report");
   return a;
 }
 
@@ -68,7 +78,7 @@ function parseArgs(argv) {
 // run through this tiny module loader.
 function bundle() {
   const mods = [];
-  for (const dir of ["lib", "scenes"]) {
+  for (const dir of ["lib", "scenes", "slides"]) {
     for (const f of fs.readdirSync(path.join(__dirname, dir)).sort()) {
       if (!f.endsWith(".js")) continue;
       const id = `${dir}/${f.slice(0, -3)}`;
@@ -99,7 +109,7 @@ window.__load = (id) => __require("", id);
 
 // Runs inside the page. Everything it needs arrives as data; no clock, no randomness.
 function pageMain(spec) {
-  const { size, fps, safe, face, views, tokens, items, sceneNames, fontFamily } = spec;
+  const { size, fps, safe, face, views, hidden, tokens, items, sceneNames, fontFamily } = spec;
   const images = window.__images || {};
   const { faceAt, faceDuring } = window.__load("lib/layout");
   const { step } = window.__load("lib/spring");
@@ -119,7 +129,8 @@ function pageMain(spec) {
   const memo = new Map();
   // Product demo (overlays.json "views", flattened by validViews): every item keeps off a
   // screen view that does not fill the frame and off every zoom target.
-  const blocks = (views || []).map((v) => ({ t0: v.t0, t1: v.t1, box: v.screen }));
+  // The slide part of a slide_split view is hard: text goes in the speaker part only.
+  const blocks = (views || []).map((v) => ({ t0: v.t0, t1: v.t1, box: v.screen, hard: !!v.hard }));
   const env = {
     tokens,
     size,
@@ -136,6 +147,7 @@ function pageMain(spec) {
     },
     // Blocks already placed that are on screen at some point in [t0, t1].
     blocksDuring: (t0, t1) => blocks.filter((b) => b.t0 < t1 && b.t1 > t0).map((b) => b.box),
+    hardDuring: (t0, t1) => blocks.filter((b) => b.hard && b.t0 < t1 && b.t1 > t0).map((b) => b.box),
     addBlock: (t0, t1, box) => blocks.push({ t0, t1, box }),
     // Decoded image for an asset reference a scene declared (null when not loaded),
     // and an offscreen canvas for scenes that prepare images once (redaction).
@@ -174,9 +186,12 @@ function pageMain(spec) {
   function drawAt(t) {
     const boxes = [];
     const hideCaptions = hidesCaptions(plates, t);
+    // A full-frame slide (overlays.json views with "hide"): no caption, no overlay item.
+    const slide = (hidden || []).some((h) => t >= h.t0 && t < h.t1);
     items.forEach((item, i) => {
       if (t < item.t0 || t > item.t1) return;
       if (hideCaptions && item.scene === "caption") return;
+      if (slide && !scenes[item.scene].plate) return;
       ctx.save();
       const box = scenes[item.scene].draw(ctx, t - item.t0, item, env);
       ctx.restore();
@@ -260,6 +275,107 @@ function pageMain(spec) {
   };
 }
 
+// Runs inside the page for a slide spec ("mode": "slide"). Everything arrives as data.
+function pageSlide(spec) {
+  const { size, fps, duration, tokens, slide, unit, lang, frame, fontFamily } = spec;
+  const images = window.__images || {};
+  const S = window.__load("lib/slide");
+  const mod = window.__load(`slides/${slide.template}`);
+  const mk = (w, h) => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return c;
+  };
+  const main = mk(size[0], size[1]);
+  const ctx = main.getContext("2d");
+  const env = {
+    tokens,
+    size,
+    width: size[0],
+    height: size[1],
+    unit,
+    lang,
+    fps,
+    duration,
+    fonts: { family: fontFamily, ready: true },
+    image: (ref) => images[ref] || null,
+    canvas: mk,
+  };
+  env.times = S.stepTimes(mod.steps(slide.content), slide.reveal);
+  // Candidate content boxes (slide: above or beside the bubble): the one where the text
+  // fits at the largest scale (an image: the largest picture, `rank`) wins; the first on
+  // a tie.
+  let L = null;
+  for (const area of Array.isArray(slide.areas) && slide.areas.length ? slide.areas : [slide.area]) {
+    ctx.save();
+    const c = mod.layout(ctx, { ...slide, area }, env);
+    ctx.restore();
+    const rank = (x) => (Number.isFinite(x.rank) ? x.rank : x.k);
+    if (!L || (c.fits && !L.fits) || (c.fits === L.fits && rank(c) > rank(L))) L = c;
+  }
+
+  function draw(t) {
+    ctx.save();
+    S.plate(ctx, env);
+    mod.draw(ctx, t, slide, env, L);
+    ctx.restore();
+    return main;
+  }
+
+  window.frame = (t) => ({ png: draw(t).toDataURL("image/png") });
+
+  // From this clip time on every frame is the same (all builds have arrived): the node
+  // side reuses the last picture. The slowest movement is a bar growing at 0.6 of the
+  // entrance pace after a 0.1 s delay; a template with longer motion says so (staticFrom).
+  const last = Math.max(0.8, ...env.times);
+  window.staticFrom = mod.staticFrom ? mod.staticFrom(env, L) : last + 0.1 + S.enterTime(tokens) / 0.6 + 2 / fps;
+
+  // The whole output frame: the plate, the slide in its rect, the speaker (its picture
+  // when the spec has one, else a plain shape in the surface or muted colour).
+  window.composite = (t) => {
+    const [W, H] = frame.size;
+    const out = mk(W, H);
+    const c = out.getContext("2d");
+    const pal = S.palette(tokens);
+    c.fillStyle = pal.plate;
+    c.fillRect(0, 0, W, H);
+    c.drawImage(draw(t), frame.rect[0], frame.rect[1], frame.rect[2], frame.rect[3]);
+    const sp = frame.speaker;
+    if (sp) {
+      const [x0, y0, x1, y1] = sp.box;
+      c.save();
+      c.beginPath();
+      if (sp.round) c.arc((x0 + x1) / 2, (y0 + y1) / 2, Math.min(x1 - x0, y1 - y0) / 2, 0, Math.PI * 2);
+      else c.rect(x0, y0, x1 - x0, y1 - y0);
+      const img = sp.image ? images[sp.image] : null;
+      if (img) {
+        c.clip();
+        c.drawImage(img, x0, y0, x1 - x0, y1 - y0);
+      } else {
+        c.fillStyle = pal.surface || pal.muted;
+        c.fill();
+      }
+      c.restore();
+    }
+    return { png: out.toDataURL("image/png") };
+  };
+
+  window.report = {
+    template: slide.template,
+    area: L.area,
+    scale: L.k,
+    fits: Boolean(L.fits),
+    missing: Boolean(L.missing),
+    texts: L.texts || [],
+    words: S.words(L.texts || []),
+    times: env.times.map((v) => Math.round(v * 1000) / 1000),
+    entrance_s: Math.round(S.enterTime(tokens) * 1000) / 1000,
+  };
+
+  window.blank = () => draw(0).toDataURL("image/png");
+}
+
 // --- node side -------------------------------------------------------------------
 
 const FONT_FAMILY = "videocut-brand";
@@ -329,20 +445,27 @@ function items(spec, known) {
 
 // Areas to keep clear in a product demo, flattened to {t0, t1, screen: [x0, y0, x1, y1]}
 // (output time/px): each view's `screen` (null when the screen fills the frame: it is the
-// picture) and each of its `focus` zoom targets ({t0, t1, box}). Malformed entries are
-// dropped.
+// picture; `hard` for the slide part of a slide_split view) and each of its `focus` zoom
+// targets ({t0, t1, box}). Malformed entries are dropped.
 function validViews(views) {
   const box = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[2] > b[0] && b[3] > b[1];
   const span = (v) => v && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1;
   const out = [];
   for (const v of Array.isArray(views) ? views : []) {
     if (!span(v)) continue;
-    if (box(v.screen)) out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice() });
+    if (box(v.screen)) out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice(), hard: v.layout === "slide_split" });
     for (const f of Array.isArray(v.focus) ? v.focus : []) {
       if (span(f) && box(f.box)) out.push({ t0: f.t0, t1: f.t1, screen: f.box.slice() });
     }
   }
   return out;
+}
+
+// Output spans [t0, t1) of the views marked "hide" (a full-frame slide).
+function hiddenSpans(views) {
+  return (Array.isArray(views) ? views : [])
+    .filter((v) => v && v.hide === true && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1)
+    .map((v) => ({ t0: v.t0, t1: v.t1 }));
 }
 
 // The frame size: spec.size, else spec.width x spec.height, else 1080x1920 (the 9:16
@@ -375,7 +498,9 @@ function rate(fps) {
   return String(fps);
 }
 
-function startFfmpeg(out, size, fps) {
+function startFfmpeg(out, size, fps, opaque = false) {
+  // An opaque slide clip: ProRes 422 HQ without alpha; an overlay: ProRes 4444 with alpha.
+  const codec = opaque ? ["-profile:v", "3", "-pix_fmt", "yuv422p10le"] : ["-profile:v", "4444", "-pix_fmt", "yuva444p10le"];
   const ff = spawn(
     "ffmpeg",
     [
@@ -384,7 +509,7 @@ function startFfmpeg(out, size, fps) {
       // BT.709 limited range, tagged: render composites it into a BT.709 reel (an
       // untagged RGB -> YUV conversion would use BT.601 and shift the brand colours).
       "-vf", `scale=${size[0]}:${size[1]}:out_color_matrix=bt709:out_range=tv`,
-      "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
+      "-c:v", "prores_ks", ...codec,
       "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
       "-color_range", "tv", out,
     ],
@@ -428,9 +553,119 @@ function sheetTimes(list, duration, n = 9) {
 const decode = (dataUrl) => Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
 const round = (v, n = 2) => Math.round(v * 10 ** n) / 10 ** n;
 
+const SLIDES_DIR = path.join(__dirname, "slides");
+const slideTemplates = () => fs.readdirSync(SLIDES_DIR).filter((f) => f.endsWith(".js")).map((f) => f.slice(0, -3)).sort();
+
+function validateSlide(spec) {
+  const errs = [];
+  const okSize = (v) => Array.isArray(v) && v.length === 2 && v.every((x) => Number.isInteger(x) && x > 0);
+  const okBox = (b) => Array.isArray(b) && b.length === 4 && b.every(Number.isFinite) && b[2] > b[0] && b[3] > b[1];
+  if (!okSize(spec.size)) errs.push("size must be [width, height] in px");
+  if (!(spec.fps > 0)) errs.push("fps must be > 0");
+  if (!(spec.duration > 0)) errs.push("duration must be > 0 seconds");
+  if (!spec.tokens || typeof spec.tokens !== "object") errs.push("tokens missing");
+  if (!(spec.unit > 0)) errs.push("unit must be > 0 (the output frame's short side)");
+  const sl = spec.slide;
+  if (!sl || typeof sl !== "object") errs.push("slide missing");
+  else {
+    if (!slideTemplates().includes(sl.template)) errs.push(`slide.template must be one of ${slideTemplates().join(", ")}`);
+    if (!sl.content || typeof sl.content !== "object") errs.push("slide.content missing");
+    if (!okBox(sl.area)) errs.push("slide.area must be [x0, y0, x1, y1] in clip px");
+    if (sl.reveal != null && !(Array.isArray(sl.reveal) && sl.reveal.every(Number.isFinite))) errs.push("slide.reveal must be a list of seconds");
+    if (sl.areas != null && !(Array.isArray(sl.areas) && sl.areas.every(okBox))) errs.push("slide.areas must be a list of [x0, y0, x1, y1]");
+  }
+  const fr = spec.frame;
+  if (fr != null) {
+    const okRect = Array.isArray(fr.rect) && fr.rect.length === 4 && fr.rect.every(Number.isFinite);
+    if (!okSize(fr.size) || !okRect) errs.push("frame needs size [w, h] and rect [x, y, w, h]");
+    if (fr.speaker != null && !okBox(fr.speaker.box)) errs.push("frame.speaker.box must be [x0, y0, x1, y1]");
+  }
+  if (errs.length) throw new Error(`slide spec: ${errs.join("; ")}`);
+}
+
+// One slide as an opaque clip / a still / its layout report.
+async function slideMain(args, spec) {
+  validateSlide(spec);
+  if (args.sheet || args.boxes) throw new UsageError("--sheet and --boxes are for overlays, not slides");
+  const { size, fps } = spec;
+  const fonts = readFonts(spec.tokens, path.dirname(path.resolve(args.input)));
+  const mod = require(`./slides/${spec.slide.template}`);
+  const home = process.env.VIDEOCUT_HOME || path.join(require("os").homedir(), "VideoCut");
+  const roots = {
+    job: path.resolve(process.env.VIDEOCUT_JOB_DIR || path.dirname(path.resolve(args.input))),
+    brands: [path.join(home, "brands"), path.join(ROOT, "brands")],
+  };
+  const { readAsset } = require("./lib/assets");
+  const wanted = typeof mod.assets === "function" ? mod.assets(spec.slide) : [];
+  // The speaker's picture of a still (a camera frame the core cut out), from the job.
+  const sp = spec.frame && spec.frame.speaker;
+  if (sp && typeof sp.image === "string") wanted.push({ ref: sp.image, root: "job" });
+  const assets = wanted.map((a) => readAsset(a, roots));
+  const summary = { tool: TOOL, ok: true, mode: "slide", template: spec.slide.template, size, fps, duration: spec.duration };
+  const t0 = process.hrtime.bigint();
+  const browser = await chromium.launch();
+  let ff = null;
+  try {
+    const page = await browser.newPage({ viewport: { width: 64, height: 64 } });
+    await page.setContent("<!doctype html><html><body></body></html>");
+    await page.addScriptTag({ content: bundle() });
+    const loaded = fonts.length ? await loadFonts(page, fonts) : 0;
+    if (loaded < fonts.length) throw new Error(`brand fonts: ${loaded} of ${fonts.length} files loaded`);
+    summary.fonts = { files: fonts.length, loaded, fallback: fonts.length === 0 };
+    if (assets.length) summary.images = await loadImages(page, assets);
+    const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
+    await page.evaluate(pageSlide, {
+      size, fps, duration: spec.duration, tokens: spec.tokens, slide: spec.slide, unit: spec.unit,
+      lang: spec.lang === "en" ? "en" : "de", frame: spec.frame || null, fontFamily,
+    });
+    const report = await page.evaluate(() => window.report);
+    summary.fits = report.fits;
+    summary.scale = report.scale;
+    if (args.report) {
+      fs.writeFileSync(args.report, JSON.stringify(report, null, 2) + "\n");
+      summary.report = args.report;
+    }
+    if (args.still) {
+      const fn = spec.frame ? "composite" : "frame";
+      const r = await page.evaluate(([t, f]) => window[f](t), [args.still.t, fn]);
+      fs.writeFileSync(args.still.png, decode(r.png));
+      summary.still = args.still.png;
+    }
+    if (args.out) {
+      const frames = Math.max(1, Math.round(spec.duration * fps));
+      ff = startFfmpeg(args.out, size, fps, true);
+      const r0 = process.hrtime.bigint();
+      const still = await page.evaluate(() => window.staticFrom);
+      let png = null;
+      let drawn = 0;
+      for (let i = 0; i < frames; i++) {
+        const t = i / fps;
+        if (!png || t < still) {
+          png = decode((await page.evaluate((t) => window.frame(t), t)).png);
+          drawn++;
+        }
+        await ff.write(png);
+      }
+      summary.drawn_frames = drawn;
+      await ff.end();
+      ff = null;
+      const secs = Number(process.hrtime.bigint() - r0) / 1e9;
+      Object.assign(summary, { out: args.out, frames, render_seconds: round(secs), frames_per_second: round(frames / secs, 1) });
+    }
+  } finally {
+    if (ff) ff.kill();
+    await browser.close();
+  }
+  summary.seconds = round(Number(process.hrtime.bigint() - t0) / 1e9);
+  return summary;
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const spec = resolveSize(JSON.parse(fs.readFileSync(args.input, "utf8")));
+  const raw = JSON.parse(fs.readFileSync(args.input, "utf8"));
+  if (raw && raw.mode === "slide") return slideMain(args, raw);
+  if (args.report) throw new UsageError("--report is for slides");
+  const spec = resolveSize(raw);
   validate(spec);
   const size = spec.size;
   const fps = spec.fps;
@@ -460,7 +695,7 @@ async function main() {
     if (assets.length) summary.images = await loadImages(page, assets);
     const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
     await page.evaluate(pageMain, {
-      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
+      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), hidden: hiddenSpans(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
     });
     // Items that could not be placed clear of the face / of each other / inside the safe
     // area even at their smallest size (no room left).

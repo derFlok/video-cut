@@ -17,6 +17,7 @@ import type {
   Plan,
   RedactionDecision,
   Session,
+  SlidesMode,
   TargetChoice,
   TargetRange,
   VideoType,
@@ -189,6 +190,10 @@ export const api = {
       target_s?: TargetChoice;
       /** The video's own transcript vocabulary. */
       vocabulary?: VocabEntry[];
+      /** Slides and animations: mode, wish, and the human's own pages (PDF or images). */
+      slides_mode?: SlidesMode;
+      slides_wish?: string;
+      slides?: File[];
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -202,6 +207,9 @@ export const api = {
     if (fields.redact_style) form.append("redact_style", fields.redact_style);
     if (fields.target_s !== undefined) form.append("target_s", fields.target_s === null ? "auto" : String(fields.target_s));
     if (fields.vocabulary?.length) form.append("vocabulary", JSON.stringify(fields.vocabulary));
+    if (fields.slides_mode && fields.slides_mode !== "none") form.append("slides_mode", fields.slides_mode);
+    if (fields.slides_wish) form.append("slides_wish", fields.slides_wish);
+    for (const f of fields.slides ?? []) form.append("slides", f);
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);
@@ -226,7 +234,9 @@ export const api = {
   plan: (id: string) => call<Plan>("GET", `${J(id)}/plan`),
   savePlan: (id: string, markdown: string, sha: string) =>
     call<Plan>("PUT", `${J(id)}/plan`, { markdown, sha }),
-  planFeedback: (id: string, text: string) => call<unknown>("POST", `${J(id)}/plan/feedback`, { text }),
+  /** `slide`: the id of the plan's slide the feedback is about. */
+  planFeedback: (id: string, text: string, slide?: string) =>
+    call<unknown>("POST", `${J(id)}/plan/feedback`, slide ? { text, slide } : { text }),
   approve: (id: string, plan_sha: string, redaction: RedactionDecision | null) =>
     call<unknown>("POST", `${J(id)}/approve`, redaction ? { plan_sha, redaction } : { plan_sha }),
   setCutStyle: (id: string, cut_style: CutStyleChoice) => call<JobDetail>("PUT", `${J(id)}/cut-style`, { cut_style }),

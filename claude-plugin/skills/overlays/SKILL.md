@@ -128,6 +128,11 @@ caption is drawn while the end card is on screen.
 A scene the renderer does not have is skipped (`skipped_scenes` in the summary); then pick
 another.
 
+**Slides** (segments with `"slide"` in `work/edl.json`): a slide is already on screen for
+those words. No captions, keywords or overlays during slide and slide_full segments (the renderer hides them through overlays.json views hide: true). In slide_split the slide part is a block: captions and keywords go in the speaker part only.
+No overlay repeating a slide's words or numbers elsewhere either. Never change
+`work/slides.json` or a slide segment (the run fails otherwise).
+
 ## 4. Render, check, fix (max 2 rounds)
 
 1. `videocut tool edl check` until it passes.

@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ..edl import SCREEN_LAYOUTS
 from . import _style
 from ._audio_env import HOP_S, NEAR_S, Envelope
 from .common import ToolError
@@ -236,7 +237,7 @@ def snap(
                 keep = kept(words, a + off, b + off)
                 limit = (0.0, b + off - MIN_SEGMENT_S) if edge == "in" else (
                     a + off + MIN_SEGMENT_S, end)  # fmt: skip
-                if overlap and s.get("layout", "face") not in ("face", None):
+                if overlap and s.get("layout", "face") in SCREEN_LAYOUTS:
                     t = attempt + off
                     if edge == "in":
                         limit = (max(limit[0], min(t, overlap[0])), limit[1])

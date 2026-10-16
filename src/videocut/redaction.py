@@ -47,6 +47,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from .edl import SCREEN_LAYOUTS
 from .paths import state_dir
 
 FILE = "work/redaction.json"
@@ -384,7 +385,7 @@ def missing(cands: list[dict], data: dict, job: Path) -> list[dict]:
                                     "need": need})  # fmt: skip
             continue
         for i, s in enumerate(segs if isinstance(segs, list) else []):
-            if not isinstance(s, dict) or s.get("layout", "face") == "face":
+            if not isinstance(s, dict) or s.get("layout", "face") not in SCREEN_LAYOUTS:
                 continue
             a, b = s.get("in"), s.get("out")
             if not (_num(a) and _num(b)):

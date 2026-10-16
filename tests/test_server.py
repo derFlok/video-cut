@@ -57,8 +57,8 @@ class FakePipeline(server_app.Pipeline):
         (job / "out" / "reel.mp4").write_bytes(b"\x00" * 4096)
         return 0
 
-    def plan_feedback(self, job, text, say, ask):
-        self.calls.append(("plan_feedback", job.name, text))
+    def plan_feedback(self, job, text, say, ask, slide=None):
+        self.calls.append(("plan_feedback", job.name, text, *([slide] if slide else [])))
         return 3
 
     def feedback(self, job, text, at_s, say, ask):
@@ -1108,3 +1108,125 @@ def test_target_says_when_a_reel_exists_and_cannot_change_during_a_run(client, f
         assert r.status_code == 409 and r.json()["detail"]["code"] == "busy"
     finally:
         fake.gate.set()
+
+
+# ---------------------------------------------------------------- slides
+
+
+@pytest.mark.media
+def test_job_create_with_slides(client, portrait_clip, tmp_path):
+    page = tmp_path / "page.png"
+    subprocess.run(
+        [clips.ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=640x360",
+         "-frames:v", "1", str(page)],
+        check=True,
+    )  # fmt: skip
+    with portrait_clip.open("rb") as cam, page.open("rb") as img:
+        r = client.post(
+            "/api/jobs",
+            files=[
+                ("camera", (portrait_clip.name, cam, "video/quicktime")),
+                ("slides", ("folie.png", img, "image/png")),
+            ],
+            data={"type": "thought", "slides_mode": "both", "slides_wish": "drei Schritte"},
+        )
+    assert r.status_code == 200, r.text
+    job = jobs_root() / r.json()["id"]
+    assert json.loads((job / "job.json").read_text())["slides"] == {
+        "mode": "both", "wish": "drei Schritte",
+    }  # fmt: skip
+    assert (job / "input" / "slides" / "page_01.png").is_file()
+    shown = client.get(f"/api/jobs/{job.name}").json()["slides"]
+    assert shown == {"mode": "both", "wish": "drei Schritte", "pages": 1, "stale": False,
+                     "marks": []}  # fmt: skip
+
+
+@pytest.mark.media
+def test_job_create_refuses_bad_slides(client, portrait_clip):
+    with portrait_clip.open("rb") as cam:
+        r = client.post(
+            "/api/jobs",
+            files=[("camera", (portrait_clip.name, cam, "video/quicktime")),
+                   ("slides", ("deck.pdf", b"<html>not a pdf</html>", "application/pdf"))],
+            data={"type": "thought", "slides_mode": "upload"},
+        )  # fmt: skip
+    assert r.status_code == 415 and "not a PDF" in r.json()["detail"]["message"]
+    with portrait_clip.open("rb") as cam:
+        r = client.post(
+            "/api/jobs",
+            files=[("camera", (portrait_clip.name, cam, "video/quicktime"))],
+            data={"type": "thought", "slides_mode": "everything"},
+        )
+    assert r.status_code == 400 and "slides mode" in r.json()["detail"]["message"]
+    assert jobs_root().is_dir() is False or not any(jobs_root().iterdir())
+
+
+def test_slide_upload_field_limits(client):
+    files = [("camera", ("take.mov", b"x", "video/quicktime"))]
+    files += [("slides", (f"p{k}.png", b"x", "image/png")) for k in range(31)]
+    r = client.post("/api/jobs", files=files, data={"slides_mode": "upload"})
+    assert r.status_code == 413 and "at most 30" in r.json()["detail"]["message"]
+    r = client.post("/api/jobs", files=[("slides", ("evil.svg", b"<svg/>", "image/svg+xml"))])
+    assert r.status_code == 415
+
+
+def test_plan_feedback_can_address_a_slide(client, fake):
+    job = planned_job()
+    plan = {"slides": [{"id": "s1", "template": "title", "content": {"title": "x"}}]}
+    (job / "work" / "plan.json").write_text(json.dumps(plan))
+    r = client.post("/api/jobs/j1/plan/feedback", json={"text": "Folie entfernen", "slide": "s9"})
+    assert r.status_code == 400 and "no slide" in r.json()["detail"]["message"]
+    r = client.post("/api/jobs/j1/plan/feedback", json={"text": "Folie entfernen", "slide": "s1"})
+    assert r.status_code == 200, r.text
+    for _ in range(50):
+        if fake.calls:
+            break
+        time.sleep(0.05)
+    assert ("plan_feedback", "j1", "Folie entfernen", "s1") in fake.calls
+
+
+def test_slide_marks_follow_the_edl_and_stills_are_served(client):
+    job = make_job(slides={"mode": "auto", "wish": ""})
+    edl = {"segments": [{"in": 0.0, "out": 2.0},
+                        {"in": 2.0, "out": 3.5, "slide": "s1", "layout": "slide"},
+                        {"in": 4.0, "out": 5.0, "slide": "s1", "layout": "slide_full"},
+                        {"in": 6.0, "out": 7.0}]}  # fmt: skip
+    (job / "work" / "edl.json").write_text(json.dumps(edl))
+    marks = client.get("/api/jobs/j1").json()["slides"]["marks"]
+    assert marks == [{"id": "s1", "t0": 2.0, "t1": 4.5, "layout": "slide"}]
+    (job / "work" / "slides" / "stills").mkdir(parents=True)
+    (job / "work" / "slides" / "stills" / "s1.jpg").write_bytes(b"\xff\xd8\xff")
+    assert client.get("/api/jobs/j1/stills/work/slides/stills/s1.jpg").status_code == 200
+    assert client.get("/api/jobs/j1/stills/input/slides/page_01.png").status_code == 404
+
+
+def test_plan_shows_the_slide_stills(client):
+    job = planned_job()
+    plan = {"title": "T", "slides": [{"id": "s1", "template": "title"}, {"id": "s2"}]}
+    (job / "work" / "plan.json").write_text(json.dumps(plan))
+    (job / "work" / "slides" / "stills").mkdir(parents=True)
+    (job / "work" / "slides" / "stills" / "s1_sm.jpg").write_bytes(b"\xff\xd8\xff")
+    got = client.get("/api/jobs/j1/plan").json()["plan"]["slides"]
+    assert got[0]["still"] == "work/slides/stills/s1_sm.jpg" and "still" not in got[1]
+    assert json.loads((job / "work" / "plan.json").read_text()) == plan
+
+
+@pytest.mark.media
+def test_job_create_removes_the_job_when_slides_fail_unexpectedly(
+    client, portrait_clip, monkeypatch
+):
+    from videocut.tools import _job_slides
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(_job_slides, "import_slides", boom)
+    with portrait_clip.open("rb") as cam:
+        r = client.post(
+            "/api/jobs",
+            files=[("camera", (portrait_clip.name, cam, "video/quicktime")),
+                   ("slides", ("deck.pdf", b"%PDF-1.4\n", "application/pdf"))],
+            data={"type": "thought", "slides_mode": "upload"},
+        )  # fmt: skip
+    assert r.status_code == 500 and "disk full" in r.json()["detail"]["message"]
+    assert not any(jobs_root().iterdir())

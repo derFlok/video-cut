@@ -19,6 +19,12 @@ stretches `face` is the speaker area (pip inset, the speaker's face in split), s
 land below the screen view, outside the speaker. `safe` are the
 organic safe zones (docs/BRIEF.md §8). captions/overlays are copied from the EDL.
 
+Slides (every job type): overlays.json "views" also lists per slide range the speaker
+(the bubble of `slide`, the face in the speaker part of `slide_split`); a `slide_split`
+view's `screen` is the slide's part (captions and scenes keep off it), and a `slide` /
+`slide_full` view has "hide": true: the renderer draws no caption and no overlay item
+while it is on screen (the slide is the picture; the voice goes on).
+
 End card (`cta_end`, a full-frame plate): it starts only after the last spoken word
 (+0.2 s). An earlier one is shifted there, and when it then runs past the cut, overlays.json
 gets the longer duration and render appends a held last frame with silent audio (_plates).
@@ -40,7 +46,7 @@ import subprocess
 from pathlib import Path
 
 from .. import brand
-from ..edl import EdlError, load, read_sync
+from ..edl import EdlError, is_screen, is_slide, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
 from ..redaction import asset_boxes, same_asset
 from . import _layouts, _plates, _redact_style
@@ -109,8 +115,12 @@ def build(job: Path) -> dict:
     layouts = [s.layout for s in edl.segments]
     use_layouts = any(lay != "face" for lay in layouts)
     plan = plan_mod.build(edl, src_size, edl.size, layouts if use_layouts else None)
+    tokens = brand_tokens(read_job(job).get("brand") or DEFAULT_BRAND)
     views = _views(plan, _layouts.plan_all(job, edl, plan, src_size, face, edl.size)["segs"], face,
-                   src_size) if use_layouts else []  # fmt: skip
+                   src_size) if any(is_screen(lay) for lay in layouts) else []  # fmt: skip
+    if any(is_slide(lay) for lay in layouts):
+        slides = _layouts.plan_slides(edl, plan, src_size, face, edl.size, tokens)["segs"]
+        views = sorted(views + _slide_views(plan, slides, face, src_size), key=lambda v: v["t0"])
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
     cands, _ = redaction_enforced(job)
@@ -123,7 +133,7 @@ def build(job: Path) -> dict:
         "height": edl.size[1],
         "fps": edl.fps,
         "duration": round(plan.duration, 6),
-        "tokens": brand_tokens(read_job(job).get("brand") or DEFAULT_BRAND),
+        "tokens": tokens,
         "safe": safe_zones(edl.size),
         "face": track,
         "captions": edl.captions,
@@ -209,6 +219,39 @@ def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[di
                     "speaker": speaker,
                 }
             )
+        f0 += r.frames
+    return out
+
+
+def _slide_views(plan, slides: dict, face: dict | None, src: tuple[int, int]) -> list[dict]:
+    """Per slide range (output time and px): `speaker` (slide: the bubble; slide_split: the
+    face box inside the speaker part, else that part's upper half; slide_full: none),
+    `screen` (slide_split: the slide's part, kept clear) and "hide" (slide, slide_full: no
+    caption or overlay item is drawn there)."""
+    out, f0 = [], 0
+    median = ((face or {}).get("median") or {}).get("box")
+    for i, r in enumerate(plan.ranges):
+        seg = slides.get(i)
+        if seg is not None:
+            g = seg.geo
+            speaker = g.speaker.box() if g.speaker is not None else None
+            if seg.layout == "slide_split":
+                part = g.speaker
+                speaker = [part.x, part.y, part.x + part.w, part.y + part.h // 2]
+                box = map_box(median, src, seg.camera, (part.w, part.h)) if median else None
+                if box:
+                    speaker = [box[0] + part.x, box[1] + part.y, box[2] + part.x,
+                               box[3] + part.y]  # fmt: skip
+            hide = seg.layout != "slide_split"
+            out.append({
+                "t0": round(float(f0 / plan.fps), 6),
+                "t1": round(float((f0 + r.frames) / plan.fps), 6),
+                "layout": seg.layout,
+                "slide": seg.slide,
+                "screen": None if hide else g.rect.box(),
+                "speaker": speaker,
+                **({"hide": True} if hide else {}),
+            })  # fmt: skip
         f0 += r.frames
     return out
 

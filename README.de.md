@@ -163,6 +163,32 @@ braucht einen neuen Plan und eine neue Freigabe.
 zweiten Befehl starten. Claude ordnet jeden Screenshot dem Satz zu, der ihn erklärt, und
 zeigt ihn mit Zoom auf die genannte Stelle; persönliche Daten darin werden abgedeckt.
 
+## Folien und Animationen
+
+Claude kann zeigen, was du sagst: Schritte, eine Aufzählung, eine große Zahl, einen
+Vergleich, eine Zeitleiste, ein Balkendiagramm, ein Zitat oder den Handlungsaufruf, im
+Look deiner Marke (es wird kein Code erzeugt; jede Folie ist eine Vorlage, gefüllt mit
+deinen gesagten Worten). Oder du bringst eigene Folien mit (PDF-Export oder Bilder), und
+Claude setzt jede Seite dorthin, wo du über sie sprichst. In der App: **„Folien &
+Animationen"** unter *Neues Video* – keine, eigene hochladen, Claude erstellt sie oder
+beides, dazu „Was soll gezeigt werden?". Der Plan zeigt jede Folie mit Vorschau, der
+Stelle, zu der sie gehört, und ihrem Layout (Folie groß mit dir im Kreis, nebeneinander
+oder nur die Folie); vor der Freigabe kannst du eine entfernen oder eine Änderung wünschen.
+
+```bash
+.venv/bin/videocut run ~/Movies/ich.mov --brand meine-marke --slides-mode auto \
+  --slides-wish "die drei Schritte als Ablauf"
+.venv/bin/videocut tool job slides-import <id> ~/Desktop/folien.pdf   # eigene Seiten
+.venv/bin/videocut tool job slides <id> --mode both                   # dann: videocut run <id>
+```
+
+PDF-Seiten werden auf diesem Mac in Bilder umgewandelt (mit seiner eigenen PDF-Technik);
+nichts wird hochgeladen. Claude schreibt keine Zahl und keine Aussage auf eine Folie, die
+du nicht gesagt oder gewünscht hast. Wer die Folien nach dem Plan ändert, braucht einen
+neuen Plan und eine neue Freigabe. Persönliche Daten auf deinen Seiten (ein Name, eine
+E-Mail-Adresse) stehen im Plan wie bei einem Screenshot; was markiert bleibt, wird im
+Video abgedeckt.
+
 ## Marken
 
 Video Cut bringt kein eigenes Branding mit. Du lädst deins hoch (Logo, Farben, Schriften, optional Brand-Guide und Beispielposts), und jedes Video passt sich daran an. Mehrere Marken nebeneinander sind möglich, pro Video wählst du eine.

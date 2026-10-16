@@ -1352,3 +1352,48 @@ progress {
   align-items: center;
   justify-content: space-between;
 }
+
+/* slides: plan-gate cards and the result strip */
+.slidecards {
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+.slidecard .viewcard-meta {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+.slidecard .thumb-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.slidecard-ask {
+  display: flex;
+  gap: 6px;
+}
+.slidecard-ask input {
+  flex: 1;
+  min-width: 0;
+}
+.slidemarks {
+  position: relative;
+  height: 12px;
+  margin-top: 4px;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.slidemark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--focus);
+  cursor: pointer;
+}
+.slidemark:focus-visible {
+  outline: 2px solid var(--text);
+}

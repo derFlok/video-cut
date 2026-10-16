@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Added — slides and animations (job flow, skills, app)
+- job.json `slides` {mode none|upload|auto|both, wish}: `videocut tool job slides`,
+  `videocut run --slides-mode --slides-wish`, the new-job form. Human only; a plan made
+  for other slides is stale (job.json `plan_slides`), the approval is revoked and `run`
+  plans again.
+- `videocut tool job slides-import <job> FILE... [--replace]`: the human's PDF pages and
+  images as `input/slides/page_NN.png` (1920 px long side), PDFs rasterised locally with
+  macOS CoreGraphics in a time-limited child process (`tools/_pdf.py`; no new download),
+  files judged by content. `videocut tool sheet slides`: numbered page sheets plus the
+  text of each page (local OCR).
+- `plan.json` `slides` validated by `plan check` (templates and text limits, keep rows,
+  one at a time, the job's mode, same as `work/slides.json`).
+- Skills: plan (when a slide helps, auto/both/upload, never invents content), cut (slide
+  segments, reveal times on the words), overlays (no card duplicating a slide), revise
+  (change, move, remove a slide), plan feedback on one slide.
+- Guards: a cut run may not show a slide outside the approved plan nor change its content;
+  an overlay run may not touch `work/slides.json`; revise backs it up.
+- API: `POST /api/jobs` takes `slides_mode`, `slides_wish` and `slides` files (≤ 30, ≤ 200 MB
+  each, PDF magic bytes or ffprobe); `plan/feedback` takes `slide`; job detail `slides`
+  with the slide moments of the reel; stills from `work/slides/stills/`.
+- App: "Folien & Animationen" in *Neues Video*, slide cards at the plan gate ("Folie
+  entfernen", a change per slide), slide marks under the result player (de/en).
+- Personal data on uploaded pages: handled like screenshots (`redact text` reads them,
+  candidates with `asset`, the human decides at approval); image slides burn the enforced
+  boxes in (renderer `slides/image.js`, screenshot_frame's redaction, fail closed).
+- Overlays and revise skills: no captions, keywords or overlays during `slide` and
+  `slide_full`; in `slide_split` only in the speaker part. `plan check` refuses slide
+  layouts in `views`; plan stills and `sheet` treat slide layouts as slides, not screen.
+- Renderer: in `slide_split` the slide part is a hard block for captions and cards
+  (`placeBlock` `hard`, weighed before the face), so text goes in the speaker part only.
+
 ### Added
 - Repository scaffold, Apache-2.0 licence, design brief (`docs/BRIEF.md`).
 - `start.sh`: installs pinned, checksum-verified tools into `./.tools` (uv, managed Python 3.12,
@@ -772,3 +803,29 @@
 - Real check with the job's records (approval, personal-data decision, overlay record):
   render 396 s; verify not ok on 3 real flags (a blink at cut 1, a keyword card over the
   screen view, a keyword card on its own caption); 0 screen flags.
+
+### Added — Slides: brand templates, slide layouts, slide checks
+- `renderer/slides/`: ten templates (title, bullets, big_number, compare, steps, timeline,
+  bar_chart, quote, cta, image) drawn from brand tokens only, through the shared text block,
+  layout scales (1.3 … 0.6, never below) and the brand spring at a calm pace. Build steps
+  follow the EDL's `reveal` times. `render.js` with a spec `"mode": "slide"`: an opaque
+  ProRes 422 HQ clip at output size and fps, a still, and a layout report (scale, fits,
+  text boxes, times).
+- `videocut tool slides check|stills|render`: schema and text limits of work/slides.json,
+  final-state stills (`<id>.jpg` + `<id>_sm.jpg` ≤ 960 px), clips reused while their spec
+  matches, with SHA-256 records outside the job folder.
+- EDL layouts `slide` (round speaker bubble; brand token `pip` for corner and size),
+  `slide_split` and `slide_full` with `slide` and `reveal`; render composites them in all four
+  formats; a slide across consecutive segments keeps its clock. `edl check` adds the slide
+  checks when the EDL shows slides.
+- overlays: no captions or overlays during `slide` / `slide_full` (views `hide: true`); in
+  `slide_split` the slide part is a block.
+- verify: `slide_text_overflow`, `slide_reading_time` (≥ 0.25 s per word + 1 s),
+  `slide_bubble_over_text`, `slide_missing` / `slide_untrusted` / `slide_stale` /
+  `slide_unchecked`, and `slides_NN.jpg`. A slide_full stretch is exempt from the frozen
+  check; in slide / slide_split the camera is judged inside the speaker area.
+
+### Changed — Slides
+- Code that read "not face" as "screen" (redaction, snapping, `run`, `edl` text, screen
+  checks) now asks `edl.SCREEN_LAYOUTS` / `is_screen`; `screen_zoom` and `redact` are allowed
+  on screen layouts only.

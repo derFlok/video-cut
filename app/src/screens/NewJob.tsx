@@ -6,6 +6,7 @@ import {
   type CutStyleChoice,
   type FormatChoice,
   type RedactStyle,
+  type SlidesMode,
   type TargetChoice,
   type VideoType,
   type VocabEntry,
@@ -13,6 +14,7 @@ import {
 import { AspectIcon } from "../components/AspectIcon";
 import { CutStyleSelect } from "../components/CutStyle";
 import { RedactStyleSelect } from "../components/RedactStyle";
+import { SlidesPicker, needsFiles, slideErrors } from "../components/Slides";
 import { TargetSelect } from "../components/TargetLength";
 import { DropZone, formatBytes, hasExt, IMAGE_EXT, VIDEO_EXT } from "../components/DropZone";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -61,6 +63,9 @@ export function NewJob() {
   // undefined: a custom length that is not valid yet (blocks the upload)
   const [target, setTarget] = useState<TargetChoice | undefined>(null);
   const [vocabulary, setVocabulary] = useState<VocabEntry[]>([]);
+  const [slidesMode, setSlidesMode] = useState<SlidesMode>("none");
+  const [slideFiles, setSlideFiles] = useState<File[]>([]);
+  const [slidesWish, setSlidesWish] = useState("");
   const [tried, setTried] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState<"idle" | "upload" | "start">("idle");
@@ -79,6 +84,8 @@ export function NewJob() {
 
   const errors = types ? validateNewJob(draft, types, t) : [];
   if (target === undefined) errors.push(t("target.custom.invalid"));
+  const sendFiles = needsFiles(slidesMode) ? slideFiles : [];
+  errors.push(...slideErrors(slidesMode, sendFiles, slidesWish, t));
   const busy = phase !== "idle";
 
   const submit = async (e: FormEvent) => {
@@ -102,6 +109,9 @@ export function NewJob() {
           redact_style: redactStyle,
           target_s: target,
           vocabulary: cleanVocabulary(vocabulary),
+          slides_mode: slidesMode,
+          slides_wish: slidesMode === "none" ? undefined : slidesWish.trim() || undefined,
+          slides: sendFiles,
         },
         (p) => setProgress(p.total ? Math.round((p.loaded / p.total) * 100) : null),
       );
@@ -212,6 +222,28 @@ export function NewJob() {
           </DropZone>
         </div>
       </fieldset>
+
+      <SlidesPicker
+        mode={slidesMode}
+        onMode={setSlidesMode}
+        files={slideFiles}
+        onFiles={setSlideFiles}
+        wish={slidesWish}
+        onWish={setSlidesWish}
+        invalid={tried}
+        disabled={busy}
+        fileRows={
+          slideFiles.length > 0 && (
+            <ol className="filelist">
+              {slideFiles.map((f, i) => (
+                <li key={`${f.name}-${i}`}>
+                  <FileRow file={f} onRemove={() => setSlideFiles(slideFiles.filter((_, j) => j !== i))} />
+                </li>
+              ))}
+            </ol>
+          )
+        }
+      />
 
       <fieldset className="stack">
         <legend className="h2">{t("new.look")}</legend>

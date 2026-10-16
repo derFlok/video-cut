@@ -8,6 +8,12 @@ Product demos add a screen recording (work/sync.json aligns it): a segment may s
 `layout`, `screen_zoom` keyframes and `redact` blocks, all in CAMERA time like `in`/`out`;
 the screen frame shown at camera time t is screen time `screen_time(t, sync)`.
 
+Slides (work/slides.json, tools/slides.py) work in every job: a segment with a slide layout
+(`slide`: full frame + the speaker as a round bubble, `slide_split`: slide and speaker side
+by side, `slide_full`: the slide only) names its slide (`"slide": "<id>"`) and may give
+`reveal` times for the build steps, seconds after the segment's `in_src` (the cut point
+before `edl snap`; `in` when there is none). One slide id keeps one layout.
+
 Validation works on the raw JSON and reports every problem with a JSON path
 (`$.segments[2].out`), so Claude can fix an EDL in one round.
 """
@@ -15,6 +21,7 @@ Validation works on the raw JSON and reports every problem with a JSON path
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -23,8 +30,11 @@ FADE_MAX_MS = 200
 DEFAULT_FADE_MS = 30  # legacy: render crossfades every cut (xfade_ms), fade_ms is ignored
 XFADE_MAX_MS = 300
 BLINK_SEARCH_MS = 150  # how far a blink-free cut point may be suggested from the original
-LAYOUTS = ("face", "screen", "pip", "split")
+SCREEN_LAYOUTS = ("screen", "pip", "split")  # layouts that show the screen recording
+SLIDE_LAYOUTS = ("slide", "slide_split", "slide_full")  # layouts that show a slide
+LAYOUTS = ("face", *SCREEN_LAYOUTS, *SLIDE_LAYOUTS)
 DEFAULT_LAYOUT = "face"
+SLIDE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
 MIN_BOX_SIDE = 0.02  # a screen box narrower than 2 % of the screen is a typo, not a zoom
 SYNC_METHODS = ("audio_xcorr", "clap", "manual")
 
@@ -54,10 +64,28 @@ class Segment:
     layout: str = DEFAULT_LAYOUT
     screen_zoom: list[dict] = field(default_factory=list)  # [{"t": camera_s, "box": [..]}]
     redact: list[dict] = field(default_factory=list)  # [{"t0", "t1": camera_s, "box": [..]}]
+    slide: str | None = None  # slide id (work/slides.json) of a slide layout
+    reveal: list[float] = field(default_factory=list)  # build steps, s after reveal_base
+    reveal_base: float | None = None  # in_src of the segment (None: its `in`)
 
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    def reveal_src(self) -> list[float]:
+        """Source times of the build steps this segment gives (`reveal`)."""
+        base = self.start if self.reveal_base is None else self.reveal_base
+        return [base + r for r in self.reveal]
+
+
+def is_screen(layout: str | None) -> bool:
+    """Whether `layout` shows the screen recording (screen, pip, split)."""
+    return layout in SCREEN_LAYOUTS
+
+
+def is_slide(layout: str | None) -> bool:
+    """Whether `layout` shows a slide (slide, slide_split, slide_full)."""
+    return layout in SLIDE_LAYOUTS
 
 
 @dataclass
@@ -99,6 +127,10 @@ class Edl:
                 d["screen_zoom"] = s.screen_zoom
             if s.redact:
                 d["redact"] = s.redact
+            if s.slide is not None:
+                d["slide"] = s.slide
+            if s.reveal:
+                d["reveal"] = s.reveal
             if s.xfade_ms is not None:
                 d["xfade_ms"] = s.xfade_ms
             if s.speech_cut_ok:
@@ -151,7 +183,7 @@ def _screen_errors(s: dict, p: str, a, b) -> list[str]:
     if not isinstance(zoom, list):
         errs.append(f"{p}.screen_zoom: must be a list of {{t, box}}")
         zoom = []
-    if zoom and layout == "face":
+    if zoom and not is_screen(layout):
         errs.append(f"{p}.screen_zoom: needs layout screen, pip or split (the screen is not shown)")
     last = -math.inf
     for j, k in enumerate(zoom):
@@ -173,7 +205,7 @@ def _screen_errors(s: dict, p: str, a, b) -> list[str]:
     if not isinstance(red, list):
         errs.append(f"{p}.redact: must be a list of {{t0, t1, box}}")
         red = []
-    if red and layout == "face":
+    if red and not is_screen(layout):
         errs.append(f"{p}.redact: needs layout screen, pip or split (the screen is not shown)")
     for j, r in enumerate(red):
         rp = f"{p}.redact[{j}]"
@@ -186,6 +218,63 @@ def _screen_errors(s: dict, p: str, a, b) -> list[str]:
         elif inside and not (a <= t0 and t1 <= b):
             errs.append(f"{rp}: [{t0}, {t1}] is outside the segment [{a}, {b}]")
         errs += _box_errors(r.get("box"), f"{rp}.box")
+    return errs
+
+
+def _slide_errors(s: dict, p: str, a, b) -> list[str]:
+    """`slide` and `reveal` of one segment (a, b = its in/out when numbers)."""
+    errs: list[str] = []
+    layout = s.get("layout", DEFAULT_LAYOUT)
+    sid = s.get("slide")
+    if is_slide(layout):
+        if not (isinstance(sid, str) and SLIDE_ID_RE.fullmatch(sid)):
+            errs.append(
+                f"{p}.slide: layout {layout} needs the id of a slide in work/slides.json "
+                "(letters, digits, _ and -, up to 40)"
+            )
+    elif sid is not None:
+        errs.append(f"{p}.slide: needs layout slide, slide_split or slide_full")
+    rev = s.get("reveal")
+    if rev is None:
+        return errs
+    if not is_slide(layout):
+        errs.append(f"{p}.reveal: needs a slide layout")
+        return errs
+    if not isinstance(rev, list) or not all(_num(r) for r in rev):
+        errs.append(f"{p}.reveal: must be a list of seconds after the segment's in_src")
+        return errs
+    base = s.get("in_src", a)
+    span = b - base if _num(base) and _num(b) else None
+    last = -math.inf
+    for j, r in enumerate(rev):
+        if r < 0:
+            errs.append(f"{p}.reveal[{j}]: must be >= 0")
+        if r <= last:
+            errs.append(f"{p}.reveal[{j}]: times must increase")
+        if span is not None and r > span + 1e-3:
+            errs.append(
+                f"{p}.reveal[{j}]: {r} s after in_src {base} is past the segment's out ({b})"
+            )
+        last = r
+    return errs
+
+
+def slide_layout_errors(segs: list) -> list[str]:
+    """One slide id keeps one layout (its clip has that layout's size and room)."""
+    errs, seen = [], {}
+    for i, s in enumerate(segs):
+        if not isinstance(s, dict) or not is_slide(s.get("layout")):
+            continue
+        sid, layout = s.get("slide"), s.get("layout")
+        if not isinstance(sid, str):
+            continue
+        if sid in seen and seen[sid][1] != layout:
+            k, first = seen[sid]
+            errs.append(
+                f"$.segments[{i}].layout: slide {sid} is shown as {first} in segment {k}; "
+                "one slide keeps one layout (give the other placement its own slide id)"
+            )
+        seen.setdefault(sid, (i, layout))
     return errs
 
 
@@ -229,13 +318,13 @@ def screen_time(camera_t: float, sync: dict) -> float:
 
 
 def overlap_errors(data, sync: dict | None) -> list[str]:
-    """Every non-face segment must lie inside sync["overlap"] (camera time), where both
-    recordings have pictures; without a sync (`None`) any non-face segment is an error
+    """Every screen segment must lie inside sync["overlap"] (camera time), where both
+    recordings have pictures; without a sync (`None`) any screen segment is an error
     (a missing, unreadable or invalid work/sync.json all read as None)."""
     segs = data.get("segments") if isinstance(data, dict) else None
     errs: list[str] = []
     for i, s in enumerate(segs if isinstance(segs, list) else []):
-        if not isinstance(s, dict) or s.get("layout", DEFAULT_LAYOUT) in ("face", None):
+        if not isinstance(s, dict) or not is_screen(s.get("layout", DEFAULT_LAYOUT)):
             continue
         a, b = s.get("in"), s.get("out")
         p = f"$.segments[{i}]"
@@ -342,6 +431,8 @@ def validate(
             if not ZOOM_MIN <= k[1] <= ZOOM_MAX:
                 errs.append(f"{kp}: zoom must be in {ZOOM_MIN}..{ZOOM_MAX}")
         errs += _screen_errors(s, p, a, b)
+        errs += _slide_errors(s, p, a, b)
+    errs += slide_layout_errors(segs)
 
     # Loose checks for the later phases: shape, output-time ranges, paths inside the job.
     for key in ("captions", "overlays", "broll"):
@@ -400,6 +491,9 @@ def from_dict(
                 layout=s.get("layout", DEFAULT_LAYOUT),
                 screen_zoom=s.get("screen_zoom", []),
                 redact=s.get("redact", []),
+                slide=s.get("slide"),
+                reveal=[float(r) for r in s.get("reveal") or []],
+                reveal_base=float(s["in_src"]) if _num(s.get("in_src")) else None,
             )
         )
     return Edl(
