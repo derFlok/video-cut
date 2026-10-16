@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added — fresh-install test
+- `scripts/fresh-install-test.sh`: installs a copy of the checkout under `env -i` (temporary
+  HOME and VIDEOCUT_HOME, system PATH only), times every start.sh step, runs doctor and
+  selftest, sums sizes and prints a markdown report; `--keep-models` for fast repeats;
+  `--claude <source> [--lang de]` lets the official `claude` program install from the
+  person's sentence and keeps the transcript. Numbers, verdicts and the fresh-account
+  checklist in `docs/fresh-install-report.md`; text proposals for the install skill in
+  `docs/fresh-install-proposals.md`.
+
 ### Added — transcript editor
 - `videocut tool transcript show|edit|undo`: the human changes single words of
   `work/words.json` (text only, never timing). An edited word keeps `w_asr` (the model's

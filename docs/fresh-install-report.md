@@ -20,9 +20,10 @@ The `--claude` mode gives the official `claude` program the person's sentence
 mich durch die Einrichtung.") in an empty folder. The program keeps its own sign-in; every command
 it runs gets the temporary HOME and the system PATH (`CLAUDE_ENV_FILE`), only project settings
 load (`--setting-sources project,local`, no MCP servers), tools are Bash, Read, Write, Edit, and
-`kill`/`pkill`/`killall` are denied so the test cannot stop an app already running on the machine.
-When it stops before anything is installed, it gets up to two plain answers ("Yes, please. Just
-go ahead."). Afterwards the harness runs the doctor on `~/VideoCut/app`, looks for
+`kill`/`pkill`/`killall` are denied so the test cannot stop an app already running on the machine,
+and Write/Edit are denied for the real `~/.claude` and `~/VideoCut`.
+When it stops before the launcher exists, it gets up to two plain answers ("Yes, please. Just
+go ahead."). The transcript goes to `$TMPDIR`, never into the repository (it names real paths). Afterwards the harness runs the doctor on `~/VideoCut/app`, looks for
 `~/Applications/Video Cut.app`, checks that the real `~/VideoCut` was not touched, and writes the
 stream-json transcript plus a readable summary (tool calls, risky commands, every message the
 person would read).
@@ -72,9 +73,75 @@ What the clean environment cannot show (this Mac has them):
 - Gatekeeper / "app from the internet" prompts for the launcher.
 - A slow network: the Whisper model is 1.6 GB of the ~2.5 GB.
 
-## Claude-driven install
+## Direct install on the installer branch (`origin/installer` `645fd78`, 2026-10-16)
 
-Filled in after the runs against the installer branch.
+Same machine and harness, full download. Result: **passed**.
+
+| Step (start.sh now prints "Step n/7") | Wall clock |
+|---|---|
+| 1/7 checking this Mac, 2/7 uv | 2 s |
+| 3/7 Python and packages (~474 MB) | 59 s |
+| 4/7 Node, FFmpeg, FFprobe, DeepFilterNet (135 MB) | 21 s |
+| 5/7 renderer + headless Chromium (120 MB) | 16 s |
+| 6/7 app packages + build (60 MB) | 7 s |
+| 7/7 models: Whisper 1.6 GB + face model | 3 min 21 s |
+| **`start.sh` total** | **5 min 05 s** |
+| `videocut doctor` / `videocut selftest` | 2 s / 1 min 26 s |
+
+Received ~2.4 GB; on disk **3.9 GB** (was 5.3 GB on main: the uv cache is now pruned after the
+sync, 1.5 GB → 0). The model download speed varies between runs (2 min 38 s on main, 3 min 16 s
+here); the "about 2 minutes on 100 Mbit/s" estimate in step 7 is right for 100 Mbit/s.
+
+## Claude-driven install (`origin/installer` `645fd78`, 2026-10-16)
+
+The repository is private, so the source in the sentence was a local tarball of the branch with
+the same layout as GitHub's (`video-cut-installer/…`) instead of the URL. Models were seeded from
+the cache (`--keep-models`), so the times leave out the 1.6 GB model download (about 2.5 min on
+fast broadband). Model: the CLI default (Opus).
+
+| | English | German |
+|---|---|---|
+| Sentence | "Install <tarball> for me and guide me through it." | "Installiere <tarball> für mich und führe mich durch die Einrichtung." |
+| Result | **installed**, doctor green, launcher created and opened | **installed**, doctor green, launcher created and opened |
+| Wall clock | 3 min 15 s | 3 min 48 s |
+| Turns / cost | 17 / $2.25 | 17 / $1.87 |
+| Questions to the person | 0 | 0 |
+| sudo / Homebrew / git / system python | none | none (one harmless `which … git`) |
+| Found the instructions | read INSTALL.md, then the skill | read the skill |
+| Code in `~/VideoCut/app`, app `~/Applications/Video Cut.app` | yes | yes |
+| Port | 4300 taken by another app → 4417 (`VIDEOCUT_PORT`) | same |
+| Permission prompts hit | `~/.claude/skills` (sensitive path), twice | same |
+| Language and tone | English, plain but with jargon in places | German with "du", plain but with jargon in places |
+| Explained the next step | yes: the welcome screen and both ways to connect Claude | yes |
+| Off-script | sent the person to the Terminal for `claude auth login`; offered a shell command for the skill note | sent the person to the Terminal for `claude auth login` |
+| Nothing outside the sandbox touched | yes | yes |
+
+Judged as a person without IT knowledge: the install itself is right and quick, with no question
+and no password. Four things would confuse or block them: (1) the first message is about
+"the archive", not "this takes 5 minutes and downloads 2.5 GB"; (2) a permission dialog about
+a "sensitive file" in Claude's settings comes with no explanation; (3) to use their subscription
+they are told to open the Terminal; (4) the final message names ports and tools. Concrete text
+changes: `docs/fresh-install-proposals.md`.
+
+Test artefacts, not product findings: in print mode (`claude -p`) the turn ended while
+`start.sh` ran in the background, so the harness answered once ("Yes, please. Just go ahead.")
+to let it finish; the `claude` program was "not signed in" because the commands ran with a
+temporary HOME.
+
+### Control run: the same sentence on `main` (no install skill)
+
+Before the skill existed, one English run on `main` (`ca937da`) showed why it matters: 39 turns,
+$4.67, 21 minutes, and it never created `~/VideoCut/app` or a launcher. It installed in the
+download folder, went looking for the real sign-in (`HOME=<real home> claude auth status`, put
+`/opt/homebrew/bin` on PATH), wrote a note into its own auto-memory, and then cut a test video
+end to end with `videocut run … --approve`, approving its own plan. After that run the harness
+was hardened: auto-memory off, the Write/Edit tools denied for the real `~/.claude` and
+`~/VideoCut`, and every command that names the real home folder is listed in the summary (Bash
+itself cannot be fenced in by an environment file). The EN/DE runs above named the real home
+folder in no command. Note: the deny rules in those two runs used a single leading slash, which
+Claude Code reads as relative to the project, so they had no effect there; the refusals of
+`~/.claude/skills` in both runs came from Claude Code's built-in protection of its settings
+folder. Fixed in the harness (`//` for absolute paths).
 
 ## What a human must test on a fresh account
 
@@ -87,9 +154,13 @@ Mac that never had them (or a reinstall) shows it.
       the new user, finish the first-run screens.
 - [ ] Install the Claude desktop app (or Claude Code) from claude.com and sign in with the
       subscription account.
-- [ ] Paste the sentence exactly: "Install https://github.com/derFlok/video-cut for me and guide
-      me through it." (and once more in German in a second fresh account, or after removing
-      `~/VideoCut` and `~/Applications/Video Cut.app`).
+- [ ] Paste the sentence from INSTALL.md exactly ("Install <repository URL> for me and guide me
+      through it."), and once more the German one in a second fresh account, or after removing
+      `~/VideoCut` and `~/Applications/Video Cut.app`.
+- [ ] When the install runs: does a "Claude wants to edit a sensitive file" dialog appear for
+      `~/.claude/skills`? Note its exact wording and whether Claude explained it first.
+- [ ] Desktop app only: does the welcome screen find the `claude` program the desktop app brings,
+      or does it say none was found?
 - [ ] Note the clock time when you press Enter and when Video Cut opens in the browser.
 - [ ] Count every question Claude asks you. Each one you could not answer without IT knowledge is
       a finding (write down its exact wording).

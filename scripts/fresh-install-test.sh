@@ -16,8 +16,8 @@
 #   --keep               keep the temporary directory (default: removed at the end)
 #   --claude SOURCE      Claude-driven install (needs the official `claude`, signed in)
 #   --lang en|de         language of the person's sentence (default en)
-#   --transcript FILE    stream-json transcript (default: <report or temp dir>/claude-<lang>.jsonl);
-#                        a readable summary is written next to it as FILE.md
+#   --transcript FILE    stream-json transcript (default: $TMPDIR/videocut-fresh-claude-<lang>-<time>.jsonl,
+#                        never inside the repo); a readable summary is written next to it as FILE.md
 #   --budget USD         cost cap per Claude run (default 4); --turns N (default 60)
 #
 # The install runs under `env -i` with a temporary HOME and VIDEOCUT_HOME and the system PATH
@@ -43,6 +43,7 @@ LANG_RUN=en
 TRANSCRIPT=""
 BUDGET=4
 TURNS=60
+PORT=4417   # the app the test opens; the human's own app may hold 4300
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -55,7 +56,7 @@ while [ $# -gt 0 ]; do
     --transcript) TRANSCRIPT="$2"; shift ;;
     --budget) BUDGET="$2"; shift ;;
     --turns) TURNS="$2"; shift ;;
-    -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
   shift
@@ -75,7 +76,9 @@ else
 fi
 mkdir -p "$FHOME" "$VHOME" "$LOGDIR" "$TMP/tmp"
 if [ -n "$CLAUDE_SRC" ] && [ -z "$TRANSCRIPT" ]; then
-  TRANSCRIPT="$(dirname "${REPORT_FILE:-$TMP/x}")/claude-$LANG_RUN.jsonl"
+  # Outside the repo (it names real paths) and outside $TMP (removed at the end).
+  TRANSCRIPT="$(dirname "$TMP")/videocut-fresh-claude-$LANG_RUN-$(date +%Y%m%d-%H%M%S).jsonl"
+  echo "transcript: $TRANSCRIPT" >&2
 fi
 
 cleanup() {
@@ -133,15 +136,19 @@ run_logged() {  # name logfile cmd...
 
 seed_models() {
   [ "$KEEP_MODELS" = 1 ] || return 0
-  if [ ! -d "$MODEL_CACHE" ]; then
+  if [ -z "$(ls -A "$MODEL_CACHE" 2>/dev/null)" ]; then
     echo "model cache $MODEL_CACHE is empty; downloading the models once" >&2
     KEEP_MODELS=0
     return 0
   fi
   local t0
   t0="$(now)"
-  copy_tree "$MODEL_CACHE" "$VHOME/models"
-  add_step "seed models from cache ($(mb "$VHOME/models") MB)" "$(secs "$t0" "$(now)")" ok
+  if copy_tree "$MODEL_CACHE" "$VHOME/models"; then
+    add_step "seed models from cache ($(mb "$VHOME/models") MB)" "$(secs "$t0" "$(now)")" ok
+  else
+    add_step "seed models from cache" "$(secs "$t0" "$(now)")" "FAILED (copy)"
+    FAILED=1
+  fi
 }
 
 # --- Preflight: what the clean environment offers --------------------------------------------
@@ -185,16 +192,18 @@ install_flow() {
   t_install1="$(now)"
   RX1="$(rx_bytes)"
 
-  # Per step: from one ▸ line to the next (the first segment is the platform check, the last
-  # one includes the doctor that start.sh runs at the end).
+  # Per step: from one "Step n/m:" or ▸ line to the next (the first segment is the platform
+  # check, the last one includes the doctor that start.sh runs at the end).
   SUB="$(perl -e '
-    my ($t0, $t1, $log) = @ARGV; my @ev = (["platform checks", $t0]);
+    my ($t0, $t1, $log, $tmp) = @ARGV; my @ev = (["platform checks", $t0]);
     open my $f, "<", $log or exit;
     while (<$f>) { my ($t, $l) = split /\t/, $_, 2; next unless defined $l;
-      if ($l =~ /\x{e2}\x{96}\x{b8}\s*(.*?)(\e\[0m)?\s*$/) { push @ev, [$1, $t] } }
+      $l =~ s/\e\[[0-9;]*m//g; $l =~ s/\Q$tmp\E/\$TMP/g;
+      if ($l =~ /^\s*(Step \d+\/\d+: .*?)\s*$/) { push @ev, [$1, $t] }
+      elsif ($l =~ /\x{e2}\x{96}\x{b8}\s*(.*?)\s*$/) { push @ev, [$1, $t] } }
     push @ev, ["end", $t1];
     for my $i (0 .. $#ev - 1) { printf "%s\t%.0f\n", $ev[$i][0], $ev[$i+1][1] - $ev[$i][1] }
-  ' "$t_install0" "$t_install1" "$LOGDIR/start.log")"
+  ' "$t_install0" "$t_install1" "$LOGDIR/start.log" "$TMP")"
 
   if [ "$start_rc" = 0 ]; then
     run_logged "videocut doctor" "$LOGDIR/doctor.log" .tools/bin/uv run --frozen videocut doctor
@@ -207,13 +216,13 @@ install_flow() {
 
 # --- B. Claude-driven install: the person's own Claude Code follows the repo's instructions --
 summarize_transcript() {  # jsonl -> markdown on stdout
-  /usr/bin/python3 -I - "$1" "$FHOME" "$TMP" <<'PY'
+  /usr/bin/python3 -I - "$1" "$FHOME" "$TMP" "$HOME" <<'PY'
 import json, re, sys
 
-path, fhome, tmp = sys.argv[1:4]
-short = lambda s: s.replace(fhome, "~").replace(tmp, "$TMP")
+path, fhome, tmp, real_home = sys.argv[1:5]
+short = lambda s: s.replace(fhome, "~").replace(tmp, "$TMP").replace(real_home, "<real-home>")
 risky = re.compile(r"\b(sudo|brew|xcode-select|softwareupdate|git\s|/usr/bin/python3|pip3?\s)|curl[^|]*\|\s*(ba|z)?sh")
-texts, cmds, flags, results, denied = [], [], [], [], []
+texts, cmds, flags, results, denied, escapes = [], [], [], [], [], []
 for line in open(path, encoding="utf-8"):
     try:
         e = json.loads(line)
@@ -229,6 +238,8 @@ for line in open(path, encoding="utf-8"):
                 cmds.append(f"{c['name']}: {short(arg)}")
                 if c["name"] == "Bash" and risky.search(arg):
                     flags.append(short(arg))
+                if re.search(re.escape(real_home) + r"(?![\w.-])|" + re.escape(real_home) + "/", arg):
+                    escapes.append(arg)
     elif e.get("type") == "result":
         results.append(e)
         denied += e.get("permission_denials") or []
@@ -245,6 +256,9 @@ print(f"- Messages to the person with a question mark: {len(questions)}")
 print(f"- sudo / brew / git / system python / curl|sh: {len(flags)}")
 for f in flags:
     print(f"  - `{f[:160]}`")
+print(f"- Commands or files that named the real home folder: {len(escapes)}")
+for f in escapes:
+    print(f"  - real home: `{short(f)[:160]}`")
 print("\n### Tool calls\n")
 for c in cmds:
     print(f"- `{c[:200]}`")
@@ -269,18 +283,23 @@ claude_flow() {
     answer="Yes, please. Just go ahead."
   fi
   cat >"$envfile" <<EOF
-export HOME="$FHOME" PATH="$CLEAN_PATH" TMPDIR="$TMP/tmp/" TERM=xterm
+export HOME="$FHOME" PATH="$CLEAN_PATH" TMPDIR="$TMP/tmp/" TERM=xterm VIDEOCUT_PORT="$PORT"
 unset VIDEOCUT_HOME VIRTUAL_ENV PYTHONPATH PYTHONHOME NODE_OPTIONS NODE_PATH \
   UV_PYTHON_INSTALL_DIR UV_PYTHON_PREFERENCE UV_CACHE_DIR UV_PROJECT_ENVIRONMENT
 EOF
-  # The test must not stop the human's own running app.
+  # The test must not stop the human's own running app, nor write into the real ~/.claude or
+  # ~/VideoCut with Write/Edit ("//" = an absolute path in a permission rule). Bash stays open:
+  # CLAUDE_ENV_FILE is no sandbox, a command can still name the real home; the summary lists
+  # every such command.
   local flags=(--output-format stream-json --verbose --max-budget-usd "$BUDGET" --max-turns "$TURNS"
     --strict-mcp-config --setting-sources project,local
     --allowedTools Bash Read Write Edit
-    --disallowedTools "Bash(kill:*)" "Bash(pkill:*)" "Bash(killall:*)")
+    --disallowedTools "Bash(kill:*)" "Bash(pkill:*)" "Bash(killall:*)"
+    "Write(/$HOME/.claude/**)" "Edit(/$HOME/.claude/**)" "Write(/$REAL_VIDEOCUT/**)" "Edit(/$REAL_VIDEOCUT/**)")
   run_claude() {
     (cd "$work" && env -i HOME="$HOME" USER="$USER" LOGNAME="${LOGNAME:-$USER}" SHELL=/bin/zsh \
       PATH="$(dirname "$claude_bin"):$CLEAN_PATH" TERM=xterm-256color LANG=en_US.UTF-8 \
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 VIDEOCUT_PORT="$PORT" \
       CLAUDE_ENV_FILE="$envfile" "$claude_bin" -p "$@" "${flags[@]}") \
       >>"$TRANSCRIPT" 2>>"$LOGDIR/claude.err"
   }
@@ -290,18 +309,26 @@ EOF
   RX0="$(rx_bytes)"
   run_claude "$sentence"
   rc=$?
-  # A person answers a question with a plain yes; resume while nothing is installed yet.
+  # A person answers a question with a plain yes; resume while the install is not finished
+  # (the launcher is its last step).
   for i in 1 2; do
-    [ -x "$APPDIR/.tools/bin/uv" ] && break
+    [ -d "$FHOME/Applications/Video Cut.app" ] && break
     sid="$(perl -ne 'print "$1\n" if /"session_id":"([^"]+)"/' "$TRANSCRIPT" | tail -1)"
     [ -n "$sid" ] || break
     echo "== claude follow-up $i: $answer" >&2
     run_claude "$answer" --resume "$sid"
-    rc=$?
+    local rc2=$?
+    [ "$rc2" = 0 ] || rc=$rc2
   done
   RX1="$(rx_bytes)"
-  add_step "claude -p ($LANG_RUN)" "$(secs "$t0" "$(now)")" "$([ "$rc" = 0 ] && echo ok || echo "exit $rc")"
-  # Stop whatever the run left running (the app server, a launcher).
+  if [ "$rc" = 0 ]; then
+    add_step "claude -p ($LANG_RUN)" "$(secs "$t0" "$(now)")" ok "$LOGDIR/claude.err"
+  else
+    add_step "claude -p ($LANG_RUN)" "$(secs "$t0" "$(now)")" "FAILED (exit $rc)" "$LOGDIR/claude.err"
+    FAILED=1
+  fi
+  # Stop whatever the run left running: the app server runs as $APPDIR/.venv/bin/python, so
+  # its command line names the (random) temp folder.
   pkill -f "$TMP/" 2>/dev/null
 
   if [ ! -x "$APPDIR/.tools/bin/uv" ]; then
@@ -325,16 +352,21 @@ EOF
     add_step "launcher ~/Applications/Video Cut.app" 0 "FAILED (found: ${LAUNCHERS:-nothing})"
     FAILED=1
   fi
-  # The human's own data must be untouched.
+  summarize_transcript "$TRANSCRIPT" >"$TRANSCRIPT.md"
+  # The human's own data and Claude setup must be untouched (selftest/ and state/ are left
+  # out: other sessions on this machine write there).
   local touched
-  touched="$(find "$REAL_VIDEOCUT" -maxdepth 2 -newer "$stamp" 2>/dev/null | head -3)"
+  touched="$(find "$REAL_VIDEOCUT/jobs" "$REAL_VIDEOCUT/brands" "$REAL_VIDEOCUT/models" \
+    "$REAL_VIDEOCUT/settings.json" "$HOME/.claude/skills" "$HOME/Applications" \
+    -maxdepth 1 -newer "$stamp" 2>/dev/null | head -3)"
   if [ -z "$touched" ]; then
-    add_step "real ~/VideoCut untouched" 0 ok
+    add_step "real ~/VideoCut, ~/.claude/skills, ~/Applications untouched" 0 ok
   else
-    add_step "real ~/VideoCut untouched" 0 "FAILED (changed: $(echo $touched))"
+    add_step "real ~/VideoCut, ~/.claude/skills, ~/Applications untouched" 0 "FAILED (changed: $(printf '%s' "$touched" | tr '\n' ' '))"
     FAILED=1
   fi
-  summarize_transcript "$TRANSCRIPT" >"$TRANSCRIPT.md"
+  ESCAPES="$(grep -c "^  - real home:" "$TRANSCRIPT.md" 2>/dev/null)"
+  [ "${ESCAPES:-0}" = 0 ] || add_step "commands that named the real home" 0 "warning: $ESCAPES (see summary)"
 }
 
 if [ -n "$CLAUDE_SRC" ]; then claude_flow; else install_flow; fi
