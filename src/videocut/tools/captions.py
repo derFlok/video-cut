@@ -6,6 +6,8 @@ Mapping: every word of work/words.json (source time) that a segment keeps is mov
 OUTPUT time through the segments (segment starts snapped to the output frame grid like
 render does), clipped at the segment edges. A word cut down to less than half of itself
 or MIN_WORD_S is dropped, so a filler or slip the EDL removed never shows up as a caption.
+A word the human hid (tools/transcript.py, "hidden") never shows; an edited word shows its
+edited text ("w"), also when it holds several words.
 
 Grouping by the brand's captions.pace (calm when the job has no brand or the brand sets none):
     calm    phrase blocks of 1-2 lines, at most 8 words / 38 characters (two caption lines at
@@ -76,6 +78,7 @@ def map_words(words: list[dict], segments: list, fps: float) -> list[dict]:
     `segments` are edl.Segment objects (source in/out)."""
     rate = Fraction(fps).limit_denominator(1001)
     out, t_out = [], 0.0
+    words = [w for w in words if not w.get("hidden")]
     for seg in segments:
         o = float(round(t_out * rate) / rate)  # where render starts this segment
         for w in words:

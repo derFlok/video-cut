@@ -21,6 +21,9 @@ the result and fix it. Workflow after browser-use/video-use (MIT).
   only for a concrete doubt, at most ~8 in this whole run. Prefer numbers from tool summaries.
 - **Language:** `videocut tool job show` → `lang` (`de` default, `en`) is the language of
   the human-facing free text you write (`work/cut_report.md`); headings stay as given.
+- **Human edits:** a word of `work/words.json` with `"edit"` is the human's text (`w_asr` was
+  heard): it is the truth, quote it as written, never change it back; `"hidden": true` stays out of
+  every caption. Never edit `words.json` text or `work/transcript_edits.jsonl` yourself.
 - **Vocabulary:** `videocut tool job show` → `vocabulary_effective` (`[{term, variants}]`,
   the brand's and this video's names; a human sets it, never you). Every text you write
   uses the canonical `term` exactly as given, never a variant: `work/cut_report.md` and any title or text in

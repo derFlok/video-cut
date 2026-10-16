@@ -212,6 +212,17 @@ def cut_stale(job: Path) -> bool:
         return False
 
 
+def captions_stale(job: Path) -> bool:
+    """The human edited the transcript since the reel's captions were set (job.json
+    overlays.stale = "transcript"): the app offers to set them again without Claude
+    (/captions/refresh)."""
+    try:
+        rec = read_job(job).get("overlays")
+        return overlays_stale(job) and rec.get("stale") == "transcript"
+    except (ToolError, OSError, ValueError, AttributeError):
+        return False
+
+
 def overlays_stale(job: Path) -> bool:
     """The reel's captions/overlays were made before a vocabulary was applied to the
     captions (job.json overlays.stale): the app offers to set them again (/overlays)."""
@@ -319,6 +330,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "cut_style_resolved": style_resolved,
         "cut_stale": cut_stale(job),
         "overlays_stale": overlays_stale(job),
+        "captions_stale": captions_stale(job),
         **_target(job, data),
         **_redact_style(data),
         "source_duration_s": source_duration(job),

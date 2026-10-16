@@ -42,6 +42,9 @@ human's feedback is the authority for these changes; everything else stays as it
   sentence cut inside only for a filler or false start; tight: every pause above
   `keep_pause_s` goes). The free text of `work/revision.json` `summary` and of
   `work/revision_report.md` is in `lang` (`de` default); headings stay as given.
+- **Human edits:** a word of `work/words.json` with `"edit"` is the human's text (`w_asr` was
+  heard): it is the truth, quote it as written, never change it back; `"hidden": true` stays out of
+  every caption. Never edit `words.json` text or `work/transcript_edits.jsonl` yourself.
 - **Vocabulary:** `videocut tool job show` → `vocabulary_effective` (`[{term, variants}]`,
   the brand's and this video's names; a human sets it, never you). Every text you write
   uses the canonical `term` exactly as given, never a variant: every overlay, title, card and caption text you
@@ -95,7 +98,7 @@ Typical requests and the edit (segment times, `zoom_keys`, `screen_zoom`, `redac
     `reveal` (seconds from the segment's `in_src`) to the words.
   - *another layout* → its segment(s) `layout` (`slide`, `slide_split`, `slide_full`).
   After every slide change: `videocut tool slides render` before rendering.
-  Overlays and captions around slides: No captions, keywords or overlays during slide and slide_full segments (the renderer hides them through overlays.json views hide: true). In slide_split the slide part is a block: captions and keywords go in the speaker part only.
+  Overlays and captions around slides: No card, keyword, number, list or screenshot during ANY slide layout (slide, slide_full, slide_split): the slide carries the content; `videocut tool overlays` cuts such items to their part outside the slides or drops them (overlays.json `slide_hidden`), so put them before or after the slide. Captions: none during slide and slide_full (hidden through overlays.json views hide: true); in slide_split they sit on the seam between the two parts by themselves (portrait/4:5/1:1).
 - **A caption typo** → the words of that caption group in `edl.json` `captions` (same
   times, only the spelling the human asked for).
 

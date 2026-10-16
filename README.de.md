@@ -189,6 +189,11 @@ neuen Plan und eine neue Freigabe. Persönliche Daten auf deinen Seiten (ein Nam
 E-Mail-Adresse) stehen im Plan wie bei einem Screenshot; was markiert bleibt, wird im
 Video abgedeckt.
 
+Solange eine Folie zu sehen ist, liegt keine Karte und kein Stichwort darüber: die Folie
+trägt den Inhalt. Untertitel bleiben, wo du neben einer Folie sprichst: im Hoch- oder
+Quadratformat stehen sie auf der Linie zwischen Folie und dir, weg vom Folientext und von
+deinem Gesicht.
+
 ## Marken
 
 Video Cut bringt kein eigenes Branding mit. Du lädst deins hoch (Logo, Farben, Schriften, optional Brand-Guide und Beispielposts), und jedes Video passt sich daran an. Mehrere Marken nebeneinander sind möglich, pro Video wählst du eine.
@@ -217,6 +222,22 @@ fertigen Video korrigiert „Auf das Transkript anwenden“ ohne neue Transkript
 .venv/bin/videocut tool vocab apply <job>      # bestehendes Transkript korrigieren
 .venv/bin/videocut tool vocab suggest <job>    # mögliche Falschschreibungen (nie automatisch)
 .venv/bin/videocut run aufnahme.mov --vocab "Zentrovia=Zentrowia,Sentro Via"
+```
+
+### Einzelne Wörter korrigieren
+
+Ein Wort im fertigen Video falsch? Öffne **Transkript** auf der Videoseite, klick auf das
+Wort, schreib den richtigen Text und drück Enter (Esc bricht ab; leer blendet das Wort in
+den Untertiteln aus). Das Video springt an die Stelle. „Immer so schreiben“ trägt die
+Schreibweise zusätzlich ins Wörterbuch der Marke ein. Danach setzt **Untertitel neu
+setzen** die korrigierten Untertitel ins Video, ohne Claude (ein bis zwei Minuten). Deine
+Änderungen bleiben, auch wenn das Wörterbuch erneut angewendet wird, und Claude nimmt sie
+als richtig.
+
+```bash
+.venv/bin/videocut tool transcript show <job> --from 10 --to 20   # Wörter mit Nummer
+.venv/bin/videocut tool transcript edit <job> 84 "Riesen-Golfszene"
+.venv/bin/videocut tool transcript undo <job>
 ```
 
 ## Lizenz

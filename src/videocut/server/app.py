@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, agent, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format, _job_slides, _length, _redact_style, _style, vocab
+from ..tools import _format, _job_slides, _length, _redact_style, _style, transcript, vocab
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
@@ -173,6 +173,11 @@ class Pipeline:
         captions): the cut is kept, the overlay stage runs again."""
         return pipeline.run(str(job), say=say, ask=ask)
 
+    def captions(self, job: Path, say, ask) -> int:
+        """The captions with the human's transcript edits: tool steps only (captions,
+        overlays, render, verify), no Claude run (tools/transcript.refresh)."""
+        return transcript.refresh(job, say=say)
+
 
 # ------------------------------------------------------------------ errors
 # Every error body is {"detail": {"message": str, "code"?: str, "errors"?: [str]}}.
@@ -256,6 +261,15 @@ class VocabularyBody(BaseModel):
     """The job's own vocabulary (tools/vocab.py), validated by vocab.check."""
 
     vocabulary: list = Field(default_factory=list, max_length=vocab.MAX_ENTRIES)
+
+
+class TranscriptEdit(BaseModel):
+    """One word's new text (tools/transcript.py); "" hides the word from the captions.
+    `t0` (the word's source start as read) guards against a transcript changed since."""
+
+    i: int = Field(ge=0, le=1_000_000)
+    text: str = Field(max_length=transcript.MAX_TEXT)
+    t0: float | None = Field(default=None, ge=0, le=360_000)
 
 
 class ApproveBody(BaseModel):
@@ -725,7 +739,90 @@ def create_app(
         job = job_or_404(job_id)
         if not state.overlays_stale(job):
             raise conflict("state", "the overlays of this job are not stale")
+        if state.captions_stale(job):
+            # transcript edits: the tool refresh sets them (a Claude run could rewrite them)
+            raise conflict("state", "the transcript was edited; use /captions/refresh")
         return submit(job, "overlays", lambda say, ask: run_with.overlays(job, say, ask))
+
+    # -------------------------------------------------------------- transcript
+
+    def transcript_view(job: Path, offset: int = 0, limit: int | None = None) -> dict:
+        words = state.words(job)
+        if words is None:
+            raise conflict("state", "the job has no transcript yet")
+        reel = state.overlays_stale(job) or pipeline.cut_done(job)
+        edl = state._json(job / "work" / "edl.json") if reel else None
+        sel = words[offset : None if limit is None else offset + limit]
+        times = transcript.output_times(sel, edl)
+        rows = []
+        for k, (w, tt) in enumerate(zip(sel, times, strict=True)):
+            row = {"i": offset + k, "w": w["w"], "t0": w["t0"], "t1": w["t1"],
+                   "out_t0": tt[0] if tt else None, "out_t1": tt[1] if tt else None}  # fmt: skip
+            if "edit" in w:
+                row["edited"] = True
+                row["asr"] = transcript.asr(w)
+            if w.get("hidden"):
+                row["hidden"] = True
+            rows.append(row)
+        log = transcript.read_log(job) or []
+        return {
+            "id": job.name,
+            "total": len(words),
+            "offset": offset,
+            "words": rows,
+            "has_reel": reel,
+            "edits": sum("edit" in w for w in words),
+            "can_undo": bool(transcript.replay(log)[1]),
+            "edits_at": log[-1].get("at") if log else None,
+            "drift": transcript.drift(job, words),
+            "captions_stale": state.captions_stale(job),
+            "overlays_stale": state.overlays_stale(job),
+        }
+
+    @app.get("/api/jobs/{job_id}/transcript")
+    def get_transcript(job_id: str, offset: int = 0, limit: int | None = None) -> dict:
+        """The words with their source time and, when the finished reel keeps them, their
+        time in the reel (output seconds); `offset`/`limit` page through them."""
+        if offset < 0 or (limit is not None and not 1 <= limit <= 100_000):
+            raise HTTPException(422, "offset >= 0, 1 <= limit <= 100000")
+        return transcript_view(job_or_404(job_id), offset, limit)
+
+    @app.patch("/api/jobs/{job_id}/transcript")
+    @decision
+    def patch_transcript(job_id: str, body: TranscriptEdit) -> dict:
+        """The human's text for one word; the reel's captions go stale until
+        /captions/refresh."""
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            text = transcript.clean_text(body.text)
+            res = transcript.edit(job, body.i, text, body.t0)
+        except ToolError as e:
+            if "changed since" in str(e):
+                raise conflict("stale", str(e)) from None
+            raise HTTPException(422, {"message": str(e)}) from None
+        return {**transcript_view(job), "word": {"i": res["i"], "changed": res["changed"]}}
+
+    @app.post("/api/jobs/{job_id}/transcript/undo")
+    @decision
+    def undo_transcript(job_id: str) -> dict:
+        job = job_or_404(job_id)
+        not_running(job)
+        try:
+            res = transcript.undo(job)
+        except ToolError as e:
+            raise conflict("state", str(e)) from None
+        return {**transcript_view(job), "undone": {"i": res["i"]}}
+
+    @app.post("/api/jobs/{job_id}/captions/refresh")
+    @decision
+    def refresh_captions(job_id: str) -> dict:
+        """Set the captions again with the edited transcript: a run of tool steps (no
+        Claude), its stages and log over /events like any run."""
+        job = job_or_404(job_id)
+        if not state.overlays_stale(job):
+            raise conflict("state", "the captions of this job are up to date")
+        return submit(job, "captions", lambda say, ask: run_with.captions(job, say, ask))
 
     # -------------------------------------------------------------- files
 

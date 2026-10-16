@@ -18,7 +18,9 @@ Uses:
   "Zentrowia-Kunden"). A longer word that merely contains a variant never matches. The
   model's text stays in "w_asr", "vocab" names the term, and words merged from a span keep
   the originals in "parts", so applying again (another vocabulary) starts from the
-  transcript as the model wrote it. work/transcribe.json "vocabulary" records the counts;
+  transcript as the model wrote it. A word the human edited (tools/transcript.py, "edit")
+  is never matched or restored: the manual edit wins. work/transcribe.json "vocabulary"
+  records the counts;
 - suggestions (`suggest`): words within a small edit distance of a term that no variant
   covers are only reported, never applied;
 - the skills read the effective vocabulary from `job show` ("vocabulary_effective") and
@@ -411,9 +413,13 @@ def _retime(parts: list[dict], w: dict) -> list[dict]:
 
 
 def restore(words: list[dict]) -> list[dict]:
-    """The transcript as the model wrote it: every correction undone."""
+    """The transcript as the model wrote it: every correction undone (a word the human
+    edited stays as it is)."""
     out = []
     for w in words:
+        if "edit" in w:
+            out.append(dict(w))
+            continue
         if "parts" in w:
             out += _retime(w["parts"], w)
             continue
@@ -444,7 +450,14 @@ def apply_words(words: list[dict], entries: list[dict]) -> list[dict]:
     m = Matcher(entries)
     if not m:
         return words
-    hits = {s: (e, text, entry) for s, e, text, entry in m.find([w["w"] for w in words])}
+    hits = {}
+    start = 0
+    for j in range(len(words) + 1):  # runs of words the human did not edit
+        if j == len(words) or "edit" in words[j]:
+            run = [w["w"] for w in words[start:j]]
+            for s, e, text, entry in m.find(run):
+                hits[start + s] = (start + e, text, entry)
+            start = j + 1
     out, i = [], 0
     while i < len(words):
         if i not in hits:
@@ -492,7 +505,9 @@ def apply_captions(captions: list, entries: list[dict]) -> int:
                 continue
             end, text = hits[i]
             group = ws[i:end]
-            if len(group) == 1 and text == group[0]["w"]:
+            if any(g.get("edit") for g in group):  # the human's text (tools/transcript.py)
+                out += group
+            elif len(group) == 1 and text == group[0]["w"]:
                 out.append(group[0])
             else:
                 w = {**group[0], "w": text, "t1": group[-1].get("t1", group[0].get("t1"))}
@@ -546,7 +561,8 @@ def suggestions(words: list[dict], entries: list[dict], all_conf: bool = False) 
     for i in range(len(words)):
         for span in (1, 2):
             group = words[i : i + span]
-            if len(group) < span or any(j in covered for j in range(i, i + span)):
+            if len(group) < span or any(j in covered or "edit" in words[j]
+                                        for j in range(i, i + span)):  # fmt: skip
                 continue
             heard = " ".join(_split(g["w"])[1] for g in group)
             hk = key(heard)
@@ -600,9 +616,12 @@ def apply_job(
     if not isinstance(doc, dict) or not isinstance(doc.get("words"), list):
         raise ToolError("work/words.json is missing; run `videocut tool transcribe` first")
     entries = effective(job) if entries is None else entries
-    before = [w["w"] for w in doc["words"]]
+    before = [(w["w"], w.get("edit")) for w in doc["words"]]
+    from .transcript import enforce
+
+    enforce(job, doc["words"])  # the human's edits as recorded; they win over the terms
     doc["words"] = apply_words(doc["words"], entries)
-    words_changed = before != [w["w"] for w in doc["words"]]
+    words_changed = before != [(w["w"], w.get("edit")) for w in doc["words"]]
     if words_changed:
         write_json(words_file, doc)
     record = {**counts(doc["words"]), "entries": len(entries)}
@@ -628,7 +647,7 @@ def apply_job(
     if caption_words:
         rec = read_job(job).get("overlays")
         stale = isinstance(rec, dict)  # an overlay record the next run must redo
-        if stale:
+        if stale and not rec.get("stale"):  # (stale for transcript edits: it stays that)
             update_job(job, overlays={**rec, "stale": "vocabulary"})
     return {
         **record,

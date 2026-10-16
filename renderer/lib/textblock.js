@@ -31,11 +31,13 @@ function reflow(words, states) {
   return { dx, spread };
 }
 
-function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, position, anchor, share, reserve = 0, t0, t1 }) {
+function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, position, anchor, share, reserve = 0, seam = false, t0, t1 }) {
   let L = null;
   let clear = null; // the largest attempt clear of the face, in no band
+  // `seam`: a caption goes on the seam of a stacked slide_split view on screen meanwhile.
+  const sm = seam && env.seamDuring ? env.seamDuring(t0, t1) : null;
   for (const k of [1, 0.85, 0.72, 0.6]) {
-    L = attempt(ctx, env, texts, { px: px * k, role, maxLines, position, anchor, share, reserve, t0, t1 });
+    L = attempt(ctx, env, texts, { px: px * k, role, maxLines, position, anchor, share, reserve, sm, t0, t1 });
     if (!L.overlapsFace && L.fits && L.band !== "other") break;
     if (!L.overlapsFace && L.fits) clear = clear || L;
   }
@@ -45,7 +47,7 @@ function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, posi
   return L;
 }
 
-function attempt(ctx, env, texts, { px, role, maxLines, position, anchor, share, reserve, t0, t1 }) {
+function attempt(ctx, env, texts, { px, role, maxLines, position, anchor, share, reserve, sm, t0, t1 }) {
   const { tokens, size } = env;
   // `reserve`: extra room kept free at the foot (the strip of a bottom caption).
   const safe = reserve ? { ...(env.safe || {}), bottom: ((env.safe && env.safe.bottom) || 0) + reserve } : env.safe;
@@ -82,9 +84,11 @@ function attempt(ctx, env, texts, { px, role, maxLines, position, anchor, share,
     w,
     h,
     face: env.faceDuring(t0, t1),
-    avoid: env.blocksDuring(t0, t1),
-    hard: env.hardDuring ? env.hardDuring(t0, t1) : [],
-    position: position || cs.position,
+    // On the seam the slide's content box is the hard block, not its whole part.
+    avoid: sm ? env.blocksDuring(t0, t1).filter((b) => !sm.parts.includes(b)) : env.blocksDuring(t0, t1),
+    hard: sm ? sm.content : env.hardDuring ? env.hardDuring(t0, t1) : [],
+    position: sm ? "seam" : position || cs.position,
+    seam: sm ? sm.y : null,
     anchor,
     margin: reach,
     inset: reach,

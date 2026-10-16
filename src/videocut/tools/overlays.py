@@ -21,9 +21,14 @@ organic safe zones (docs/BRIEF.md §8). captions/overlays are copied from the ED
 
 Slides (every job type): overlays.json "views" also lists per slide range the speaker
 (the bubble of `slide`, the face in the speaker part of `slide_split`); a `slide_split`
-view's `screen` is the slide's part (captions and scenes keep off it), and a `slide` /
+view's `screen` is the slide's part (scenes keep off it; portrait/square captions sit on
+its `seam` with the speaker part, off its `content` box), and a `slide` /
 `slide_full` view has "hide": true: the renderer draws no caption and no overlay item
-while it is on screen (the slide is the picture; the voice goes on).
+while it is on screen (the slide is the picture; the voice goes on). No overlay item
+(card, keyword, number, list, screenshot) shows during ANY slide layout, slide_split too:
+the slide carries the content, only captions (on the seam in a stacked slide_split) stay.
+An item reaching into a slide keeps its longest part outside the slides (dropped when
+that is shorter than MIN_ITEM_S); overlays.json "slide_hidden" lists what was cut.
 
 End card (`cta_end`, a full-frame plate): it starts only after the last spoken word
 (+0.2 s). An earlier one is shifted there, and when it then runs past the cut, overlays.json
@@ -67,6 +72,7 @@ from .job import redaction_enforced
 DEFAULT_BRAND = brand.EXAMPLE_ID
 SPEAKER_STEP_S = 0.25
 FOCUS_MAX = 0.5  # a zoom target this share of the screen view or more is not kept clear
+MIN_ITEM_S = 0.5  # an overlay item cut by a slide to less than this is dropped
 RECORDED = ("work/overlay.mov", "work/overlay_boxes.json", "work/overlays.json")
 
 
@@ -146,7 +152,45 @@ def build(job: Path) -> dict:
     }
     if views:
         doc["views"] = views
+        doc["overlays"], hidden = off_slides(doc["overlays"], views)
+        if hidden:
+            doc["slide_hidden"] = hidden
     return doc
+
+
+def off_slides(items: list, views: list[dict]) -> tuple[list, list[dict]]:
+    """Overlay items kept off every slide range (slide, slide_full, slide_split): an item
+    overlapping one keeps its longest part outside them, or is dropped below MIN_ITEM_S.
+    Full-frame plates (the end card) stay. Returns (items, what was cut)."""
+    spans = sorted((v["t0"], v["t1"]) for v in views if is_slide(v.get("layout")))
+    if not spans:
+        return items, []
+    kept, hidden = [], []
+    for o in items:
+        t0, t1 = (o.get("t0"), o.get("t1")) if isinstance(o, dict) else (None, None)
+        if _plates.is_plate(o) or not all(isinstance(t, int | float) for t in (t0, t1)):
+            kept.append(o)
+            continue
+        if not any(a < t1 and t0 < b for a, b in spans):
+            kept.append(o)
+            continue
+        parts, cur = [], t0
+        for a, b in spans:
+            if b <= cur or a >= t1:
+                continue
+            if a > cur:
+                parts.append((cur, a))
+            cur = max(cur, b)
+        if cur < t1:
+            parts.append((cur, t1))
+        best = max(parts, key=lambda p: p[1] - p[0], default=None)
+        if best is None or best[1] - best[0] < MIN_ITEM_S:
+            hidden.append({"scene": o.get("scene"), "t0": t0, "t1": t1, "kept": None})
+            continue
+        kept.append({**o, "t0": round(best[0], 6), "t1": round(best[1], 6)})
+        hidden.append({"scene": o.get("scene"), "t0": t0, "t1": t1,
+                       "kept": [round(best[0], 6), round(best[1], 6)]})  # fmt: skip
+    return kept, hidden
 
 
 def _redacted(job: Path, item: dict, cands: list[dict], style: str = "block") -> dict:
@@ -226,8 +270,10 @@ def _views(plan, segs: dict, face: dict | None, src: tuple[int, int]) -> list[di
 def _slide_views(plan, slides: dict, face: dict | None, src: tuple[int, int]) -> list[dict]:
     """Per slide range (output time and px): `speaker` (slide: the bubble; slide_split: the
     face box inside the speaker part, else that part's upper half; slide_full: none),
-    `screen` (slide_split: the slide's part, kept clear) and "hide" (slide, slide_full: no
-    caption or overlay item is drawn there)."""
+    `screen` (slide_split: the slide's part, kept clear), "hide" (slide, slide_full: no
+    caption or overlay item is drawn there) and, for a stacked slide_split, `seam` (output
+    y of the boundary between the parts: captions go on it) and `content` (the slide's
+    content box: the only part of the slide a seam caption must keep off)."""
     out, f0 = [], 0
     median = ((face or {}).get("median") or {}).get("box")
     for i, r in enumerate(plan.ranges):
@@ -243,6 +289,7 @@ def _slide_views(plan, slides: dict, face: dict | None, src: tuple[int, int]) ->
                     speaker = [box[0] + part.x, box[1] + part.y, box[2] + part.x,
                                box[3] + part.y]  # fmt: skip
             hide = seg.layout != "slide_split"
+            seam = _layouts.slide_seam(seg.layout, plan.out_size)
             out.append({
                 "t0": round(float(f0 / plan.fps), 6),
                 "t1": round(float((f0 + r.frames) / plan.fps), 6),
@@ -251,6 +298,7 @@ def _slide_views(plan, slides: dict, face: dict | None, src: tuple[int, int]) ->
                 "screen": None if hide else g.rect.box(),
                 "speaker": speaker,
                 **({"hide": True} if hide else {}),
+                **({"seam": seam, "content": list(g.area)} if seam is not None else {}),
             })  # fmt: skip
         f0 += r.frames
     return out
