@@ -17,14 +17,14 @@ user's personal Claude Code settings, hooks and CLAUDE.md out of the run.
 
 import json
 import os
-import shutil
+import shutil  # noqa: F401 — tests patch agent.shutil.which (claude_cli.exe uses it)
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import settings
+from . import claude_cli, settings
 from .paths import ROOT, tool_env
 
 PLUGIN = ROOT / "claude-plugin"
@@ -69,9 +69,9 @@ class Result:
 
 
 def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tuple[list[str], dict]:
-    exe = shutil.which("claude")
+    exe = claude_cli.exe()
     if not exe:
-        raise AgentError("Claude Code is not installed (see docs/AUTH.md).")
+        raise AgentError(claude_cli.NOT_FOUND + "; see docs/AUTH.md")
     conf = settings.load()
     cmd = [
         exe,
@@ -101,10 +101,12 @@ def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tupl
     if resume:
         cmd += ["--resume", resume]
 
-    env = tool_env()
-    env["PATH"] = f"{ROOT / '.venv' / 'bin'}{os.pathsep}{env['PATH']}"
+    env = claude_cli.fill_env(tool_env())
+    env["PATH"] = f"{ROOT / '.venv' / 'bin'}{os.pathsep}{env['PATH']}{os.pathsep}{Path(exe).parent}"
     env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     env["VIDEOCUT_AGENT"] = "1"
+    env.pop("VIDEOCUT_UI_SERVER", None)  # an agent run never inherits the app's flag
     env.pop("ANTHROPIC_API_KEY", None)
     if conf["auth"] == "apikey":
         key = settings.api_key()
@@ -113,7 +115,7 @@ def command(prompt: str, resume: str | None = None, max_turns: int = 60) -> tupl
         env["ANTHROPIC_API_KEY"] = key
         cmd.append("--bare")
     else:
-        cmd += ["--setting-sources", "project"]
+        cmd += ["--setting-sources", "project", *claude_cli.local_mode_flags()]
     return cmd, env
 
 

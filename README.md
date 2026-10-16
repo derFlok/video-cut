@@ -1,12 +1,73 @@
 # Video Cut
 
-**Claude cuts your videos, on your Mac.** Record yourself talking, drop the file in, pick a video type and a brand, and Video Cut turns it into a finished short video: filler words and pauses removed, vertical 9:16 framing (or 16:9, 1:1, 4:5 per video), animated captions, graphics that back up what you say, clean audio, music underneath.
+**Short videos from your own recordings, cut on your Mac.** Record yourself talking, drop the file in, pick a video type and a brand, and Video Cut turns it into a finished short video: filler words and pauses removed, vertical 9:16 framing (or 16:9, 1:1, 4:5 per video), animated captions, graphics that back up what you say, clean audio, music underneath. To do the editing, Video Cut runs Claude Code, Anthropic's program, on your own Mac.
 
-Video and audio never leave your machine. Claude only receives text (the transcript and the screen text read locally on your Mac) and small still images at decision points.
+Your videos and audio never leave your Mac.
 
 > **Status: early development (0.0.x).** Installer, editing pipeline and the local app work; expect rough edges. See [`docs/BRIEF.md`](docs/BRIEF.md) for the full design and [`CHANGELOG.md`](CHANGELOG.md) for progress.
 
 [Deutsch](README.de.md)
+
+## Get started in three steps
+
+You do not need any technical knowledge. Claude Code does the installation for you and explains every step.
+
+*Helping someone install this (or you are their Claude Code)? Read [`INSTALL.md`](INSTALL.md).*
+
+1. **Install Claude Code and sign in.** Claude Code is Anthropic's assistant app for your computer: get the [Claude desktop app](https://claude.com/download) and open its *Code* section, or install [Claude Code](https://code.claude.com/docs/en/quickstart) itself. Sign in with your Claude account (Pro or Max plan), or with an API key if you prefer to pay per video (see below).
+2. **Paste this sentence** into Claude Code:
+
+   > Install https://github.com/derFlok/video-cut for me and guide me through it.
+
+3. **Follow what Claude Code says.** It downloads Video Cut to `~/VideoCut/app`, installs everything it needs (it downloads about 2.5 GB and uses about 4 GB of disk), puts **Video Cut** into the *Applications* folder in your home folder and opens it.
+
+From then on you start Video Cut with a double-click on **Video Cut** in `~/Applications` (in Finder: *Applications* inside your home folder); you never need a terminal. If something does not work, or to update, just tell Claude Code, for example *"Video Cut does not start"* or *"Update Video Cut"*.
+
+## Connecting Claude: two ways
+
+At the first start Video Cut checks in the background whether your Claude Code is signed in, and lets you choose:
+
+- **Your Claude subscription (Pro or Max):** nothing extra to pay; each video uses part of your plan's usage limits. Only for yourself, on your own Mac, with your own account (Anthropic's terms). For business videos, a team or a company, use an API key.
+- **An API key:** you create a key in the [Claude Console](https://platform.claude.com) (formerly Anthropic Console) and pay per video. Video Cut keeps the key in your Mac's keychain.
+
+Details and the rules behind them: [`docs/AUTH.md`](docs/AUTH.md) and [`docs/TERMS-REVIEW.md`](docs/TERMS-REVIEW.md).
+
+## What leaves your Mac
+
+Only this, only to Anthropic, and only through your own Claude access:
+
+- the **transcript text** of your recording,
+- **small, downscaled still images** at the points where Claude has to decide something,
+- **screen text read on your Mac** (OCR) when you add a screen recording, screenshots or slides.
+
+Recordings, audio and finished videos stay on your Mac. Video Cut sends nothing to anyone else: no telemetry, no statistics, no account. Downloads happen only at installation and updates (the tools and models listed in [`manifest/tools.json`](manifest/tools.json)). Claude Code itself is Anthropic's program and follows Anthropic's own [data usage rules](https://code.claude.com/docs/en/data-usage).
+
+## What it costs
+
+Video Cut is free and open source. Claude is paid through your own access:
+
+- **Subscription:** no extra cost; counts against your plan's usage limits.
+- **API key** (measured on our test videos, October 2026): about **USD 1–3.50** per video up to the first finished version, about USD 0.40–1.50 per correction afterwards; long screen demos with several correction rounds reached USD 6–9. The app shows the cost of every video while it works.
+
+## Requirements
+
+- A Mac with Apple Silicon (M1 or newer); Intel Macs are not supported
+- macOS 14 Sonoma or newer
+- 16 GB memory recommended
+- About 4 GB of disk space for the installation (about 2.5 GB is downloaded), plus room for your videos (the installer needs at least 8 GB free and recommends 15 GB)
+- Claude Code, signed in with a Claude Pro or Max plan or an Anthropic API key
+
+## Uninstall
+
+Ask Claude Code *"Uninstall Video Cut"*, or remove these yourself:
+
+| What | Where |
+|---|---|
+| The launcher | `~/Applications/Video Cut.app` |
+| The program and all its tools | `~/VideoCut/app` |
+| Your brands, videos and downloaded speech models | the rest of `~/VideoCut` — **contains your work**, delete it only if you no longer need it |
+| The API key, if you stored one | Keychain Access → search "videocut" → delete |
+| Claude Code | stays; it is a separate program from Anthropic |
 
 ## How it works
 
@@ -19,14 +80,7 @@ Video and audio never leave your machine. Claude only receives text (the transcr
 
 There is no third-party AI editor involved. Every step is an open tool (ffmpeg, Whisper, MediaPipe, DeepFilterNet, headless Chromium) that Claude drives and checks.
 
-## Requirements
-
-- macOS 14 or newer on Apple Silicon (M1 or newer)
-- 16 GB RAM recommended
-- About 15 GB free disk space (tools ~1 GB, speech model ~1.6 GB, rest for your projects)
-- Claude: either [Claude Code](https://docs.claude.com/en/docs/claude-code) signed in with your own account, or an Anthropic API key. See [`docs/AUTH.md`](docs/AUTH.md).
-
-## Install
+## Install from the command line (developers)
 
 ```bash
 git clone https://github.com/derFlok/video-cut.git
@@ -256,9 +310,8 @@ again, and Claude treats them as the truth.
 
 ## Privacy
 
-- Recordings, audio and renders stay on your Mac.
-- Sent to Anthropic: transcript text, downscaled still frames and screen text read locally (OCR).
-- Downloads at install time: the tools and models listed in `manifest/tools.json`, nothing else.
+- Recordings, audio and renders stay on your Mac; what is sent to Anthropic is listed under
+  [What leaves your Mac](#what-leaves-your-mac).
 - Do not film other people without their consent, and do not show customer data on screen.
 
 ## License

@@ -61,6 +61,7 @@ import functools
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 import sys
@@ -1304,8 +1305,8 @@ def run(
     slides_wish: str | None = None,
     plan_feedback_slide: str | None = None,
 ) -> int:
-    if not agent.shutil.which("claude"):
-        raise RunError("Claude Code is not installed (see docs/AUTH.md).")
+    if not agent.claude_cli.exe():
+        raise RunError(agent.claude_cli.NOT_FOUND + "; see docs/AUTH.md")
     if at_s is not None and feedback is None:
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
@@ -1515,7 +1516,34 @@ def recut(ref: str, say=print, ask: Callable[[str], str] = input, max_turns: int
     return run(str(job), recut=True, max_turns=max_turns, say=say, ask=ask)
 
 
+# Set by `videocut ui` for its own process: the app's human decisions come through its
+# authenticated requests. Anywhere else, --approve/--demo-data need a person at a terminal.
+UI_SERVER_ENV = "VIDEOCUT_UI_SERVER"
+
+
+def human_flags_refused(args, stdin_tty: bool | None = None) -> str | None:
+    """The human gate on the command line: `--approve` and `--demo-data` are decisions of the
+    person. A program without a terminal (a helper such as Claude Code, a script started by
+    one) must not make them; an agent run never may."""
+    flags = [f for f, on in (("--approve", args.approve), ("--demo-data", args.demo_data)) if on]
+    if not flags:
+        return None
+    if os.environ.get("VIDEOCUT_AGENT"):
+        return f"{' '.join(flags)} is refused inside an agent run"
+    tty = sys.stdin.isatty() if stdin_tty is None else stdin_tty
+    if not tty and os.environ.get(UI_SERVER_ENV) != "1":
+        return (
+            f"{' '.join(flags)} needs a person at a terminal (approve the plan in the app, "
+            "or run this yourself in Terminal)"
+        )
+    return None
+
+
 def main(args) -> int:
+    refused = human_flags_refused(args)
+    if refused:
+        print(f"\033[31m✗ {refused}\033[0m", file=sys.stderr)
+        return 2
     try:
         return run(
             args.target,

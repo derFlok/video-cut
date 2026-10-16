@@ -6,7 +6,9 @@
 
 | Path | Purpose |
 |---|---|
-| `start.sh` | entry point: platform checks, bootstraps `uv`, syncs Python, runs `videocut setup` + `doctor` |
+| `start.sh` | entry point: steps 1-3 (this Mac, `uv`, Python), then `videocut setup` (steps 4-7), `doctor`, a summary; resumable and idempotent |
+| `INSTALL.md`, `.claude/skills/install-videocut/` | the install path for a person's own Claude Code (install, repair, update, uninstall) |
+| `scripts/fresh-install-test.sh` | clean-environment install test (`env -i`), timings and sizes; `--claude` lets the official program install from the person's sentence; results in `docs/fresh-install-report.md` |
 | `manifest/tools.json` | pinned downloads: version, URL, SHA-256, licence |
 | `src/videocut/` | Python package and CLI (`setup`, `doctor`, `selftest`, `models pull`, `ui`, `auth`, `run`, `tool`) |
 | `src/videocut/run.py` | `videocut run`: prep → plan run → human approval → cut run → overlay run; `--plan-feedback` (revise the plan), `--feedback [--at]` (revise the reel) |
@@ -14,6 +16,9 @@
 | `app/` | local app UI source (React + TypeScript + Vite, vitest); built into `src/videocut/web/dist/` (not committed) by `videocut setup`; `app/e2e/` the browser end-to-end script |
 | `src/videocut/brand.py` | brand profiles: load, validate, resolve `brand.json` into design tokens |
 | `src/videocut/agent.py` | the restricted `claude` runner (see `SECURITY.md`) |
+| `src/videocut/claude_cli.py` | finds the official `claude` program (also outside PATH), asks `claude auth status`, the connection test call |
+| `src/videocut/launcher.py` | `videocut launcher` (the "Video Cut.app" bundle) and `videocut open`; `server.json` |
+| `src/videocut/update.py` | `videocut update` (tarball swap or `git pull`) |
 | `claude-plugin/` | Claude Code plugin `video-cut` with the skills `ping`, `plan`, `cut`, `overlays`, `revise` (slides in each) |
 | `src/videocut/tools/` | `videocut tool <name>`: one module per pipeline tool, used by Claude inside a job |
 | `src/videocut/edl.py` | EDL schema (dataclasses), validation with JSON paths, load/save |
@@ -972,6 +977,77 @@ End to end through the browser: `VIDEOCUT_E2E=1 .tools/bin/uv run python
 tests/e2e/app_e2e.py` (real Claude runs on generated clips in a throwaway `VIDEOCUT_HOME`,
 screenshots per step; not in CI).
 
+## Install, launcher, first start (Phase 4)
+
+Distribution: no signed app, no binary release. A person asks their own Claude Code to
+install Video Cut; it follows `.claude/skills/install-videocut/SKILL.md` and `INSTALL.md`.
+Nothing is written into `~/.claude`: later requests ("Video Cut startet nicht") are handled
+from `~/VideoCut/app`, where Claude Code reads the project's `CLAUDE.md` and skill (INSTALL.md
+tells a helper in another folder to `cd` there first). Sign-in happens only in the app's
+first-start screen, never in a terminal. Measured (`docs/fresh-install-report.md`): about
+2.5 GB downloaded, about 3.9 GB on disk, `start.sh` about 5 minutes on fast broadband, a
+Claude-driven install 3-4 minutes plus the model download, no question to the person. Code in `~/VideoCut/app`, data in `~/VideoCut`. Nothing needs the Xcode command
+line tools, Homebrew, Rosetta or sudo: start.sh uses `curl`, `shasum`, `tar`, `plutil`,
+`sw_vers`, `sysctl`, `df`; the code is fetched as a GitHub tarball (on a fresh Mac `git`
+and `python3` are stubs that open the developer tools installer).
+
+`start.sh` steps: 1 this Mac, 2 uv, 3 Python + packages (CPython from
+`manifest/tools.json` `python`: curl + SHA-256 into `.tools/downloads/python-mirror/`, then
+`UV_PYTHON_INSTALL_MIRROR=file://… uv python install`, `UV_PYTHON=<version>`,
+`UV_PYTHON_DOWNLOADS=never`; `uv sync` with `UV_NO_DEV` unless `--dev`, `VIDEOCUT_DEV=1`
+or a git checkout; retried, then `uv cache prune --ci` with a 5 s lock timeout), 4 tools, 5 renderer + Chromium, 6 app
+build, 7 models (the renderer's Chrome headless shell is a pinned manifest entry too,
+`chromium-headless-shell`: fetched and verified by `install.py`, unpacked with
+`/usr/bin/unzip` into `.tools/ms-playwright/chromium_headless_shell-<revision>/` with
+playwright's marker files; the revision must equal playwright-core's `browsers.json`;
+`install.py` prints 4-7 with sizes from `manifest/tools.json`
+`approx_size_mb` / `approx_size_gb` and a time at 100 Mbit/s). Finished steps are recorded
+in `.tools/installed.json`; archives download to `.tools/downloads/*.part` and resume
+with HTTP Range (`download.fetch`, 4 attempts; a checksum mismatch deletes the part).
+
+Launcher: `~/Applications/Video Cut.app` = `Contents/Info.plist` (`LSUIElement`),
+`Contents/MacOS/videocut-launcher` (bash: `.venv/bin/python -m videocut.cli open`, an
+`osascript` alert with "ask your Claude Code" on failure), `Contents/Resources/icon.icns`
+(generated PNGs: a grey square with a play triangle). Made locally, so no quarantine and
+no Gatekeeper check. `videocut open` reads `$VIDEOCUT_HOME/state/server.json` (pid, port,
+this start's link; 0600, removed at exit), checks the server with `X-Token`, else starts
+`videocut ui --no-open` detached (log `state/server.log`) and opens the link. The token
+on disk is readable only by the same user, who can already reach the app; it changes per
+start. Port: `--port`, `VIDEOCUT_PORT`, 4300, then the next free one.
+
+The `claude` program (`claude_cli.exe`): PATH, then `~/.local/bin`, `~/.claude/local`,
+`/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin`, then the Claude desktop app's own
+copy (`~/Library/Application Support/Claude/claude-code/<version>/<id>/claude.app/Contents/MacOS/claude`,
+newest version). A missing `USER`/`LOGNAME` is filled in (without it the program reports
+"not signed in"). Runs set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; local mode adds
+`--no-bare` when the installed program lists it (not in 2.1.301).
+
+First start: `GET /api/setup/status` → `done` (`settings.json` has `setup_done` or an
+`auth` chosen with `videocut auth`), `mode`, `api_key_stored`, `claude` (the background
+detection: `claude --version` and `claude auth status --json`, cached 60 s, `?refresh=1`;
+only `loggedIn`, `authMethod`, `email`, `subscriptionType` are used, for display, never
+stored), `console_url`. `POST /api/setup/auth {mode, api_key?}` stores a key in the
+keychain (`settings.set_api_key`, as `videocut auth key`) and never returns it.
+`POST /api/setup/test` runs `claude -p` once in a temp folder with no tools, one turn,
+`--model haiku` (about USD 0.001), the same auth mode as a job run. `POST /api/shutdown`
+(`{force}`; 409 `busy` while a run is queued or active) sets uvicorn's `should_exit`.
+The app shows the first-start screen until `done`, then "Dein erstes Video" tips; the
+settings page (`#/settings`) shows the mode and switches it; "Beenden" in the top bar.
+
+`videocut doctor [--json]`: every check has `name, ok, detail, required, fix`; `fix` is
+empty when ok. `videocut update`: see `update.py`; it downloads first and only then stops
+the app (`videocut stop [--force]`, refused during a run), refuses to overwrite a git
+checkout, and keeps the previous code (without its tools) as `app.old-<time>` until
+`start.sh` succeeds. The API key reaches the keychain through `security -i` on stdin,
+never as a command line argument.
+
+Human gate on the command line: `videocut run --approve` and `--demo-data` are the person's
+decisions. `run.human_flags_refused` refuses them inside an agent run (`VIDEOCUT_AGENT`) and
+whenever stdin is not a terminal, unless `VIDEOCUT_UI_SERVER=1` (set by `videocut ui` for its
+own process; the app's decisions come through its authenticated requests; `agent.command`
+removes it from agent runs). A helper such as the person's Claude Code, which runs commands
+without a terminal, therefore cannot approve a plan; the install skill also forbids cutting.
+
 ## Decisions
 
 - **Local first.** Recordings and audio never leave the machine. Only transcript text,
@@ -979,6 +1055,11 @@ screenshots per step; not in CI).
 - **macOS on Apple Silicon first.** Transcription runs on MLX.
 - **No Homebrew, no sudo.** Everything is installed into the repository folder, so
   `uninstall.sh` can remove it completely.
+- **The code itself is not pinned by checksum.** The install and `videocut update` fetch
+  Video Cut's own repository (the newest release tag, else `main`) over HTTPS from GitHub;
+  the repository is the product the person chose to install. Everything it downloads in
+  turn is pinned and verified (below). A signed or checksum-published release is a later
+  step.
 - **Every download pinned and checksum-verified.** Hugging Face models are pinned to a commit
   revision; plain files and binaries to a SHA-256.
 - **FFmpeg is downloaded, never redistributed.** The build with libx264 is GPL; keeping it out of

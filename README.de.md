@@ -1,12 +1,86 @@
 # Video Cut
 
-**Claude schneidet deine Videos, auf deinem Mac.** Du nimmst dich beim Sprechen auf, legst die Datei rein, wählst Videoart und Marke. Video Cut macht daraus ein fertiges Kurzvideo: Füllwörter und Pausen raus, Hochformat 9:16 (oder 16:9, 1:1, 4:5 je Video), animierte Untertitel, Grafiken, die deine Aussagen belegen, sauberer Ton, Musik darunter.
+**Kurzvideos aus deinen eigenen Aufnahmen, geschnitten auf deinem Mac.** Du nimmst dich beim Sprechen auf, legst die Datei rein, wählst Videoart und Marke. Video Cut macht daraus ein fertiges Kurzvideo: Füllwörter und Pausen raus, Hochformat 9:16 (oder 16:9, 1:1, 4:5 je Video), animierte Untertitel, Grafiken, die deine Aussagen belegen, sauberer Ton, Musik darunter. Für den Schnitt startet Video Cut Claude Code, das Programm von Anthropic, auf deinem eigenen Mac.
 
-Video und Ton verlassen den Rechner nie. An Claude gehen nur Text (das Transkript und der lokal auf dem Mac gelesene Bildschirmtext) und kleine Standbilder an Entscheidungspunkten.
+Deine Videos und dein Ton verlassen den Mac nie.
 
 > **Stand: frühe Entwicklung (0.0.x).** Installer, Schnitt-Pipeline und die lokale App laufen; mit Ecken und Kanten ist zu rechnen. Gesamtkonzept: [`docs/BRIEF.md`](docs/BRIEF.md), Fortschritt: [`CHANGELOG.md`](CHANGELOG.md).
 
-## Installation
+[English](README.md)
+
+## In drei Schritten loslegen
+
+Du brauchst keine technischen Kenntnisse. Claude Code übernimmt die Installation und erklärt dir jeden Schritt.
+
+*Du hilfst bei der Installation, als Mensch oder als Claude Code? Lies [`INSTALL.md`](INSTALL.md) (Englisch).*
+
+1. **Claude Code installieren und anmelden.** Claude Code ist Anthropics Assistenz-Programm für deinen Computer: Lade die [Claude-Desktop-App](https://claude.com/download) herunter und öffne darin den Bereich *Code*, oder installiere [Claude Code](https://code.claude.com/docs/de/quickstart) direkt. Melde dich mit deinem Claude-Konto (Pro- oder Max-Abo) an, oder mit einem API-Key, wenn du lieber pro Video zahlst (siehe unten).
+2. **Diesen Satz in Claude Code einfügen:**
+
+   > Installiere https://github.com/derFlok/video-cut für mich und führe mich durch die Einrichtung.
+
+3. **Den Anweisungen von Claude Code folgen.** Es lädt Video Cut nach `~/VideoCut/app`, installiert alles Nötige (es lädt rund 2,5 GB herunter und belegt rund 4 GB Speicher), legt **Video Cut** in den Ordner *Programme* in deinem Benutzerordner und öffnet es.
+
+Ab dann startest du Video Cut mit einem Doppelklick auf **Video Cut** in `~/Applications` (Finder: *Programme* in deinem Benutzerordner); ein Terminal brauchst du nie. Wenn etwas nicht klappt oder du aktualisieren willst, sag es einfach Claude Code, z. B. *„Video Cut startet nicht“* oder *„Video Cut aktualisieren“*.
+
+## Claude verbinden: zwei Wege
+
+Beim ersten Start prüft Video Cut im Hintergrund, ob dein Claude Code angemeldet ist, und lässt dich wählen:
+
+- **Dein Claude-Abo (Pro oder Max):** keine Zusatzkosten; jedes Video verbraucht einen Teil der Nutzungsgrenzen deines Abos. Nur für dich selbst, auf deinem eigenen Mac, mit deinem eigenen Konto (Anthropics Bedingungen). Für geschäftliche Videos, im Team oder in einer Firma nimm einen API-Key.
+- **Ein API-Key:** Du erstellst einen Key in der [Claude Console](https://platform.claude.com) (früher Anthropic Console) und zahlst pro Video. Video Cut bewahrt den Key im Schlüsselbund deines Macs auf.
+
+Details und die Regeln dahinter: [`docs/AUTH.md`](docs/AUTH.md) und [`docs/TERMS-REVIEW.md`](docs/TERMS-REVIEW.md) (Englisch).
+
+## Was deinen Mac verlässt
+
+Nur das, nur an Anthropic, und nur über deinen eigenen Claude-Zugang:
+
+- der **Text des Transkripts** deiner Aufnahme,
+- **verkleinerte Standbilder** an den Stellen, an denen Claude etwas entscheiden muss,
+- **auf deinem Mac per Texterkennung gelesener Bildschirmtext**, wenn du eine Bildschirmaufnahme, Screenshots oder Folien dazugibst.
+
+Aufnahmen, Ton und fertige Videos bleiben auf deinem Mac. Video Cut schickt nichts an andere: keine Telemetrie, keine Statistiken, kein Konto. Downloads gibt es nur bei Installation und Updates (die Werkzeuge und Modelle aus [`manifest/tools.json`](manifest/tools.json)). Claude Code selbst ist Anthropics Programm und folgt Anthropics eigenen [Regeln zur Datennutzung](https://code.claude.com/docs/de/data-usage).
+
+## Was es kostet
+
+Video Cut ist kostenlos und Open Source. Claude bezahlst du über deinen eigenen Zugang:
+
+- **Abo:** keine Zusatzkosten; wird auf die Nutzungsgrenzen deines Abos angerechnet.
+- **API-Key** (gemessen an unseren Testvideos, Oktober 2026): rund **1–3,50 USD** pro Video bis zur ersten fertigen Fassung, rund 0,40–1,50 USD je Korrektur danach; lange Bildschirm-Demos mit mehreren Korrekturrunden kamen auf 6–9 USD. Die App zeigt die Kosten jedes Videos schon während der Arbeit.
+
+## Voraussetzungen
+
+- Ein Mac mit Apple-Chip (M1 oder neuer); Intel-Macs werden nicht unterstützt
+- macOS 14 Sonoma oder neuer
+- 16 GB Arbeitsspeicher empfohlen
+- Rund 4 GB Speicher für die Installation (rund 2,5 GB werden heruntergeladen), dazu Platz für deine Videos (der Installer braucht mindestens 8 GB frei und empfiehlt 15 GB)
+- Claude Code, angemeldet mit einem Claude-Pro- oder -Max-Abo oder einem Anthropic-API-Key
+
+## Deinstallieren
+
+Sag Claude Code *„Deinstalliere Video Cut“*, oder entferne selbst:
+
+| Was | Wo |
+|---|---|
+| Das Startprogramm | `~/Applications/Video Cut.app` |
+| Das Programm mit allen Werkzeugen | `~/VideoCut/app` |
+| Deine Marken, Videos und geladenen Sprachmodelle | der Rest von `~/VideoCut` – **enthält deine Arbeit**, nur löschen, wenn du sie nicht mehr brauchst |
+| Den API-Key, falls gespeichert | Schlüsselbundverwaltung → nach „videocut“ suchen → löschen |
+| Claude Code | bleibt; es ist ein eigenes Programm von Anthropic |
+
+## So funktioniert es
+
+1. Ein lokales Modell schreibt deine Aufnahme Wort für Wort mit Zeitstempeln mit.
+2. Claude liest das Transkript, schaut sich nur bei unklaren Entscheidungen Kontaktbögen an und schlägt einen Plan vor (Hook, Kernaussage, Länge, was rausfliegt).
+3. Du gibst den Plan frei.
+4. Claude schreibt eine Schnittliste. ffmpeg rendert sie, Grafiken entstehen in deiner Marke.
+5. Claude prüft das eigene Ergebnis an jedem Schnitt und behebt Probleme (bis zu drei Runden).
+6. Du schaust es dir an, gibst Feedback in eigenen Worten und lädst das Ergebnis herunter.
+
+Es ist kein fremder KI-Editor beteiligt. Jeder Schritt ist ein offenes Werkzeug (ffmpeg, Whisper, MediaPipe, DeepFilterNet, Headless-Chromium), das Claude steuert und prüft.
+
+## Installation über die Kommandozeile (Entwickler)
 
 ```bash
 git clone https://github.com/derFlok/video-cut.git
@@ -14,9 +88,16 @@ cd video-cut
 ./start.sh --selftest
 ```
 
-Voraussetzungen: macOS 14+ auf Apple Silicon, 16 GB RAM empfohlen, rund 15 GB freier Speicher, und Claude Code mit eigenem Login oder ein API-Key (siehe [`docs/AUTH.md`](docs/AUTH.md)).
+`start.sh` installiert alles nach `./.tools` (ohne Homebrew, ohne Admin-Rechte). Jeder Download ist auf eine Version festgelegt und per SHA-256 geprüft ([`manifest/tools.json`](manifest/tools.json)). Mehrfaches Ausführen ist unbedenklich.
 
-`start.sh` installiert alles nach `./.tools` (ohne Homebrew, ohne Admin-Rechte). Jeder Download ist auf eine Version festgelegt und per SHA-256 geprüft. Mehrfaches Ausführen ist unbedenklich.
+| Befehl | Was er tut |
+|---|---|
+| `./start.sh` | installieren oder auffrischen, dann die Installation prüfen |
+| `./start.sh --selftest` | ebenso, dann die Pipeline an einem erzeugten Testclip laufen lassen |
+| `./start.sh --ui` | ebenso, dann die App im Browser öffnen |
+| `./start.sh --check` | nur prüfen, nichts installieren |
+| `./uninstall.sh` | installierte Werkzeuge entfernen (deine Daten bleiben) |
+| `./uninstall.sh --all` | zusätzlich anbieten, den Datenordner zu löschen |
 
 Marken, Projekte und Modelle liegen in `~/VideoCut` (änderbar über `VIDEOCUT_HOME`), nie im Repository.
 
@@ -240,6 +321,16 @@ als richtig.
 .venv/bin/videocut tool transcript undo <job>
 ```
 
+## Datenschutz
+
+- Aufnahmen, Ton und gerenderte Videos bleiben auf deinem Mac; was an Anthropic geht, steht
+  unter [Was deinen Mac verlässt](#was-deinen-mac-verlässt).
+- Filme andere Menschen nicht ohne ihre Zustimmung und zeige keine Kundendaten im Bild.
+
 ## Lizenz
 
-Apache-2.0. Unabhängiges Projekt, nicht mit Anthropic verbunden.
+Apache-2.0, siehe [`LICENSE`](LICENSE). Fremdkomponenten und ihre Lizenzen:
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+Video Cut ist ein unabhängiges Projekt. Es ist nicht mit Anthropic verbunden und wird nicht von
+Anthropic unterstützt oder empfohlen.

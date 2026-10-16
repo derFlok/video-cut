@@ -1,7 +1,9 @@
-"""Command line: videocut setup | doctor | selftest | models | ui | auth | run | tool <name>."""
+"""Command line: videocut setup | doctor | selftest | models | ui | open | launcher | update |
+auth | run | tool <name>."""
 
 import argparse
 import os
+import subprocess
 import sys
 
 from . import __version__
@@ -22,7 +24,8 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("setup", help="install pinned tools and default models")
     s.add_argument("--no-models", action="store_true", help="skip model downloads")
-    sub.add_parser("doctor", help="check the installation")
+    d = sub.add_parser("doctor", help="check the installation (each failed check names a fix)")
+    d.add_argument("--json", action="store_true", help="the checks as JSON, for a helper")
     sub.add_parser("selftest", help="run the pipeline on a generated test clip")
     m = sub.add_parser("models", help="manage models")
     msub = m.add_subparsers(dest="models_cmd", required=True)
@@ -30,8 +33,32 @@ def main(argv: list[str] | None = None) -> int:
     pull.add_argument("name")
 
     u = sub.add_parser("ui", help="start the local app")
-    u.add_argument("--port", type=int, default=4300)
+    u.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="port (default: VIDEOCUT_PORT or 4300; the next free one if it is taken)",
+    )
     u.add_argument("--no-open", action="store_true", help="do not open the browser")
+    o = sub.add_parser("open", help="open the app; start it in the background if needed")
+    o.add_argument("--port", type=int, default=None, help="port to start on (VIDEOCUT_PORT, 4300)")
+    o.add_argument("--no-browser", action="store_true", help="only start, open nothing")
+    la = sub.add_parser("launcher", help="create the double-click app ~/Applications/Video Cut.app")
+    la.add_argument("--dir", help="folder for Video Cut.app (default: ~/Applications)")
+    la.add_argument("--system", action="store_true", help="put it in /Applications instead")
+    la.add_argument("--port", type=int, default=None, help="fixed port for the app")
+    la.add_argument(
+        "--at-login",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="start Video Cut in the background at login (off unless asked)",
+    )
+    la.add_argument("--remove", action="store_true", help="remove the launcher and login item")
+    st = sub.add_parser("stop", help="stop the running app")
+    st.add_argument("--force", action="store_true", help="also while a job is running")
+    up = sub.add_parser("update", help="get the newest Video Cut and install it")
+    up.add_argument("--force", action="store_true", help="stop a running job to update")
+    up.add_argument("--ref", help="a release tag or branch instead of the newest release")
     auth = sub.add_parser("auth", help="choose how Video Cut connects to Claude")
     asub = auth.add_subparsers(dest="auth_cmd", required=True)
     asub.add_parser("local", help="use your own Claude Code sign-in (personal use)")
@@ -150,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "doctor":
         from . import doctor
 
-        return doctor.run()
+        return doctor.run(as_json=a.json)
     if a.cmd == "selftest":
         from . import selftest
 
@@ -164,10 +191,34 @@ def main(argv: list[str] | None = None) -> int:
         install.install_model(a.name)
         return 0
     if a.cmd == "ui":
-        from . import server
+        from . import launcher, server
 
-        server.serve(a.port, open_browser=not a.no_open)
+        port = a.port or launcher.free_port(launcher.default_port())
+        server.serve(port, open_browser=not a.no_open)
         return 0
+    if a.cmd == "open":
+        from . import launcher
+
+        return launcher.open_app(a.port, browser=not a.no_browser)
+    if a.cmd == "launcher":
+        return _launcher(a)
+    if a.cmd == "stop":
+        from . import update
+
+        try:
+            print("Stopped." if update.stop_server(a.force) else "Video Cut was not running.")
+        except update.UpdateError as e:
+            print(e, file=sys.stderr)
+            return 1
+        return 0
+    if a.cmd == "update":
+        from . import update
+
+        try:
+            return update.run(force=a.force, ref=a.ref)
+        except (update.UpdateError, OSError, subprocess.CalledProcessError) as e:
+            print(f"\033[31m✗ Update failed: {e}\033[0m", file=sys.stderr)
+            return 1
     if a.cmd == "auth":
         from . import settings
 
@@ -180,7 +231,11 @@ def main(argv: list[str] | None = None) -> int:
             if not key.startswith("sk-ant-"):
                 print("That does not look like an Anthropic API key.", file=sys.stderr)
                 return 1
-            settings.set_api_key(key)
+            try:
+                settings.set_api_key(key)
+            except (ValueError, RuntimeError, OSError) as e:
+                print(f"Not stored: {e}", file=sys.stderr)
+                return 1
             settings.save(auth="apikey")
         mode = settings.load()["auth"]
         print("Mode: " + ("API key (keychain)" if mode == "apikey" else "own Claude Code sign-in"))
@@ -192,6 +247,27 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "tool":
         return a.handler(a)
     return 2
+
+
+def _launcher(a) -> int:
+    from pathlib import Path
+
+    from . import launcher
+
+    if a.remove:
+        for p in launcher.remove():
+            print(f"Removed {p}")
+        return 0
+    dest = Path(a.dir).expanduser() if a.dir else (
+        Path("/Applications") if a.system else Path.home() / "Applications"
+    )  # fmt: skip
+    dest.mkdir(parents=True, exist_ok=True)
+    app = launcher.bundle(dest, port=a.port)
+    print(f"Created {app}")
+    if a.at_login is not None:
+        item = launcher.set_login_item(app, a.at_login)
+        print(("Starts at login: " if a.at_login else "No start at login: ") + str(item))
+    return 0
 
 
 if __name__ == "__main__":

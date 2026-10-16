@@ -17,6 +17,9 @@ import type {
   Plan,
   RedactionDecision,
   Session,
+  SetupStatus,
+  SetupTest,
+  AuthMode,
   SlidesMode,
   TargetChoice,
   TargetRange,
@@ -160,6 +163,14 @@ const J = (id: string) => `/api/jobs/${enc(id)}`;
 export const api = {
   session: () => call<Session>("GET", "/api/session"),
   types: () => call<VideoType[]>("GET", "/api/types"),
+
+  setupStatus: (refresh = false) => call<SetupStatus>("GET", `/api/setup/status${refresh ? "?refresh=1" : ""}`),
+  /** Choose the mode; an API key goes to the keychain on the server and never comes back. */
+  setupAuth: (mode: AuthMode, apiKey?: string) =>
+    call<SetupStatus>("POST", "/api/setup/auth", apiKey ? { mode, api_key: apiKey } : { mode }),
+  setupTest: () => call<SetupTest>("POST", "/api/setup/test", {}),
+  /** The "Beenden" button: the server stops (409 busy while a run is active, unless force). */
+  shutdown: (force = false) => call<{ stopping: boolean }>("POST", "/api/shutdown", { force }),
 
   brands: () => call<BrandSummary[]>("GET", "/api/brands"),
   brand: (id: string) => call<Brand>("GET", `/api/brands/${enc(id)}`),

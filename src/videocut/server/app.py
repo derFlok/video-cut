@@ -7,6 +7,7 @@ import functools
 import json
 import re
 import shutil
+import threading
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
@@ -18,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .. import __version__, agent, settings
+from .. import __version__, claude_cli, settings
 from .. import redaction as red
 from .. import run as pipeline
 from ..tools import _format, _job_slides, _length, _redact_style, _style, transcript, vocab
@@ -39,7 +40,7 @@ from ..tools.job import (
     set_target,
     set_title,
 )
-from . import brands, state
+from . import brands, setup, state
 from .runs import Busy, Runs
 from .security import Guard
 from .uploads import (
@@ -272,6 +273,10 @@ class TranscriptEdit(BaseModel):
     t0: float | None = Field(default=None, ge=0, le=360_000)
 
 
+class ShutdownBody(BaseModel):
+    force: bool = False
+
+
 class ApproveBody(BaseModel):
     plan_sha: str
     redaction: Redaction | None = None
@@ -290,6 +295,8 @@ def create_app(
     port: int = 4300,
     hosts: set[str] | None = None,
     runner: Pipeline | None = None,
+    on_shutdown=None,
+    setup_router=None,
 ) -> FastAPI:
     app = FastAPI(title="Video Cut", version=__version__, docs_url=None, redoc_url=None,
                   openapi_url=None)  # fmt: skip
@@ -333,7 +340,7 @@ def create_app(
     @app.get("/api/session")
     def session() -> dict:
         conf = settings.load()
-        installed = agent.shutil.which("claude") is not None
+        installed = claude_cli.exe() is not None
         how = "api_key" if conf.get("auth") == "apikey" else "subscription"
         ok = installed and (how == "subscription" or bool(_safe_api_key()))
         return {
@@ -860,6 +867,20 @@ def create_app(
         return FileResponse(p, media_type="video/mp4", filename=filename)
 
     app.include_router(brands.router)
+    app.state.setup = setup_router or setup.router()
+    app.include_router(app.state.setup)
+
+    @app.post("/api/shutdown")
+    def shutdown(body: ShutdownBody | None = None) -> dict:
+        """The app's "Beenden" button (a write: session cookie + same Origin, or X-Token).
+        Refused while a run is queued or active, unless `force`."""
+        busy = [j for j, c in runs.channels.items() if c.state != "idle"]
+        if busy and not (body and body.force):
+            raise conflict("busy", "a run is queued or active")
+        if on_shutdown is None:
+            raise HTTPException(501, "this server cannot stop itself")
+        threading.Timer(0.3, on_shutdown).start()  # answer first, then stop
+        return {"stopping": True, "runs": busy}
 
     @app.api_route("/api/{rest:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     def api_404(rest: str):

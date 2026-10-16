@@ -7,6 +7,7 @@ export type Route =
   | { name: "new" }
   | { name: "job"; id: string }
   | { name: "brands" }
+  | { name: "settings" }
   | { name: "brand"; id: string };
 
 export function parseRoute(hash: string): Route {
@@ -15,6 +16,7 @@ export function parseRoute(hash: string): Route {
   if (parts[0] === "jobs" && parts[1]) return { name: "job", id: parts[1] };
   if (parts[0] === "brands" && parts[1]) return { name: "brand", id: parts[1] };
   if (parts[0] === "brands") return { name: "brands" };
+  if (parts[0] === "settings") return { name: "settings" };
   return { name: "home" };
 }
 
@@ -28,6 +30,8 @@ export function href(r: Route): string {
       return `#/jobs/${encodeURIComponent(r.id)}`;
     case "brands":
       return "#/brands";
+    case "settings":
+      return "#/settings";
     case "brand":
       return `#/brands/${encodeURIComponent(r.id)}`;
   }

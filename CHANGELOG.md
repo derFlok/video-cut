@@ -2,6 +2,71 @@
 
 ## Unreleased
 
+### Added — Phase 4: install by your own Claude Code, launcher, first-start screen
+- Install path without IT knowledge: the person tells their own Claude Code "Install
+  https://github.com/derFlok/video-cut for me and guide me through it." It follows the skill
+  `.claude/skills/install-videocut` (install, repair, update, uninstall; `curl` tarball into
+  `~/VideoCut/app`, never `git`, `python3`, `sudo` or Homebrew), `INSTALL.md` (de/en) and
+  the new top section of `CLAUDE.md`.
+- `start.sh` / `install.py`: numbered steps 1-7 with size and time ("Step 7/7: models …,
+  1.6 GB, about 2 minutes on 100 Mbit/s"), "already done" for finished steps, a summary
+  (time, disk use, folders); downloads resume from a `.part` file (HTTP Range) and retry;
+  `uv sync` retries; `uv cache prune --ci` after the sync (~1.4 GB less); the person's
+  `PYTHONPATH`/`VIRTUAL_ENV`/`NODE_OPTIONS` are ignored; Rosetta terminals are refused
+  with a plain message. Tool sizes in `manifest/tools.json` (`approx_size_mb`).
+- `videocut doctor`: a concrete `fix` per failed check (this Mac, app build, claude sign-in,
+  API key, launcher); `--json` for a helper.
+- `videocut launcher [--system] [--at-login]`: writes `~/Applications/Video Cut.app` on the
+  machine (bash stub, generated neutral icon, no quarantine, no signing); double-click =
+  `videocut open` (start the server in the background if needed, open the link). The
+  server records port and link in `$VIDEOCUT_HOME/state/server.json` (0600). Start at login
+  only when asked; `--remove` (also run by `uninstall.sh`).
+- `videocut update`: stops the app (not during a run unless `--force`), downloads the newest
+  release tag (or `main`), swaps the code and keeps `.tools`/`.venv`/`node_modules`, runs
+  `./start.sh`; a git checkout with the command line tools uses `git pull --ff-only`.
+- Pinned and verified like every other download (rule 6): CPython 3.12.15 (start.sh
+  fetches the python-build-standalone archive, checks its SHA-256 and lets uv install it
+  from a local `file://` mirror; `UV_PYTHON_DOWNLOADS=never` afterwards) and the renderer's
+  Chrome headless shell 153.0.8010.12 (install.py, instead of playwright's unverified
+  installer; the revision must match playwright-core's). `doctor` checks both.
+- End users get no developer tools (`UV_NO_DEV`); `./start.sh --dev`, `VIDEOCUT_DEV=1` or a
+  git checkout keep pytest and ruff.
+- The official `claude` program is also found in the Claude desktop app's own copy; a
+  missing `USER` (minimal environments) no longer makes it report "not signed in". Agent
+  runs and the connection test set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; local mode
+  passes `--no-bare` once the installed program offers it (2.1.301 does not).
+- `videocut stop [--force]` stops the running app (used by `uninstall.sh`, which also
+  removes the launcher).
+- Human gate on the command line: `videocut run --approve` / `--demo-data` are refused
+  without a terminal (a helper running commands for the person) unless `VIDEOCUT_UI_SERVER=1`
+  (set by `videocut ui` for itself, removed for agent runs), and always inside an agent run.
+- From the fresh-install runs (`docs/fresh-install-proposals.md`): the skill announces size,
+  disk use and time first, speaks plainly, runs `start.sh` in the foreground, writes nothing
+  into `~/.claude`, leaves the sign-in to the app's welcome screen (never the Terminal), ends
+  with one fixed short message and never cuts or approves a video during an install.
+- Port: `VIDEOCUT_PORT`, else 4300, else the next free port (`ui`, `open`).
+- The API key goes to the keychain through `security -i` on stdin (no longer visible in
+  the process list).
+- App: first-start screen (de/en) — the official `claude` program is asked in the
+  background (`claude auth status`; only its output is used, never its files), "Anmeldung
+  bei Claude gefunden" with the account it prints, choice of own subscription (with the
+  one-sentence terms note) or API key (keychain), "Verbindung prüfen" (one tiny `claude -p` call with
+  the smallest model), then the "Dein erstes Video" tips. Settings page with the current
+  mode and the same switch. "Beenden" stops the server (asks while a run is active).
+- API: `GET /api/setup/status`, `POST /api/setup/auth`, `POST /api/setup/test`,
+  `POST /api/shutdown` (all behind the session cookie + Origin check).
+- The `claude` program is also found outside PATH (`~/.local/bin`, Homebrew, npm), so the
+  launcher (started by Finder with a minimal PATH) finds it.
+
+### Added — fresh-install test
+- `scripts/fresh-install-test.sh`: installs a copy of the checkout under `env -i` (temporary
+  HOME and VIDEOCUT_HOME, system PATH only), times every start.sh step, runs doctor and
+  selftest, sums sizes and prints a markdown report; `--keep-models` for fast repeats;
+  `--claude <source> [--lang de]` lets the official `claude` program install from the
+  person's sentence and keeps the transcript. Numbers, verdicts and the fresh-account
+  checklist in `docs/fresh-install-report.md`; text proposals for the install skill in
+  `docs/fresh-install-proposals.md`.
+
 ### Added — transcript editor
 - `videocut tool transcript show|edit|undo`: the human changes single words of
   `work/words.json` (text only, never timing). An edited word keeps `w_asr` (the model's

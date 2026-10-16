@@ -4,6 +4,8 @@
 import { setTransport, type Transport, type UploadProgress } from "../api/client";
 import type {
   Brand,
+  ClaudeDetection,
+  SetupStatus,
   JobDetail,
   JobEvent,
   JobSummary,
@@ -24,6 +26,10 @@ export interface MockOptions {
   step?: number;
   /** Start with the demo jobs (true) or empty. */
   seed?: boolean;
+  /** The first-start state (default: done, local mode, a signed-in claude program). */
+  setup?: Partial<Omit<SetupStatus, "claude">> & { claude?: Partial<ClaudeDetection> };
+  /** The answer of "Verbindung prüfen". */
+  testOk?: boolean;
 }
 
 interface MockJob {
@@ -69,6 +75,9 @@ export interface MockState {
   brands: Map<string, Brand>;
   jobs: Map<string, MockJob>;
   active: string | null;
+  setup: SetupStatus;
+  apiKey: string | null;
+  stopped: boolean;
   /** Every request the fake saw (method, path, body), newest last. */
   calls: { method: string; path: string; body: unknown }[];
 }
@@ -367,6 +376,16 @@ export function createMock(opts: MockOptions = {}) {
     ]),
     jobs: opts.seed === false ? new Map() : seedJobs(),
     active: null,
+    setup: {
+      done: true,
+      mode: "local",
+      api_key_stored: false,
+      console_url: "https://console.anthropic.com/settings/keys",
+      ...opts.setup,
+      claude: { state: "done", installed: true, version: "2.0.0", signed_in: true, method: "claude.ai", account: "person@example.com", subscription: "pro", ...opts.setup?.claude },
+    },
+    apiKey: null,
+    stopped: false,
     calls: [],
   };
   const listeners = new Map<string, Set<(ev: JobEvent) => void>>();
@@ -442,6 +461,29 @@ export function createMock(opts: MockOptions = {}) {
 
     if (a === "session") return json(200, { version: "0.0.1", lang: "de", claude: { ok: true, how: "subscription" } });
     if (a === "types") return json(200, state.types);
+
+    if (a === "setup") {
+      if (id === "status" && method === "GET") return json(200, { ...state.setup, api_key_stored: state.apiKey !== null || state.setup.api_key_stored });
+      if (id === "auth" && method === "POST") {
+        const b = body as { mode?: string; api_key?: string };
+        if (b.mode !== "local" && b.mode !== "apikey") return json(422, { detail: { message: "invalid request: mode" } });
+        if (b.mode === "apikey") {
+          if (b.api_key && !/^sk-ant-[A-Za-z0-9_-]{20,300}$/.test(b.api_key))
+            return json(422, { detail: { message: "That does not look like an Anthropic API key.", code: "bad_key" } });
+          if (b.api_key) state.apiKey = b.api_key;
+          else if (state.apiKey === null && !state.setup.api_key_stored) return json(422, { detail: { message: "No API key given.", code: "no_key" } });
+        }
+        state.setup = { ...state.setup, mode: b.mode, done: true };
+        return json(200, { ...state.setup, api_key_stored: state.apiKey !== null || state.setup.api_key_stored });
+      }
+      if (id === "test" && method === "POST")
+        return json(200, opts.testOk === false ? { ok: false, message: "Invalid API key", seconds: 1.2, mode: state.setup.mode } : { ok: true, message: "OK", seconds: 3.4, mode: state.setup.mode });
+    }
+    if (a === "shutdown" && method === "POST") {
+      if (state.active && !(body as { force?: boolean })?.force) return json(409, { detail: { message: "a run is queued or active", code: "busy" } });
+      state.stopped = true;
+      return json(200, { stopping: true });
+    }
 
     if (a === "brands") {
       if (!id && method === "GET")

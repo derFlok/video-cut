@@ -76,6 +76,36 @@ export interface Session {
   claude: { ok: boolean; how: "subscription" | "api_key" | null };
 }
 
+/** What the official claude program says about itself (GET /api/setup/status). */
+export interface ClaudeDetection {
+  state: "checking" | "done";
+  installed?: boolean;
+  version?: string | null;
+  signed_in?: boolean;
+  method?: string | null;
+  /** The account e-mail, only when the official program prints one (never stored). */
+  account?: string | null;
+  subscription?: string | null;
+  error?: string | null;
+}
+
+export type AuthMode = "local" | "apikey";
+
+export interface SetupStatus {
+  done: boolean;
+  mode: AuthMode;
+  api_key_stored: boolean;
+  claude: ClaudeDetection;
+  console_url: string;
+}
+
+export interface SetupTest {
+  ok: boolean;
+  message: string;
+  seconds: number | null;
+  mode?: AuthMode;
+}
+
 export interface VideoType {
   id: string;
   name_de: string;
