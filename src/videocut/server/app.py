@@ -40,7 +40,7 @@ from ..tools.job import (
     set_target,
     set_title,
 )
-from . import brands, setup, state
+from . import brands, setup, state, theme
 from .runs import Busy, Runs
 from .security import Guard
 from .uploads import (
@@ -866,6 +866,7 @@ def create_app(
         filename = f"{name}-{(fmt or 'video').replace(':', 'x')}.mp4"
         return FileResponse(p, media_type="video/mp4", filename=filename)
 
+    app.include_router(theme.router)  # before brands: /api/brands/{id}/theme and /assets
     app.include_router(brands.router)
     app.state.setup = setup_router or setup.router()
     app.include_router(app.state.setup)
@@ -890,6 +891,14 @@ def create_app(
 
     ui = _ui_dir()
     if ui is not None:
+
+        @app.get("/", include_in_schema=False)
+        @app.get("/index.html", include_in_schema=False)
+        def index() -> HTMLResponse:
+            """The built page with the brand theme inline (no neutral flash on reload)."""
+            page = theme.inject((ui / "index.html").read_text())
+            return HTMLResponse(page, headers={"Cache-Control": "no-cache"})
+
         app.mount("/", StaticFiles(directory=ui, html=True), name="ui")
     else:
 

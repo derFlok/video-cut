@@ -4,10 +4,12 @@
 
 import { useEffect, useState } from "react";
 import { ApiError, api } from "../api/client";
-import type { AuthMode, SetupStatus, SetupTest } from "../api/types";
+import type { AuthMode, BrandSummary, SetupStatus, SetupTest } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { useI18n } from "../i18n";
 import { href } from "../router";
+import { useTheme } from "../theme";
+import { ThemeSwitch } from "./Brands";
 
 const KEY_RE = /^sk-ant-[A-Za-z0-9_-]{20,300}$/;
 const POLL_MS = 800;
@@ -303,8 +305,46 @@ export function Settings({ onSaved }: { onSaved?: () => void }) {
           />
         </section>
       )}
+      <BrandLook />
       {version && <p className="muted">{t("settings.version", { v: version })}</p>}
     </div>
+  );
+}
+
+/** Settings: the default brand (new videos preselect it) and whether the app follows it. */
+function BrandLook() {
+  const { t } = useI18n();
+  const { settings, saveSettings } = useTheme();
+  const [brands, setBrands] = useState<BrandSummary[] | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  useEffect(() => {
+    api.brands().then(setBrands).catch(setErr);
+  }, []);
+  if (!settings) return null;
+  return (
+    <section className="panel stack" aria-labelledby="look-title">
+      <h2 id="look-title">{t("settings.look")}</h2>
+      <div className="field">
+        <label htmlFor="default-brand">{t("brands.default.title")}</label>
+        <select
+          id="default-brand"
+          value={settings.default_brand ?? ""}
+          onChange={(e) => {
+            setErr(null);
+            saveSettings({ default_brand: e.target.value || null }).catch(setErr);
+          }}
+        >
+          <option value="">{t("new.brand.none")}</option>
+          {(brands ?? []).map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <ThemeSwitch />
+      <ErrorBanner error={err} />
+    </section>
   );
 }
 

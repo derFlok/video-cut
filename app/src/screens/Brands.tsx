@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ApiError, api } from "../api/client";
-import { FORMATS, type Brand, type BrandSummary, type Format } from "../api/types";
+import { FORMATS, type Brand, type BrandSummary, type Format, type ThemeNote } from "../api/types";
 import { AspectIcon } from "../components/AspectIcon";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { VocabEditor, cleanVocabulary } from "../components/Vocabulary";
 import { useI18n } from "../i18n";
 import { go, href } from "../router";
+import { useTheme } from "../theme";
 
 export const EXAMPLE_ID = "_example";
 const COLOR_KEYS = ["bg", "surface", "text", "muted", "accent"] as const;
@@ -19,12 +20,18 @@ export function BrandList() {
   const [err, setErr] = useState<unknown>(null);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
+  const { theme, settings, saveSettings } = useTheme();
 
   const load = () => {
     setErr(null);
     api.brands().then(setBrands).catch(setErr);
   };
   useEffect(load, []);
+  const defaultId = settings ? settings.default_brand : (brands?.find((b) => b.default)?.id ?? null);
+  const setDefault = (id: string | null) => {
+    setErr(null);
+    saveSettings({ default_brand: id }).then(load, setErr);
+  };
 
   const create = async (e: FormEvent) => {
     e.preventDefault();
@@ -63,20 +70,86 @@ export function BrandList() {
         </form>
       )}
       <ErrorBanner error={err} onRetry={load} />
+      <section className="panel stack-sm" aria-labelledby="brand-default-title">
+        <h2 id="brand-default-title" className="h3">
+          {t("brands.default.title")}
+        </h2>
+        <p className="hint">{defaultId ? t("brands.default.is", { name: brands?.find((b) => b.id === defaultId)?.name ?? defaultId }) : t("brands.default.none")}</p>
+        <ThemeSwitch />
+        {defaultId && theme.invalid && <p className="banner banner-warn">{t("theme.invalid")}</p>}
+        {defaultId && <ContrastNotes notes={theme.notes} />}
+        {defaultId && (
+          <div className="actions">
+            <button type="button" className="btn btn-small" onClick={() => setDefault(null)}>
+              {t("brands.default.unset")}
+            </button>
+          </div>
+        )}
+      </section>
       {brands && brands.length === 0 && <p className="empty">{t("brands.empty")}</p>}
       {brands && (
         <ul className="brandgrid">
           {brands.map((b) => (
-            <li key={b.id}>
+            <li key={b.id} className="brandcard-item">
               <a className="brandcard" href={href({ name: "brand", id: b.id })}>
                 <img src={api.url(b.preview_url)} alt="" loading="lazy" />
                 <span className="brandcard-name">{b.name}</span>
               </a>
+              <div className="brandcard-actions">
+                {b.id === defaultId ? (
+                  <span className="default-badge">{t("brands.default.badge")}</span>
+                ) : (
+                  <button type="button" className="btn btn-small" onClick={() => setDefault(b.id)} aria-label={`${t("brands.default.set")}: ${b.name}`}>
+                    {t("brands.default.set")}
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
       )}
     </div>
+  );
+}
+
+/** "App-Design an Marke anpassen": keep a default brand for new videos but a neutral UI. */
+export function ThemeSwitch() {
+  const { t } = useI18n();
+  const { settings, saveSettings } = useTheme();
+  const [err, setErr] = useState<unknown>(null);
+  if (!settings) return null;
+  return (
+    <div className="stack-sm">
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={settings.theme_follows_brand}
+          onChange={(e) => {
+            setErr(null);
+            saveSettings({ theme_follows_brand: e.target.checked }).catch(setErr);
+          }}
+        />
+        <span>{t("theme.follow")}</span>
+      </label>
+      <p className="hint">{t("theme.follow.hint")}</p>
+      <ErrorBanner error={err} />
+    </div>
+  );
+}
+
+/** Plain-language hints for the tokens the contrast guard replaced with neutral ones. */
+export function ContrastNotes({ notes }: { notes: ThemeNote[] }) {
+  const { t, lang } = useI18n();
+  if (!notes.length) return null;
+  return (
+    <ul className="banner banner-warn" aria-label={t("theme.notes")}>
+      {notes.map((n) => (
+        <li key={`${n.code}-${n.scheme}`}>
+          {t(`theme.note.${n.code}`, { ratio: n.ratio.toLocaleString(lang, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) })}
+          {n.scheme === "dark" ? ` ${t("theme.note.inDark")}` : ""}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -100,6 +173,10 @@ export function BrandEditor({ id }: { id: string }) {
   const [note, setNote] = useState("");
   const [fmt, setFmt] = useState<Format>("9:16");
   const [version, setVersion] = useState(0);
+  const [previewOn, setPreviewOn] = useState(false);
+  const [notes, setNotes] = useState<ThemeNote[]>([]);
+  const theme = useTheme();
+  const { setPreview } = theme;
   const readonly = id === EXAMPLE_ID;
 
   const load = () => {
@@ -107,6 +184,28 @@ export function BrandEditor({ id }: { id: string }) {
     api.brand(id).then(setBrand).catch(setErr);
   };
   useEffect(load, [id]);
+  // The edited (unsaved) brand's theme: contrast hints always, the live look while the
+  // preview is on. Leaving the editor restores the real theme.
+  const edited = brand ? JSON.stringify(brand) : null;
+  useEffect(() => {
+    if (!edited) return;
+    let gone = false;
+    const timer = setTimeout(() => {
+      api
+        .previewTheme(id, JSON.parse(edited) as Brand)
+        .then((v) => {
+          if (gone) return;
+          setNotes(v.notes);
+          setPreview(previewOn ? v : null);
+        })
+        .catch(() => undefined); // invalid while typing: the field errors show on save
+    }, 250);
+    return () => {
+      gone = true;
+      clearTimeout(timer);
+    };
+  }, [id, edited, previewOn, setPreview]);
+  useEffect(() => () => setPreview(null), [setPreview]);
 
   if (err && !brand) return <ErrorBanner error={err} onRetry={load} />;
   if (!brand) return <p className="muted">{t("common.loading")}</p>;
@@ -141,6 +240,7 @@ export function BrandEditor({ id }: { id: string }) {
       setBrand({ ...b, files: b.files ?? files });
       setSaved(true);
       setVersion((v) => v + 1);
+      if (theme.settings?.default_brand === id) void theme.reload();
     } catch (e2) {
       if (e2 instanceof ApiError && e2.errors.length) setErrors(fieldErrors(e2.errors));
       setErr(e2);
@@ -155,6 +255,19 @@ export function BrandEditor({ id }: { id: string }) {
       setBrand((cur) => ({ ...(cur as Brand), ...b }));
       setNote(t("brands.uploaded", { name: file.name }));
       setVersion((v) => v + 1);
+      if (theme.settings?.default_brand === id) void theme.reload();
+    } catch (e2) {
+      setErr(e2);
+    }
+  };
+
+  const remove = async () => {
+    if (!window.confirm(t("brands.delete.confirm", { name: brand.name }))) return;
+    setErr(null);
+    try {
+      await api.deleteBrand(id);
+      await theme.reload();
+      go({ name: "brands" });
     } catch (e2) {
       setErr(e2);
     }
@@ -164,11 +277,24 @@ export function BrandEditor({ id }: { id: string }) {
     <div className="stack-lg">
       <div className="titlebar">
         <h1>{brand.name}</h1>
+        {theme.settings?.default_brand === id && <span className="default-badge">{t("brands.default.badge")}</span>}
         <a className="btn btn-ghost" href={href({ name: "brands" })}>
           {t("common.back")}
         </a>
       </div>
       {readonly && <p className="banner banner-info">{t("brands.readonly")}</p>}
+      <div className="panel stack-sm">
+        <label className="check-row">
+          <input type="checkbox" checked={previewOn} onChange={(e) => {
+              setPreviewOn(e.target.checked);
+              if (!e.target.checked) setPreview(null);
+            }}
+          />
+          <span>{t("theme.preview")}</span>
+        </label>
+        <p className="hint">{t("theme.preview.hint")}</p>
+        <ContrastNotes notes={notes} />
+      </div>
       <div className="editor-layout">
         <form className="panel stack" onSubmit={save} aria-label={t("brands.editor")}>
           <fieldset disabled={readonly} className="stack">
@@ -321,6 +447,9 @@ export function BrandEditor({ id }: { id: string }) {
             <div className="actions">
               <button type="submit" className="btn btn-primary">
                 {t("common.save")}
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={() => void remove()}>
+                {t("brands.delete")}
               </button>
             </div>
           )}

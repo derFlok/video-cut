@@ -887,8 +887,10 @@ The UI is a static React build served from `src/videocut/web/dist/` (`videocut s
 `./start.sh` build it with the bundled node: `npm ci`, `npm run build`, rebuilt when a source
 file or the lock file changed); without it, every page explains how to build it.
 
-Routes (prefix `/api`): `session`, `types`, `brands` (list, read, validated edit, create from
-the neutral example, logo/font upload with `role`, cached preview sheet), `jobs` (list,
+Routes (prefix `/api`): `session`, `types`, `brands` (list with the `default` flag, read,
+validated edit, create from the neutral example, delete, logo/font upload with `role`, cached
+preview sheet, `theme` preview, `assets/<file>`), `theme`, `settings/brand` (see "Default
+brand and app theme"), `jobs` (list,
 create by multipart upload, detail, delete to `$VIDEOCUT_HOME/trash`), `jobs/{id}/start`,
 `events` (server-sent events: `stage` (with `at`, the stage's start, ISO), `log`, `tool`,
 `gate`, `error`, `done`; replayed on connect, so a reloaded page keeps the stage's start),
@@ -972,6 +974,48 @@ the "Untertitel neu setzen" banner runs `captions/refresh`. One plain button per
 sentences memoized, so ~1500 words stay fast. German default, English
 switch (`app/src/i18n.tsx`); verify flag and check ids map to plain words, unknown ids show
 as they are. `npm run dev:mock` runs the UI against an in-memory mock of the API.
+
+### Default brand and app theme (`theme.py`, `server/theme.py`, `app/src/theme.tsx`)
+
+`settings.json` holds `default_brand` (a brand id or null = neutral) and
+`theme_follows_brand` (default true). `settings.default_brand()` reads a brand whose folder
+is gone as null; deleting a brand (`DELETE /api/brands/{id}`, the example is read-only) clears
+the setting; renaming changes only `name`, the id stays, so the setting follows. The new-job
+form preselects the default brand ("Neutral (ohne Marke)" stays an option); the Brands screen
+sets it ("Als Standard", badge "Standard", "Kein Standard (neutral)"), and so does Settings
+("Marke und Aussehen"). `videocut doctor` lists it (informational, never a failed install).
+
+`GET /api/theme` and `PUT /api/settings/brand` (only the fields sent change) answer
+`{brand_id, name, css, logo: {light, dark}, notes, invalid, settings}`; css is empty while the
+UI is neutral (no default, the switch "App-Design an Marke anpassen" off, or a brand with
+errors: `invalid`). `theme.build(tokens)` maps the resolved brand tokens onto the CSS custom
+properties of `app/src/styles.css`:
+
+| brand.json | CSS token |
+|---|---|
+| `colors.bg`, `surface`, `text`, `muted` | `--bg`, `--surface`, `--text`, `--muted`; `--surface-2`, `--line`, `--line-strong` mixed from surface towards text (5/14/26 %) |
+| `colors.accent` | `--primary`, `--focus`; `--primary-text` black or white, whichever reads better |
+| `fonts.display` / `fonts.body` | `--font-display` (headings, product name) / `--font`; a file becomes `@font-face` served from `/api/brands/{id}/assets/…`, a name falls back to that family, then the system font |
+| `logo.light` / `logo.dark` | the header logo (28 px high) for a light / dark page; none: the text "Video Cut" |
+| — | status colours (ok, warn, error, redact, change, info) stay neutral: the light or dark set by the brand background |
+
+Dark mode: a dark brand (bg luminance < 0.18) keeps its palette in both schemes; a light
+brand keeps the neutral dark tokens in the dark scheme and brings only its accent (when it
+reaches 3:1 there), its fonts and `logo.dark`. `data-theme="light"` still forces light.
+Contrast guard (WCAG 2.x, `brand.contrast`): text and muted need 4.5:1 on bg and surface, the
+accent 3:1 on bg; a failing token falls back to the neutral one (black/white for a mid-tone
+background; when bg and surface are too far apart for one text colour, surface follows bg),
+and each fallback is a `note` the Brands screen shows in plain words. No radius field exists
+in brand.json, so `--radius` stays. The rules are `html:root` (outranks `:root`) and
+`html:root:not([data-theme="light"])` in a dark media query (outranks the neutral dark block).
+
+The served `index.html` carries the stylesheet as `<style id="brand-theme">` and the view as
+`<script type="application/json" id="brand-theme-data">` (`<` escaped), so a reload paints the
+brand at once; `ThemeProvider` keeps that element current after a click. The brand editor's
+"Vorschau auf der Oberfläche" posts the unsaved brand to `POST /api/brands/{id}/theme` (also
+the source of its contrast hints) and shows it app-wide until the editor is left. Brand assets
+are served from the brand folder only (svg/png/woff2/ttf/otf), SVGs with a CSP that runs
+nothing. The renderer's brand contract is unchanged; this is the app shell only.
 
 End to end through the browser: `VIDEOCUT_E2E=1 .tools/bin/uv run python
 tests/e2e/app_e2e.py` (real Claude runs on generated clips in a throwaway `VIDEOCUT_HOME`,

@@ -9,10 +9,12 @@ import { Home } from "./screens/Home";
 import { JobPage } from "./screens/JobPage";
 import { NewJob } from "./screens/NewJob";
 import { Settings, Stopped, Welcome, quitApp } from "./screens/Setup";
+import { useTheme } from "./theme";
 
 export function App() {
   const { t, lang, setLang } = useI18n();
   const route = useRoute();
+  const { shown: theme } = useTheme();
   const [session, setSession] = useState<Session | null>(null);
   // null: not known yet; the first-start screen shows until the connection is chosen once
   const [setupDone, setSetupDone] = useState<boolean | null>(null);
@@ -77,8 +79,16 @@ export function App() {
         {t("nav.skip")}
       </a>
       <header className="topbar">
-        <a className="product" href={href({ name: "home" })}>
-          {t("app.name")}
+        <a className="product" href={href({ name: "home" })} aria-label={theme.logo.light ? t("app.name") : undefined}>
+          {theme.logo.light && theme.logo.dark ? (
+            <>
+              {/* the variant for the colour scheme on screen (styles.css .logo-on-*) */}
+              <img className="product-logo logo-on-light" src={api.url(theme.logo.light)} alt="" />
+              <img className="product-logo logo-on-dark" src={api.url(theme.logo.dark)} alt="" />
+            </>
+          ) : (
+            t("app.name")
+          )}
         </a>
         <nav aria-label={t("app.name")}>
           <a href={href({ name: "home" })} aria-current={section === "jobs" ? "page" : undefined}>

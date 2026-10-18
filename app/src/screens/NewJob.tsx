@@ -77,6 +77,8 @@ export function NewJob() {
       .then(([ty, br]) => {
         setTypes(ty);
         setBrands(br);
+        // the default brand is preselected; "Neutral (ohne Marke)" stays one click away
+        setBrand((cur) => cur || br.find((b) => b.default)?.id || "");
       })
       .catch(setLoadErr);
   };

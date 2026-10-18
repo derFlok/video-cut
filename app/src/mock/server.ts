@@ -4,8 +4,10 @@
 import { setTransport, type Transport, type UploadProgress } from "../api/client";
 import type {
   Brand,
+  BrandSettings,
   ClaudeDetection,
   SetupStatus,
+  ThemeView,
   JobDetail,
   JobEvent,
   JobSummary,
@@ -30,6 +32,8 @@ export interface MockOptions {
   setup?: Partial<Omit<SetupStatus, "claude">> & { claude?: Partial<ClaudeDetection> };
   /** The answer of "Verbindung prüfen". */
   testOk?: boolean;
+  /** Default brand and theme switch (default: none, following). */
+  brandSettings?: Partial<BrandSettings>;
 }
 
 interface MockJob {
@@ -78,6 +82,7 @@ export interface MockState {
   setup: SetupStatus;
   apiKey: string | null;
   stopped: boolean;
+  brandSettings: BrandSettings;
   /** Every request the fake saw (method, path, body), newest last. */
   calls: { method: string; path: string; body: unknown }[];
 }
@@ -103,6 +108,18 @@ const EXAMPLE: Brand = {
   legal: { footer: "" },
   files: ["brand.json"],
 };
+
+function contrastOf(a = "#000000", b = "#FFFFFF"): number {
+  const lum = (hex: string) => {
+    const n = (i: number) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * n(1) + 0.7152 * n(3) + 0.0722 * n(5);
+  };
+  const [x, y] = [lum(a), lum(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const sha = (s: string) => {
@@ -386,6 +403,7 @@ export function createMock(opts: MockOptions = {}) {
     },
     apiKey: null,
     stopped: false,
+    brandSettings: { default_brand: null, theme_follows_brand: true, ...opts.brandSettings },
     calls: [],
   };
   const listeners = new Map<string, Set<(ev: JobEvent) => void>>();
@@ -453,6 +471,26 @@ export function createMock(opts: MockOptions = {}) {
     };
   }
 
+  /** A small stand-in for videocut/theme.py: brand colours onto the main tokens, and the
+   * same contrast notes for text (4.5:1) and accent (3:1) on the background. */
+  function mockTheme(bid: string, br: Brand): ThemeView {
+    const c = br.colors ?? {};
+    const notes: ThemeView["notes"] = [];
+    if (contrastOf(c.text, c.bg) < 4.5) notes.push({ code: "text", scheme: "light", ratio: +contrastOf(c.text, c.bg).toFixed(2) });
+    if (contrastOf(c.accent, c.bg) < 3) notes.push({ code: "accent", scheme: "light", ratio: +contrastOf(c.accent, c.bg).toFixed(2) });
+    const css = `html:root{--bg:${c.bg};--surface:${c.surface ?? c.bg};--text:${c.text};--primary:${c.accent}}`;
+    const logo = typeof br.logo?.light === "string" ? `/api/brands/${bid}/assets/${br.logo.light}` : null;
+    return { brand_id: bid, name: br.name, css, logo: { light: logo, dark: logo }, notes };
+  }
+
+  function themeView(): ThemeView {
+    const s = { ...state.brandSettings };
+    const br = s.default_brand ? state.brands.get(s.default_brand) : undefined;
+    if (!br || !s.theme_follows_brand || !s.default_brand)
+      return { brand_id: null, name: null, css: "", logo: { light: null, dark: null }, notes: [], settings: s };
+    return { ...mockTheme(s.default_brand, br), settings: s };
+  }
+
   function route(method: string, path: string, body: unknown): Response {
     const url = new URL(path, "http://127.0.0.1");
     const p = url.pathname.split("/").filter(Boolean).map(decodeURIComponent); // ["api", ...]
@@ -485,9 +523,17 @@ export function createMock(opts: MockOptions = {}) {
       return json(200, { stopping: true });
     }
 
+    if (a === "theme" && method === "GET") return json(200, themeView());
+    if (a === "settings" && id === "brand" && method === "PUT") {
+      const b = body as Partial<BrandSettings>;
+      if (b.default_brand && !state.brands.has(b.default_brand)) return json(404, { detail: { message: `no brand '${b.default_brand}'` } });
+      if (b.default_brand !== undefined) state.brandSettings.default_brand = b.default_brand;
+      if (typeof b.theme_follows_brand === "boolean") state.brandSettings.theme_follows_brand = b.theme_follows_brand;
+      return json(200, themeView());
+    }
     if (a === "brands") {
       if (!id && method === "GET")
-        return json(200, [...state.brands.entries()].map(([bid, br]) => ({ id: bid, name: br.name, preview_url: `/api/brands/${bid}/sheet?format=9:16` })));
+        return json(200, [...state.brands.entries()].map(([bid, br]) => ({ id: bid, name: br.name, preview_url: `/api/brands/${bid}/sheet?format=9:16`, default: bid === state.brandSettings.default_brand })));
       if (!id && method === "POST") {
         const name = String((body as { name?: string })?.name ?? "Neue Marke");
         const bid = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `brand-${counter++}`;
@@ -511,6 +557,13 @@ export function createMock(opts: MockOptions = {}) {
         state.brands.set(id, { ...tokens, files: br.files });
         return json(200, state.brands.get(id));
       }
+      if (!b && method === "DELETE") {
+        if (id === "_example") return json(409, { detail: { message: "the bundled example brand is read-only", code: "read_only" } });
+        state.brands.delete(id);
+        if (state.brandSettings.default_brand === id) state.brandSettings.default_brand = null;
+        return json(200, { deleted: id });
+      }
+      if (b === "theme" && method === "POST") return json(200, { ...mockTheme(id, body as Brand), brand_id: id });
       if (b === "files" && method === "POST") {
         const form = body as FormData;
         const file = (form.get("logo") ?? form.get("font")) as File | null;

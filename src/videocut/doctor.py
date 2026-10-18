@@ -187,6 +187,30 @@ def check_launcher() -> Check:
     )
 
 
+def check_default_brand() -> Check:
+    """Informational: the brand new videos preselect and the app's look follows."""
+    from . import brand
+
+    conf = settings.load()
+    ref = conf.get("default_brand")
+    if not ref:
+        return Check("default brand", True, "none (neutral)", required=False)
+    if settings.default_brand() is None:
+        fix = "choose another default brand under Brands, or none"
+        return Check("default brand", False, f"{ref} (folder missing)", required=False, fix=fix)
+    _, errors, _ = brand.inspect(ref)
+    follows = (
+        "app look follows it"
+        if conf.get("theme_follows_brand") is not False
+        else "app look neutral"
+    )
+    if errors:
+        detail = f"{ref} has {len(errors)} problem(s); app look neutral"
+        fix = f"`videocut tool brand check {ref}` lists them"
+        return Check("default brand", False, detail, required=False, fix=fix)
+    return Check("default brand", True, f"{ref} ({follows})", required=False)
+
+
 def collect() -> list[Check]:
     t = manifest.load()["tools"]
     checks = [
@@ -208,6 +232,7 @@ def collect() -> list[Check]:
         *check_models(),
         *check_claude(),
         check_launcher(),
+        check_default_brand(),
     ]
     free_gb = shutil.disk_usage(HOME if HOME.exists() else HOME.parent).free / 1e9
     checks.append(
@@ -232,6 +257,7 @@ def report(checks: list[Check]) -> dict:
         "root": str(ROOT),
         "data": str(HOME),
         "auth": settings.load().get("auth"),
+        "default_brand": settings.default_brand(),
         "checks": [asdict(c) for c in checks],
         "failed": [c.name for c in failed],
         "warnings": [c.name for c in checks if not c.required and not c.ok],

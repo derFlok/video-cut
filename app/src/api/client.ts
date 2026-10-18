@@ -5,6 +5,7 @@
 
 import type {
   Brand,
+  BrandSettings,
   BrandSummary,
   CutStyleChoice,
   RedactStyle,
@@ -23,6 +24,7 @@ import type {
   SlidesMode,
   TargetChoice,
   TargetRange,
+  ThemeView,
   TranscriptView,
   VideoType,
   VocabEntry,
@@ -176,6 +178,12 @@ export const api = {
   brand: (id: string) => call<Brand>("GET", `/api/brands/${enc(id)}`),
   saveBrand: (id: string, tokens: Brand) => call<Brand>("PUT", `/api/brands/${enc(id)}`, tokens),
   newBrand: (name: string) => call<{ id: string }>("POST", "/api/brands", { name }),
+  deleteBrand: (id: string) => call<{ deleted: string }>("DELETE", `/api/brands/${enc(id)}`),
+  theme: () => call<ThemeView>("GET", "/api/theme"),
+  /** Only the fields given change; answers with the theme that follows from them. */
+  saveBrandSettings: (changes: Partial<BrandSettings>) => call<ThemeView>("PUT", "/api/settings/brand", changes),
+  /** The theme of an edited, unsaved brand (live preview, contrast hints). */
+  previewTheme: (id: string, tokens: Brand) => call<ThemeView>("POST", `/api/brands/${enc(id)}/theme`, tokens),
   brandFile: (id: string, kind: "logo" | "font", file: File, role?: string) => {
     const form = new FormData();
     form.append(kind, file);
