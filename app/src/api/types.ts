@@ -120,6 +120,32 @@ export interface BrandSummary {
   id: string;
   name: string;
   preview_url: string;
+  /** The default brand (settings.json default_brand). */
+  default?: boolean;
+}
+
+export interface BrandSettings {
+  default_brand: string | null;
+  theme_follows_brand: boolean;
+}
+
+/** A token the contrast guard replaced with the neutral one (theme.py). */
+export interface ThemeNote {
+  code: "text" | "muted" | "accent" | "surface";
+  scheme: "light" | "dark";
+  ratio: number;
+}
+
+/** The app's look from a brand: GET /api/theme, PUT /api/settings/brand, and (without
+ * settings) the editor's preview POST /api/brands/{id}/theme. css "" is the neutral UI. */
+export interface ThemeView {
+  brand_id: string | null;
+  name: string | null;
+  css: string;
+  logo: { light: string | null; dark: string | null };
+  notes: ThemeNote[];
+  invalid?: boolean;
+  settings?: BrandSettings | null;
 }
 
 /** brand.json plus the files in the brand folder. Unknown fields are kept as they are. */

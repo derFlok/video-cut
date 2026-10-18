@@ -1,5 +1,5 @@
 """/api/brands: list, read, edit (validated like `videocut tool brand check`), create from
-the neutral example, upload a logo or font, and the preview sheet (rendered once per
+the neutral example, delete, upload a logo or font, and the preview sheet (rendered once per
 brand state and format, then cached)."""
 
 import json
@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from .. import brand
+from .. import brand, settings
 from .. import run as pipeline
 from ..tools import _format
 from ..tools.brand import sheet_name
@@ -67,6 +67,7 @@ def _files(d: Path) -> list[str]:
 @router.get("")
 def list_brands() -> list[dict]:
     out = []
+    default = settings.default_brand()
     for i in brand.list_ids():
         name = _read(brand.brand_dir(i)).get("name")
         out.append(
@@ -74,6 +75,7 @@ def list_brands() -> list[dict]:
                 "id": i,
                 "name": name if isinstance(name, str) else i,
                 "preview_url": f"/api/brands/{i}/sheet",
+                "default": i == default,
             }
         )
     return out
@@ -137,6 +139,17 @@ async def new_brand(request: Request) -> dict:
     d.mkdir(parents=True)
     write_json(d / brand.BRAND_FILE, data)
     return {"id": brand_id}
+
+
+@router.delete("/{brand_id}")
+def delete_brand(brand_id: str) -> dict:
+    """Remove the brand folder; a default brand that is deleted makes the app neutral again.
+    Jobs that used the brand keep its id (a re-cut then reports the missing brand)."""
+    d = _editable(brand_id)
+    if settings.load().get("default_brand") == brand_id:
+        settings.save(default_brand=None)
+    shutil.rmtree(d)
+    return {"deleted": brand_id}
 
 
 def _magic_ok(path: Path) -> bool:

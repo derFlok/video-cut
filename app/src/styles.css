@@ -1,4 +1,6 @@
-/* Neutral system UI. Every colour is a token; dark mode swaps the tokens. No brand. */
+/* Neutral system UI. Every colour is a token; dark mode swaps the tokens. No brand.
+   A default brand overrides the tokens through <style id="brand-theme"> (videocut/theme.py,
+   which keeps a copy of the neutral values below: change both together). */
 
 :root {
   --bg: #f6f6f5;
@@ -25,6 +27,7 @@
   --radius-sm: 6px;
   --shadow: 0 1px 2px rgb(0 0 0 / 6%), 0 4px 16px rgb(0 0 0 / 5%);
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: var(--font);
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   color-scheme: light;
 }
@@ -82,6 +85,7 @@ h3,
   line-height: 1.25;
   margin: 0;
   font-weight: 650;
+  font-family: var(--font-display);
 }
 h1 {
   font-size: 1.6rem;
@@ -152,8 +156,28 @@ code {
 }
 .product {
   font-weight: 700;
+  font-family: var(--font-display);
   text-decoration: none;
   letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+}
+.product-logo {
+  height: 28px;
+  width: auto;
+  max-width: 160px;
+  object-fit: contain;
+}
+.logo-on-dark {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .logo-on-light {
+    display: none;
+  }
+  :root:not([data-theme="light"]) .logo-on-dark {
+    display: block;
+  }
 }
 .topbar nav {
   display: flex;
@@ -1469,4 +1493,31 @@ progress {
 .ts-edit input[type="text"],
 .ts-edit input:not([type]) {
   max-width: 100%;
+}
+
+/* default brand: badge, card actions, contrast hints */
+.default-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-text);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.brandcard-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.brandcard-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — default brand, the app's look follows it
+- `settings.json` `default_brand` and `theme_follows_brand`; `PUT /api/settings/brand`,
+  `GET /api/theme`. Brands screen: "Als Standard" per brand, a "Standard" badge, "Kein
+  Standard (neutral)", the switch "App-Design an Marke anpassen" (also under Settings →
+  "Marke und Aussehen"). The new-job form preselects the default brand; `videocut doctor`
+  shows it. `DELETE /api/brands/{id}` (and a button in the editor) clears a default it removes.
+- The whole app uses the default brand's colours, fonts (served via
+  `/api/brands/{id}/assets/…` as `@font-face`) and logo (header, light/dark variant) right
+  after the click and inline in `index.html` after a reload. Contrast guard: text/muted
+  below 4.5:1 or an accent below 3:1 fall back to neutral, with a plain-language hint.
+  Dark brands keep their palette in dark mode; light brands bring their accent, fonts and
+  dark logo onto the neutral dark tokens. The brand editor previews unsaved values app-wide
+  ("Vorschau auf der Oberfläche"). `videocut/theme.py`, `server/theme.py`, `app/src/theme.tsx`.
+
 ### Added — Phase 4: install by your own Claude Code, launcher, first-start screen
 - Install path without IT knowledge: the person tells their own Claude Code "Install
   https://github.com/derFlok/video-cut for me and guide me through it." It follows the skill

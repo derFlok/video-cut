@@ -15,13 +15,24 @@ def path() -> Path:
 
 KEYCHAIN_SERVICE = "videocut"
 KEYCHAIN_ACCOUNT = "anthropic-api-key"
-DEFAULTS = {"auth": "local", "model": None}
+# default_brand: the brand id the new-job form preselects and the app's look follows
+# (theme_follows_brand); None is neutral.
+DEFAULTS = {"auth": "local", "model": None, "default_brand": None, "theme_follows_brand": True}
 
 
 def load() -> dict:
     f = path()
     data = json.loads(f.read_text()) if f.exists() else {}
     return {**DEFAULTS, **data}
+
+
+def default_brand() -> str | None:
+    """The default brand id, or None when unset or the brand folder is gone (a brand
+    removed outside the app reads as neutral)."""
+    from . import brand
+
+    ref = load().get("default_brand")
+    return ref if isinstance(ref, str) and ref in brand.list_ids() else None
 
 
 def setup_done() -> bool:
