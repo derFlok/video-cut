@@ -2,8 +2,8 @@
 
 job.json "material" = {"mode": "none" | "stock" | "generated" | "both", "wish": str}; absent
 = none. `stock`: the plan proposes material wishes that `videocut tool material fetch`
-searches in the stock libraries (Pexels, Coverr); `generated`: an image generator makes
-stills for them (settings "image_provider"); `both`: either. The wish (≤ WISH_MAX
+searches in the stock libraries (Pixabay, Pexels, Coverr); `generated`: an image generator
+makes stills for them (settings "image_provider"); `both`: either. The wish (≤ WISH_MAX
 characters) is the human's free-text request ("calm office pictures, no people").
 
 Like the slides, the plan depends on these settings: a plan run records what it was made

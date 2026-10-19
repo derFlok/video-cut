@@ -53,11 +53,11 @@ export const MATERIAL_MODES: MaterialMode[] = ["none", "stock", "generated", "bo
 export const MATERIAL_WISH_MAX = 2000;
 export type ImageProviderName = "none" | "gemini" | "openai" | "local";
 export const IMAGE_PROVIDERS: ImageProviderName[] = ["none", "gemini", "openai", "local"];
-export type StockProviderName = "pexels" | "coverr";
-export const STOCK_PROVIDERS: StockProviderName[] = ["pexels", "coverr"];
+export type StockProviderName = "pixabay" | "pexels" | "coverr";
+export const STOCK_PROVIDERS: StockProviderName[] = ["pixabay", "pexels", "coverr"];
 /** Keychain accounts of the material providers' API keys (write-only from the app). */
-export type SecretAccount = "pexels-api-key" | "coverr-api-key" | "gemini-api-key" | "openai-api-key";
-export const SECRET_ACCOUNTS: SecretAccount[] = ["pexels-api-key", "coverr-api-key", "gemini-api-key", "openai-api-key"];
+export type SecretAccount = "pixabay-api-key" | "pexels-api-key" | "coverr-api-key" | "gemini-api-key" | "openai-api-key";
+export const SECRET_ACCOUNTS: SecretAccount[] = ["pixabay-api-key", "pexels-api-key", "coverr-api-key", "gemini-api-key", "openai-api-key"];
 
 /** GET/PUT /api/settings/material. */
 export interface MaterialSettings {

@@ -41,7 +41,7 @@ Nur das, nur an Anthropic, und nur über deinen eigenen Claude-Zugang:
 - **auf deinem Mac per Texterkennung gelesener Bildschirmtext**, wenn du eine Bildschirmaufnahme, Screenshots oder Folien dazugibst.
 
 Nur wenn du für ein Video **Material** einschaltest (standardmäßig aus): die englischen
-Suchwörter jedes Wunschs gehen an die Bildarchive, die du aktiviert hast (Pexels, Coverr),
+Suchwörter jedes Wunschs gehen an die Bildarchive, die du aktiviert hast (Pixabay, Pexels, Coverr),
 mit Ausrichtung und Sprache, und die Bildbeschreibung in einem Satz plus die Farbcodes deiner
 Marke an den gewählten Bildgenerator (Google Gemini oder OpenAI), mit deinen eigenen
 Schlüsseln. Nie eine Aufnahme, ein Standbild, ein Logo oder ein Name.
@@ -287,15 +287,29 @@ deinem Gesicht.
 Mit **Material** schlägt der Plan ein paar Stellen vor, an denen ein Bild hilft (höchstens
 eine pro 8 Sekunden): einen kurzen Archiv-Clip im Vollbild, während du weitersprichst
 (B-Roll), ein Archivfoto oder ein erzeugtes Bild. Nach deiner Freigabe sucht Video Cut bei
-Pexels und Coverr und/oder fragt den Bildgenerator und zeigt pro Stelle die Kandidaten mit
+Pixabay, Pexels und Coverr und/oder fragt den Bildgenerator und zeigt pro Stelle die Kandidaten mit
 Lizenz und Urheberangabe; du wählst einen oder „Kein Material", suchst mit anderen Wörtern
 neu oder lässt neu erzeugen. Nur was du gewählt hast, kommt ins Video. Erzeugte Bilder sind
 in der App als „KI" markiert, ihre Originaldateien behalten das Wasserzeichen des Generators (SynthID / C2PA), und ein
 Kostenlimit pro Video (Standard 1 USD) stoppt die Erzeugung, bevor es teuer wird.
 
-Einmal einrichten unter **Einstellungen → Material**: dein Pexels-Schlüssel (kostenlos),
-optional Coverr, und ein Gemini- oder OpenAI-Schlüssel für erzeugte Bilder. Die Schlüssel
-liegen nur im Schlüsselbund deines Macs.
+Einmal einrichten unter **Einstellungen → Material**: dein Pixabay-Schlüssel (kostenlos),
+optional Pexels und Coverr, und ein Gemini- oder OpenAI-Schlüssel für erzeugte Bilder. Die
+Schlüssel liegen nur im Schlüsselbund deines Macs. Den Pixabay-Schlüssel bekommst du so:
+bei [pixabay.com](https://pixabay.com) anmelden, [pixabay.com/api/docs](https://pixabay.com/api/docs/)
+öffnen – dein Schlüssel steht auf dieser Seite. Füge ihn in den Einstellungen ein oder
+speichere ihn im Terminal (es fragt nach dem Schlüssel):
+
+```bash
+security add-generic-password -U -s videocut -a pixabay-api-key -w
+```
+
+Pexels vergibt derzeit keine neuen API-Schlüssel; ein vorhandener Pexels-Schlüssel
+funktioniert weiter. Pixabay erlaubt 100 Suchen pro Minute, und Video Cut hebt jede
+Suchantwort 24 Stunden auf, wie Pixabay es verlangt. Pixabay-Fotos kommen mit höchstens
+1280 px an der langen Seite (für B-Roll werden ohnehin Videos bevorzugt), ein Foto kann in
+einem 1080p-Video also leicht hochskaliert werden. Jedes Pixabay-Material wird mit „Video/Photo
+by … on Pixabay" und Link genannt, in der App und in `disclosure.md`.
 
 ```bash
 .venv/bin/videocut run ~/Movies/ich.mov --material-mode both --material-wish "ruhige Büroszenen"

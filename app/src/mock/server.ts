@@ -462,14 +462,14 @@ export function createMock(opts: MockOptions = {}) {
     materialSettings: {
       material_default_mode: "none",
       image_provider: "gemini",
-      stock_providers: ["pexels", "coverr"],
+      stock_providers: ["pixabay", "pexels", "coverr"],
       material_budget_usd: 1,
       image_providers: [
         { name: "gemini", available: false, reason: "no key stored (gemini-api-key)", registered: true },
         { name: "openai", available: false, reason: "no key stored (openai-api-key)", registered: true },
         { name: "local", available: false, reason: "the image model is not downloaded", registered: true },
       ],
-      secrets: { "pexels-api-key": false, "coverr-api-key": false, "gemini-api-key": false, "openai-api-key": false },
+      secrets: { "pixabay-api-key": false, "pexels-api-key": false, "coverr-api-key": false, "gemini-api-key": false, "openai-api-key": false },
       ...opts.materialSettings,
     },
     labels: { ai_label_illustrations: true },

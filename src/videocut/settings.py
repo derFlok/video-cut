@@ -29,13 +29,14 @@ DEFAULTS = {
     "theme_follows_brand": True,
     "material_default_mode": "none",
     "image_provider": "gemini",
-    "stock_providers": ["pexels", "coverr"],
+    "stock_providers": ["pixabay", "pexels", "coverr"],
     "material_budget_usd": 1.0,
     "ai_label_illustrations": True,
 }
 # Keychain accounts a key may be stored under (the Anthropic key and the material providers').
 SECRET_ACCOUNTS = (
     KEYCHAIN_ACCOUNT,
+    "pixabay-api-key",
     "pexels-api-key",
     "coverr-api-key",
     "gemini-api-key",

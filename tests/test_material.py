@@ -269,6 +269,95 @@ def test_coverr_filters_by_orientation(monkeypatch, keychain):
     assert prov.search("rain", "image", "portrait", "de-DE", 4) == []
 
 
+def _pixabay(monkeypatch, keychain):
+    keychain["pixabay-api-key"] = "pixabay-test"
+    calls = []
+
+    def fake_get(url, params=None, headers=None):
+        calls.append((url, params, headers))
+        return _fixture("pixabay_videos.json" if "videos" in url else "pixabay_photos.json")
+
+    monkeypatch.setattr("videocut.tools._material_providers.pixabay.get_json", fake_get)
+    return mp.get_provider("pixabay"), calls
+
+
+def test_pixabay_parses_videos_and_filters_orientation(monkeypatch, keychain):
+    prov, calls = _pixabay(monkeypatch, keychain)
+    tall = prov.search("city street rain", "video", "portrait", "de-DE", 4)
+    url, params, headers = calls[0]
+    assert url == "https://pixabay.com/api/videos/" and headers is None
+    assert params == {"key": "pixabay-test", "q": "city street rain", "lang": "de",
+                      "safesearch": "true", "per_page": 50, "min_height": 1280}  # fmt: skip
+    assert [h.id for h in tall] == ["pixabay-video-201", "pixabay-video-203"]
+    v = tall[0]
+    assert (v.kind, v.width, v.height, v.duration_s) == ("video", 2160, 3840, 14.0)
+    assert v.licence == "Pixabay Content License" and v.source == "pixabay"
+    assert v.attribution == "Video by Zentra Lumen on Pixabay"
+    assert v.source_url == "https://pixabay.com/videos/id-201/"
+    assert v.preview_url.endswith("201-1_medium.jpg")
+    assert mp.pick_rendition(v, (1080, 1920)).endswith("201-1_medium.mp4")
+    assert mp.pick_rendition(v, None).endswith("201-1_large.mp4")
+    # an empty large rendition (url "", size 0) is skipped; tiny is never offered
+    assert [r[2].rsplit("_", 1)[1] for r in tall[1].renditions] == ["small.mp4", "medium.mp4"]
+    wide = prov.search("street", "video", "landscape", "en-US", 4)
+    square = prov.search("pattern", "video", "square", "xx", 4)
+    assert [h.id for h in wide] == ["pixabay-video-202"]
+    assert [h.id for h in square] == ["pixabay-video-204"]
+    assert calls[1][1]["lang"] == "en" and calls[1][1]["min_width"] == 1280
+    assert calls[2][1]["lang"] == "en" and "min_width" not in calls[2][1]
+
+
+def test_pixabay_photos_respect_the_1280_cap(monkeypatch, keychain):
+    prov, calls = _pixabay(monkeypatch, keychain)
+    photos = prov.search("desk laptop", "image", "portrait", "de-DE", 4)
+    assert calls[0][0] == "https://pixabay.com/api/"
+    assert calls[0][1]["orientation"] == "vertical" and calls[0][1]["image_type"] == "photo"
+    basic, full = photos
+    # default access: only largeImageURL, long side 1280, the size that is downloaded
+    assert (basic.width, basic.height) == (960, 1280)
+    assert basic.renditions == [(960, 1280, "https://pixabay.com/get/e5f6a7b8_1280.jpg")]
+    assert basic.attribution == "Photo by Zentra Lumen on Pixabay"
+    assert basic.preview_url.endswith("_640.jpg")
+    # full API access: fullHDURL and imageURL too
+    assert [r[:2] for r in full.renditions] == [(853, 1280), (1280, 1920), (4000, 6000)]
+    assert mp.pick_rendition(full, (1080, 1920)).endswith("_1920.jpg")
+    prov.search("desk laptop", "image", "landscape", "de-DE", 4)
+    assert calls[1][1]["orientation"] == "horizontal"
+
+
+def test_pixabay_caches_searches_for_24_hours(monkeypatch, keychain):
+    import os
+    import time
+
+    prov, calls = _pixabay(monkeypatch, keychain)
+    first = prov.search("rain", "video", "portrait", "de-DE", 4)
+    again = prov.search("rain", "video", "portrait", "de-DE", 4)
+    assert len(calls) == 1 and [h.id for h in again] == [h.id for h in first]
+    files = list((Path(os.environ["VIDEOCUT_HOME"]) / "cache" / "pixabay").glob("*.json"))
+    assert len(files) == 1 and "pixabay-test" not in files[0].read_text()
+    old = time.time() - 25 * 3600
+    os.utime(files[0], (old, old))
+    prov.search("rain", "video", "portrait", "de-DE", 4)
+    assert len(calls) == 2
+    prov.search("rain", "video", "landscape", "de-DE", 4)  # other parameters, other entry
+    assert len(calls) == 3
+
+
+def test_pixabay_rate_limit_is_a_plain_message(monkeypatch, keychain):
+    keychain["pixabay-api-key"] = "pixabay-secret"
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many", {"Retry-After": "0"},
+                                     io.BytesIO(b"API rate limit exceeded"))  # fmt: skip
+
+    monkeypatch.setattr(mp.urllib.request, "urlopen", boom)
+    with pytest.raises(mp.ProviderError) as e:
+        mp.get_provider("pixabay").search("rain", "video", "portrait", "de-DE", 4)
+    assert str(e.value) == ("pixabay: rate limit (100 requests per minute), "
+                            "try again in a minute")  # fmt: skip
+    assert "pixabay-secret" not in str(e.value)
+
+
 def test_gemini_request_and_response(monkeypatch, keychain, tmp_path):
     keychain["gemini-api-key"] = "g-test"
     png = base64.b64encode(b"\x89PNG fake").decode()
@@ -343,7 +432,7 @@ def test_no_network_inside_an_agent_run(monkeypatch):
 
 def test_registry_lists_builtin_providers():
     names = mp.providers()
-    assert {"pexels", "coverr", "gemini", "openai"} <= set(names)
+    assert {"pixabay", "pexels", "coverr", "gemini", "openai"} <= set(names)
     assert set(mp.providers("image")) >= {"gemini", "openai"}
     with pytest.raises(mp.ProviderError):
         mp.get_provider("nope")
@@ -539,7 +628,8 @@ def client():
 
 def test_api_settings_and_write_only_secrets(client, keychain):
     v = client.get("/api/settings/material").json()
-    assert v["material_default_mode"] == "none" and v["stock_providers"] == ["pexels", "coverr"]
+    assert v["material_default_mode"] == "none"
+    assert v["stock_providers"] == ["pixabay", "pexels", "coverr"]
     names = {p["name"]: p for p in v["image_providers"]}
     assert names["gemini"]["registered"] and not names["gemini"]["available"]
     v = client.put("/api/settings/material", json={"material_default_mode": "stock",
@@ -547,8 +637,9 @@ def test_api_settings_and_write_only_secrets(client, keychain):
     assert v["material_default_mode"] == "stock" and v["material_budget_usd"] == 2.5
     assert client.put("/api/settings/material", json={"image_provider": "x"}).status_code == 400
     r = client.put("/api/settings/secrets", json={"account": "gemini-api-key", "value": "g-123"})
-    assert r.json() == {"secrets": {"pexels-api-key": False, "coverr-api-key": False,
-                                    "gemini-api-key": True, "openai-api-key": False}}  # fmt: skip
+    assert r.json() == {"secrets": {"pixabay-api-key": False, "pexels-api-key": False,
+                                    "coverr-api-key": False, "gemini-api-key": True,
+                                    "openai-api-key": False}}  # fmt: skip
     assert "g-123" not in client.get("/api/settings/material").text
     assert "g-123" not in client.get("/api/settings/secrets").text
     bad = client.put("/api/settings/secrets", json={"account": "anthropic-api-key", "value": "a"})

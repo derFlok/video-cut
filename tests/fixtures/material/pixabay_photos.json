@@ -1,0 +1,46 @@
+{
+"total": 2,
+"totalHits": 2,
+"hits": [
+    {
+        "id": 301,
+        "pageURL": "https://pixabay.com/photos/desk-laptop-301/",
+        "type": "photo",
+        "tags": "desk, laptop, office",
+        "previewURL": "https://cdn.pixabay.com/photo/2026/01/06/09/12/desk-301_150.jpg",
+        "previewWidth": 112,
+        "previewHeight": 150,
+        "webformatURL": "https://pixabay.com/get/a1b2c3d4_640.jpg",
+        "webformatWidth": 480,
+        "webformatHeight": 640,
+        "largeImageURL": "https://pixabay.com/get/e5f6a7b8_1280.jpg",
+        "imageWidth": 3000,
+        "imageHeight": 4000,
+        "imageSize": 4731420,
+        "views": 7671, "downloads": 6439, "likes": 5, "comments": 2,
+        "user_id": 2001, "user": "Zentra Lumen",
+        "userImageURL": "https://cdn.pixabay.com/user/2026/01/01/2001_250x250.jpg"
+    },
+    {
+        "id": 302,
+        "pageURL": "https://pixabay.com/photos/notebook-coffee-302/",
+        "type": "photo",
+        "tags": "notebook, coffee",
+        "previewURL": "https://cdn.pixabay.com/photo/2026/01/07/10/00/notebook-302_150.jpg",
+        "previewWidth": 100,
+        "previewHeight": 150,
+        "webformatURL": "https://pixabay.com/get/c9d0e1f2_640.jpg",
+        "webformatWidth": 427,
+        "webformatHeight": 640,
+        "largeImageURL": "https://pixabay.com/get/a3b4c5d6_1280.jpg",
+        "fullHDURL": "https://pixabay.com/get/a3b4c5d6_1920.jpg",
+        "imageURL": "https://pixabay.com/get/a3b4c5d6.jpg",
+        "imageWidth": 4000,
+        "imageHeight": 6000,
+        "imageSize": 6731420,
+        "views": 500, "downloads": 80, "likes": 2, "comments": 0,
+        "user_id": 2002, "user": "Mira Quell",
+        "userImageURL": ""
+    }
+]
+}
