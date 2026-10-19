@@ -927,7 +927,30 @@ generated ones, choose / "Kein Material" / "Neu suchen" (edited query) / "Neu er
 (edited prompt), progress while fetching, cost against the budget, then "Weiter zum
 Schnitt" (`/start`). Candidate files are served only from `work/material/<n>/c<k>[_sm].<ext>`.
 
-<!-- render -->
+**B-roll in the cut.** EDL layout `broll` (`edl.BROLL_LAYOUTS`) is a normal segment in
+camera time with `"material": <wish n>`; it shows the material the human chose for that wish
+full frame while the voice goes on. `edl check` refuses a wish without a valid choice
+(`material.chosen`: the record outside the job folder and the file's SHA-256), a segment
+outside the wish's `src_from`–`src_to`, b-roll in the first 2 s of the output (the hook), and
+more than 40 % of the output in b-roll. Render plans each b-roll range from the same choices
+(`_broll.plan_broll`; without one it refuses) and draws it with `_layouts.compose_broll`:
+centre-cropped to fill the output aspect (never letterboxed); images get a 5 % Ken Burns
+push-in (zoompan on a 2× upscale); clips start at their beginning, muted (the audio graph is
+unchanged); a clip shorter than its range by less than 1 s loops (`-stream_loop`), a longer
+gap lets the clip end and the face-framed camera shows for the rest (`overlay
+eof_action=pass`). HDR clips are tonemapped like the camera; everything is converted to the
+reel's matrix in limited range. Material inputs are extra ffmpeg inputs (indexes counted by
+`-i`). render.json `broll` lists `{segment, wish, candidate, file, kind, ai_generated, style,
+source, model, out_t0, out_t1, looped}` (`out_t1`: the end of the shown material); the AI
+label and the disclosure are built from it. Captions: overlays.json `views` carries `{layout:
+"broll", band: "lower"}` per b-roll range; the face track has no samples there and the
+renderer puts captions in the lower band while such a view is on screen (`env.bandDuring`).
+Verify (`_verify_broll.py`) reads the middle frame of each stretch: `broll_black` (mostly
+black), `broll_aspect` (flat dark bands on two opposite edges), `broll_unreadable`; a broll
+segment counts as showing no camera for `blink_at_cut`. `videocut tool sheet material` puts
+the candidates' thumbs on `work/sheets/material_NN.jpg`, labelled `<wish>/<id>` (+ "AI").
+The cut skill uses only chosen material, only inside its wish's span, never over the hook's
+first 2 s, at most 40 % of the reel.
 
 ## Revision runs (`run.revise`, skill `revise`)
 

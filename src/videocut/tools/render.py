@@ -30,6 +30,11 @@
              (work/slides/<id>.mov from `videocut tool slides render`, run here when a clip
              is missing or stale) with the speaker as a round bubble / beside it
              (_layouts.slide_geometry); a slide on consecutive segments runs on
+    broll    segments with "layout" broll show the material the human chose for their wish
+             (tools/material.chosen, file hash checked; none chosen: refused) full frame:
+             cropped to fill, images with a slow push-in, clips muted and looped or ended
+             (_layouts.compose_broll, _broll.py); render.json "broll" lists what was shown
+             where (output seconds, candidate, ai_generated) for the AI label
     layouts  segments with "layout" screen/pip/split are drawn from the original screen
              recording (job.json "screen") at camera time + work/sync.json offset_s, with
              eased screen_zoom, redact blocks and brand background (_layouts.py); render.json
@@ -59,8 +64,8 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
-from ..edl import EdlError, is_screen, is_slide, load, read_sync, validate
-from . import _audio_env, _layouts, _plates, _redact_blur, _redact_style, _snap
+from ..edl import EdlError, is_broll, is_screen, is_slide, load, read_sync, validate
+from . import _audio_env, _broll, _layouts, _plates, _redact_blur, _redact_style, _snap
 from . import _render_plan as plan_mod
 from . import slides as slides_mod
 from ._color import is_hdr, output_tags, to_sdr
@@ -224,17 +229,18 @@ def _style_doc(b: dict) -> dict:
 
 
 def _layout_video(job, plan, edl, info, face, video_in, inputs):
-    """Video lines of a render with screen or slide layouts, the _layouts.plan_all doc
-    (screen, clamped, speaker, warnings; empty without screen layouts) plus "slides" (the
-    slide summary of slides.ensure_clips), and the extra ffmpeg inputs (the screen
-    recording, then one slide clip per slide range) to append after `inputs`."""
+    """Video lines of a render with screen, slide or b-roll layouts, the _layouts.plan_all
+    doc (screen, clamped, speaker, warnings; empty without screen layouts) plus "slides"
+    (the slide summary of slides.ensure_clips) and "broll" (_broll.plan_broll), and the
+    extra ffmpeg inputs (the screen recording, one slide clip per slide range, one material
+    input per b-roll range) to append after `inputs`."""
     extra: list[str] = []
     screen_in = None
     if any(is_screen(s.layout) for s in edl.segments):
         drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
         # a blur text recognition still reads is made stronger (or a solid block) first
         drawn["blur_raised"] = _redact_blur.calibrate(drawn, plan.fps)
-        screen_in = f"{len(inputs) // 2}:v:0"
+        screen_in = f"{inputs.count('-i')}:v:0"
         extra += ["-i", str(drawn["screen"])]
     else:
         drawn = {"segs": {}, "clamped": [], "speaker": [], "warnings": [], "redaction": [],
@@ -246,17 +252,25 @@ def _layout_video(job, plan, edl, info, face, video_in, inputs):
             edl, plan, tuple(info["size"]), face, edl.size, slides_mod.brand_tokens(job)
         )
         for i, seg in sorted(sl["segs"].items()):
-            slide_in[i] = f"{(len(inputs) + len(extra)) // 2}:v:0"
+            slide_in[i] = f"{(inputs + extra).count('-i')}:v:0"
             extra += ["-i", str(made["clips"][seg.slide])]
         slide_segs = sl["segs"]
         drawn["speaker"] = drawn["speaker"] + sl["speaker"]
         drawn["warnings"] = drawn["warnings"] + sl["warnings"]
         drawn["slides"] = made["slides"]
+    broll_segs, broll_in = {}, {}
+    if any(is_broll(s.layout) for s in edl.segments):
+        br = _broll.plan_broll(job, edl, plan)
+        for i, seg in sorted(br["segs"].items()):
+            broll_in[i] = f"{(inputs + extra).count('-i')}:v:0"
+            extra += _layouts.broll_inputs(seg, plan.fps)
+        broll_segs = br["segs"]
+        drawn["broll"] = br["doc"]
     video = _layouts.video_chain(
         plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in, screen_in,
         bg=_layouts.background(job), matrix=overlay_matrix(info), cam_sdr=to_sdr(info),
         screen_sdr=to_sdr(drawn["info"]) if drawn["info"] else "",
-        slides=slide_segs, slide_in=slide_in,
+        slides=slide_segs, slide_in=slide_in, broll=broll_segs, broll_in=broll_in,
     )  # fmt: skip
     return video, drawn, extra
 
@@ -362,7 +376,7 @@ def render(args) -> dict:
             f"{len(snapped['unresolved'])} cut point(s) stay in speech after snapping "
             "(`videocut tool edl snap` lists them)"
         )
-    slide_docs = None
+    slide_docs, broll_docs = None, None
     if use_layouts:
         video, drawn, extra = _layout_video(job, plan, edl, info, face, video_in, inputs)
         clamped, speaker = drawn["clamped"], drawn["speaker"]
@@ -373,6 +387,7 @@ def render(args) -> dict:
         ]
         screen_rel = str(drawn["screen"].relative_to(job)) if drawn["screen"] else None
         slide_docs = drawn.get("slides")
+        broll_docs = drawn.get("broll")
         warnings += [
             f"slide {d['id']}: the text does not fit even at 60 %"
             for d in slide_docs or []
@@ -386,7 +401,7 @@ def render(args) -> dict:
             )
     graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off)
     if use_overlay:
-        graph += composite_graph(len(inputs) // 2, plan.fps, (ow, oh), overlay_matrix(info))
+        graph += composite_graph(inputs.count("-i"), plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
         v_out = "[vo]"
     elif overlay.is_file():
@@ -486,6 +501,8 @@ def render(args) -> dict:
         report["screen_zoom_clamped"] = clamped
     if slide_docs:
         report["slides"] = slide_docs
+    if broll_docs:
+        report["broll"] = broll_docs
     if red_source != "none" or styles:
         report["redaction"] = {
             "source": red_source, "candidates": [c["id"] for c in cands],
@@ -525,6 +542,7 @@ def render(args) -> dict:
         "screen": screen_rel,
         "screen_zoom_clamped": clamped,
         "slides": slide_docs,
+        "broll": broll_docs,
         "speaker": speaker,
         "redaction": report.get("redaction"),
         "snap": report.get("snap"),

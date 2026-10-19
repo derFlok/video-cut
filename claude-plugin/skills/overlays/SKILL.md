@@ -76,6 +76,11 @@ measured `track` boxes when it has a `track`, else its `box`)
 drawn as tall as the safe area allows, at its top, with the caption below it (it may cover
 the speaker, verify marks it `stage`).
 
+**B-roll** (segments with `layout` broll): the chosen material fills the frame and there
+is no face; captions go to the lower band there by themselves (overlays.json views
+`band: "lower"`). Keep overlay cards short over b-roll and never use one to repeat what the
+picture shows.
+
 **Product demos with a screen recording:** captions and overlays keep clear of the screen
 and the speaker by themselves (overlays.json `views`). How depends on the format
 (`videocut tool job show` → `format`):

@@ -109,7 +109,7 @@ window.__load = (id) => __require("", id);
 
 // Runs inside the page. Everything it needs arrives as data; no clock, no randomness.
 function pageMain(spec) {
-  const { size, fps, safe, face, views, hidden, tokens, items, sceneNames, fontFamily } = spec;
+  const { size, fps, safe, face, views, hidden, bands, tokens, items, sceneNames, fontFamily } = spec;
   const images = window.__images || {};
   const { faceAt, faceDuring } = window.__load("lib/layout");
   const { step } = window.__load("lib/spring");
@@ -159,6 +159,11 @@ function pageMain(spec) {
       return { y: on[0].seam, content: on.map((v) => v.content), parts: on.map((v) => v.screen) };
     },
     addBlock: (t0, t1, box) => blocks.push({ t0, t1, box }),
+    // The caption band a view asks for while it is on screen (b-roll: "lower", no face).
+    bandDuring: (t0, t1) => {
+      const on = (bands || []).find((b) => b.t0 < t1 - 1e-3 && b.t1 > t0 + 1e-3);
+      return on ? on.band : null;
+    },
     // Decoded image for an asset reference a scene declared (null when not loaded),
     // and an offscreen canvas for scenes that prepare images once (redaction).
     image: (ref) => images[ref] || null,
@@ -483,6 +488,13 @@ function hiddenSpans(views) {
     .map((v) => ({ t0: v.t0, t1: v.t1 }));
 }
 
+// Output spans [t0, t1) of the views that set a caption band (b-roll: "lower").
+function bandSpans(views) {
+  return (Array.isArray(views) ? views : [])
+    .filter((v) => v && (v.band === "lower" || v.band === "center") && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1)
+    .map((v) => ({ t0: v.t0, t1: v.t1, band: v.band }));
+}
+
 // The frame size: spec.size, else spec.width x spec.height, else 1080x1920 (the 9:16
 // reel every call used before output formats existed). Written back as spec.size so the
 // rest of the renderer has one place to read it from.
@@ -710,7 +722,7 @@ async function main() {
     if (assets.length) summary.images = await loadImages(page, assets);
     const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
     await page.evaluate(pageMain, {
-      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), hidden: hiddenSpans(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
+      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), hidden: hiddenSpans(spec.views), bands: bandSpans(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
     });
     // Items that could not be placed clear of the face / of each other / inside the safe
     // area even at their smallest size (no room left).

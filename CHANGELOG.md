@@ -26,6 +26,11 @@
   (`settings.set_secret/secret`; `PUT /api/settings/material`, write-only
   `PUT /api/settings/secrets`). API: `GET /api/jobs/{id}/material`, `POST material/fetch`,
   `POST material/choose`, `GET material/files/<n>/<file>`.
+- EDL layout `broll` with `material: <wish n>`: full-frame chosen material (centre crop,
+  5 % Ken Burns on images, clips muted and trimmed, looped when < 1 s short, colour managed);
+  `edl check` rules (chosen only, inside the wish span, not in the first 2 s, ≤ 40 %);
+  captions in the lower band over b-roll; verify `broll_black` / `broll_aspect`; render.json
+  `broll`; `sheet material`; the cut, overlays and revise skills know b-roll.
 
 ### Added — default brand, the app's look follows it
 - `settings.json` `default_brand` and `theme_follows_brand`; `PUT /api/settings/brand`,

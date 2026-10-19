@@ -1,4 +1,4 @@
-"""`videocut tool sheet contact|burst|timeline|screen|plan|assets|slides`: the pictures
+"""`videocut tool sheet contact|burst|timeline|screen|plan|assets|slides|material`: the pictures
 Claude uses to "see".
 
 contact:   3x3 contact sheets over work/proxy.mp4, one tile every N seconds
@@ -24,6 +24,9 @@ assets:    the job's images (job.json "assets", e.g. screenshots of a demo) as n
 slides:    the human's uploaded slide pages (input/slides/page_NN.png) the same way ->
            work/sheets/slides_NN.jpg; the summary adds the text on each page (local text
            recognition, macOS Vision; null without it)
+material:  the material candidates of work/material.json (their downscaled thumbs, tools/
+           material.py) labelled "<wish>/<id>" ("AI" for generated ones) ->
+           work/sheets/material_NN.jpg; the summary lists each with its wish and choice
 
 Every tile carries its source time and frame number ("mm:ss.ss · f<frame>"). Sheets stay
 within the image budget of docs/BRIEF.md §6 (<= 1080x1920, never more than 2000 px a side).
@@ -501,9 +504,12 @@ def assets_sheet(args) -> dict:
     return {"sheets": sheets, "images": items, "labels": labels}
 
 
-def _numbered_sheets(job: Path, files: list[tuple[str, Path]], prefix: str):
+def _numbered_sheets(
+    job: Path, files: list[tuple[str, Path]], prefix: str, names: list[str] | None = None
+):
     """Numbered thumbnails of `files` [(rel, path)], ASSETS_PER_SHEET per sheet, as
-    work/sheets/<prefix>_NN.jpg; (items, sheet paths, labels drawn)."""
+    work/sheets/<prefix>_NN.jpg (`names`: the label per file instead of its number);
+    (items, sheet paths, labels drawn)."""
     font = im.find_font()
     dest = _sheets_dir(job)
     for old in dest.glob(f"{prefix}_*.jpg"):
@@ -522,7 +528,8 @@ def _numbered_sheets(job: Path, files: list[tuple[str, Path]], prefix: str):
             w, h = _image_size(p)
             items.append({"n": num, "file": rel, "size": [w, h],
                           "orientation": "portrait" if h > w else "landscape"})  # fmt: skip
-            label = "," + im.drawtext(font, str(num), "8", "8", max(24, tw // 9)) if font else ""
+            text = names[num - 1] if names else str(num)
+            label = "," + im.drawtext(font, text, "8", "8", max(24, tw // 9)) if font else ""
             inputs.append(["-i", str(p)])
             chains.append(
                 f"[{j}:v]scale={tw - 8}:{th - 8}:force_original_aspect_ratio=decrease,"
@@ -706,6 +713,31 @@ def plan_stills(args) -> dict:
     return {"dir": STILLS, "stills": made, "warnings": warnings}
 
 
+def material_sheet(args) -> dict:
+    from . import material as material_mod
+
+    job = resolve_job(args.job)
+    data = material_mod.load(job)
+    files, names, listed = [], [], []
+    for w in data.get("wishes") or []:
+        for c in w.get("candidates") or []:
+            p = (job / str(c.get("thumb") or "")).resolve()
+            if not (p.is_relative_to(job) and p.is_file()):
+                continue
+            files.append((c["thumb"], p))
+            names.append(f"{w.get('n')}/{c.get('id')}" + (" AI" if c.get("ai_generated") else ""))
+            listed.append({"wish": w.get("n"), "id": c.get("id"), "kind": c.get("kind"),
+                           "ai_generated": bool(c.get("ai_generated")),
+                           "chosen": w.get("chosen") == c.get("id")})  # fmt: skip
+    if not files:
+        raise ToolError("no material candidates yet (a human runs `videocut tool material fetch`)")
+    items, sheets, labels = _numbered_sheets(job, files, "material", names)
+    for it, entry in zip(items, listed, strict=True):
+        entry["sheet_n"] = it["n"]
+    print(f"{len(files)} candidates on {len(sheets)} sheet(s): " + ", ".join(sheets))
+    return {"sheets": sheets, "candidates": listed, "labels": labels}
+
+
 def register(subparsers) -> None:
     p = subparsers.add_parser("sheet", help="contact, burst, timeline and screen sheets")
     sub = p.add_subparsers(dest="sheet_cmd", required=True)
@@ -747,3 +779,8 @@ def register(subparsers) -> None:
         parents=[job_parent()],
     )  # fmt: skip
     pl.set_defaults(handler=run_tool("sheet plan", plan_stills))
+    ma = sub.add_parser(
+        "material", help="thumbnails of the material candidates (work/material.json)",
+        parents=[job_parent()],
+    )  # fmt: skip
+    ma.set_defaults(handler=run_tool("sheet material", material_sheet))

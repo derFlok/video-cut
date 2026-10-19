@@ -19,6 +19,10 @@ stretches `face` is the speaker area (pip inset, the speaker's face in split), s
 land below the screen view, outside the speaker. `safe` are the
 organic safe zones (docs/BRIEF.md §8). captions/overlays are copied from the EDL.
 
+B-roll (layout broll, tools/material.py): overlays.json "views" lists each b-roll range
+with "band": "lower" and no screen or speaker: the material fills the frame, there is no
+face, and captions go to the lower band there.
+
 Slides (every job type): overlays.json "views" also lists per slide range the speaker
 (the bubble of `slide`, the face in the speaker part of `slide_split`); a `slide_split`
 view's `screen` is the slide's part (scenes keep off it; portrait/square captions sit on
@@ -51,7 +55,7 @@ import subprocess
 from pathlib import Path
 
 from .. import brand
-from ..edl import EdlError, is_screen, is_slide, load, read_sync
+from ..edl import EdlError, is_broll, is_screen, is_slide, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
 from ..redaction import asset_boxes, same_asset
 from . import _layouts, _plates, _redact_style
@@ -127,6 +131,8 @@ def build(job: Path) -> dict:
     if any(is_slide(lay) for lay in layouts):
         slides = _layouts.plan_slides(edl, plan, src_size, face, edl.size, tokens)["segs"]
         views = sorted(views + _slide_views(plan, slides, face, src_size), key=lambda v: v["t0"])
+    if any(is_broll(lay) for lay in layouts):  # b-roll: full-frame material, no face
+        views = sorted(views + broll_views(plan, edl), key=lambda v: v["t0"])
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
     cands, _ = redaction_enforced(job)
@@ -156,6 +162,20 @@ def build(job: Path) -> dict:
         if hidden:
             doc["slide_hidden"] = hidden
     return doc
+
+
+def broll_views(plan, edl) -> list[dict]:
+    """Per b-roll range (output time): the chosen material fills the frame, so there is no
+    face (face_track skips non-face ranges) and captions go to the lower band ("band")."""
+    out, f0 = [], 0
+    for r in plan.ranges:
+        if is_broll(r.layout):
+            out.append({"t0": round(float(f0 / plan.fps), 6),
+                        "t1": round(float((f0 + r.frames) / plan.fps), 6),
+                        "layout": "broll", "material": edl.segments[r.seg].material,
+                        "screen": None, "speaker": None, "band": "lower"})  # fmt: skip
+        f0 += r.frames
+    return out
 
 
 def off_slides(items: list, views: list[dict]) -> tuple[list, list[dict]]:

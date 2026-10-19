@@ -38,6 +38,16 @@ not limit it. Without a face: portrait pip a square of PIP_NO_FACE x the camera'
 side, otherwise the segment's crop. Every speaker crop's source px per output px is
 reported (plan_all "speaker"), a warning when it upscales (< 1).
 
+B-roll (every job type, tools/_broll.py plans it from the human's choices):
+
+    broll        the chosen material fills the frame: centre-cropped to the output aspect
+                 (cover, never letterboxed); an image gets a slow Ken Burns push-in of
+                 BROLL_PUSH over the range; a video clip runs from its start, muted (the
+                 camera's audio goes on), looped when it is shorter than the range by less
+                 than BROLL_LOOP_S, otherwise it ends and the framed camera shows for the
+                 rest of the range. HDR clips are tonemapped like the camera, everything
+                 is converted to the reel's matrix
+
 Readability (`readability`): UI text of a screen recording is taken as TEXT_PT logical px
 high, ui_scale(screen) source px per logical px (HiDPI recordings, long side >= HIDPI_MIN,
 count 2). Its estimated height in output px for a window w source px wide shown in a view
@@ -152,6 +162,9 @@ SLIDE_GAP = 0.03  # slide content keeps this share of the short side off the spe
 # side in tall frames (h/w >= 1.6, renderer style.frame `tall`: larger captions) / others.
 SLIDE_SEAM = (0.12, 0.09)
 PIP_TOKEN_SIZE = (0.15, 0.45)  # brand pip.size is clamped to this range
+BROLL_PUSH = 0.05  # Ken Burns: an image grows by this share over its range
+BROLL_LOOP_S = 1.0  # a clip shorter than its range by less than this loops, else it ends
+BROLL_UPSCALE = 2  # the image is scaled this much larger than the frame before the push
 
 
 @dataclass
@@ -227,6 +240,22 @@ class SlideSeg:
     geo: SlideGeo
     camera: Window | None = None  # camera crop for the bubble / the speaker part
     speaker_px: float | None = None  # camera source px per output px of the speaker
+
+
+@dataclass
+class BrollSeg:
+    """How one b-roll range is drawn; frames are local to the range."""
+
+    frames: int
+    wish: int
+    candidate: str
+    kind: str  # "video" | "image"
+    file: Path
+    size: tuple[int, int]  # the material's display size
+    shown: int  # frames that show the material (the rest: the framed camera)
+    loop: bool = False  # the clip is looped to fill the range
+    sdr: str = ""  # tonemap chain of an HDR clip
+    ai_generated: bool = False
 
 
 # --- job inputs ---------------------------------------------------------------------------
@@ -1213,6 +1242,78 @@ def compose_slide(
     ]
 
 
+def broll_crop(src: tuple[int, int], out: tuple[int, int]) -> Window:
+    """The centred window of `src` with the aspect of `out` (cover: fills, never bars)."""
+    sw, sh = src
+    k = min(sw / out[0], sh / out[1])
+    w, h = min(sw, _even(out[0] * k)), min(sh, _even(out[1] * k))
+    return Window(w, h, (sw - w) // 2, (sh - h) // 2)
+
+
+def broll_timing(frames: int, kind: str, duration_s: float | None, fps) -> tuple[int, bool]:
+    """(frames that show the material, looped) for a range of `frames` frames."""
+    if kind != "video":
+        return frames, False
+    have = int(math.floor((duration_s or 0) * float(fps) + 1e-6))
+    if have >= frames:
+        return frames, False
+    if (frames - have) / float(fps) < BROLL_LOOP_S and have > 0:
+        return frames, True
+    return max(0, have), False
+
+
+def broll_inputs(seg: BrollSeg, fps) -> list[str]:
+    """ffmpeg input options + -i for the material of one b-roll range."""
+    if seg.kind == "image":
+        dur = float((seg.frames + 2) / Fraction(fps))
+        return ["-loop", "1", "-framerate", str(fps), "-t", f"{dur:.4f}", "-i", str(seg.file)]
+    return [*(["-stream_loop", "-1"] if seg.loop else []), "-i", str(seg.file)]
+
+
+def compose_broll(
+    i: int,
+    seg: BrollSeg,
+    fps: Fraction,
+    out: tuple[int, int],
+    *,
+    material_label: str,
+    camera: str | None,
+    matrix: str,
+) -> list[str]:
+    """Filter lines that draw b-roll range i as [vc{i}]: the material cropped to fill the
+    frame (an image with a push-in), in the reel's matrix; `camera` (a filter line source
+    "[c{i}]...," already framed, without label) runs under a clip that ends early."""
+    ow, oh = out
+    n = seg.frames
+    w = broll_crop(seg.size, out)
+    to_reel = f"scale=out_color_matrix={matrix}:out_range=tv,format=yuv420p,setsar=1"
+    if seg.kind == "image":
+        uw, uh = ow * BROLL_UPSCALE, oh * BROLL_UPSCALE
+        z = f"1+{BROLL_PUSH}*on/{max(n - 1, 1)}"
+        return [
+            f"[{material_label}]format=rgb24,crop={w.w}:{w.h}:{w.x}:{w.y},"
+            f"scale={uw}:{uh}:flags=lanczos,"
+            f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={ow}x{oh}"
+            f":fps={fps},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop=-1,"
+            f"trim=end_frame={n},{to_reel}[vc{i}];"
+        ]
+    clip = ",".join(
+        f for f in [
+            "setpts=PTS-STARTPTS", f"fps={fps}", seg.sdr,
+            f"crop={w.w}:{w.h}:{w.x}:{w.y}",
+            f"scale={ow}:{oh}:flags=lanczos:out_color_matrix={matrix}:out_range=tv",
+            "format=yuv420p", "setsar=1",
+        ] if f
+    )  # fmt: skip
+    if seg.shown >= n:
+        return [f"[{material_label}]{clip},tpad=stop_mode=clone:stop=-1,trim=end_frame={n}[vc{i}];"]
+    return [
+        f"[{material_label}]{clip},trim=end_frame={seg.shown}[bm{i}];",
+        f"{camera}[cb{i}];",
+        f"[cb{i}][bm{i}]overlay=0:0:eof_action=pass:format=yuv420,setsar=1[vc{i}];",
+    ]
+
+
 def video_chain(
     plan,
     segs: dict[int, Segment],
@@ -1226,6 +1327,8 @@ def video_chain(
     screen_sdr: str,
     slides: dict[int, SlideSeg] | None = None,
     slide_in: dict[int, str] | None = None,
+    broll: dict[int, BrollSeg] | None = None,
+    broll_in: dict[int, str] | None = None,
 ) -> list[str]:
     """Video lines of a render with layouts, joined as [v] like _render_plan.video_chain.
     `segs` maps a range index of `plan` to its drawn screen segment, `slides` to its
@@ -1233,8 +1336,11 @@ def video_chain(
     cut by `face_filters(range)`. HDR camera frames are tonemapped per branch."""
     fps = plan.fps
     slides, slide_in = slides or {}, slide_in or {}
+    broll, broll_in = broll or {}, broll_in or {}
 
     def needs_camera(i: int) -> bool:
+        if i in broll:  # under a clip that ends before its range
+            return broll[i].shown < broll[i].frames
         if i in segs:
             return segs[i].layout != "screen"
         if i in slides:
@@ -1257,7 +1363,13 @@ def video_chain(
             + ";"
         )
     for i, r in enumerate(plan.ranges):
-        if i in slides:
+        if i in broll:
+            f = [*face_filters(r), cam_sdr] if cam_sdr else face_filters(r)
+            lines += compose_broll(
+                i, broll[i], fps, plan.out_size, material_label=broll_in[i],
+                camera=f"[c{i}]" + ",".join(f) if i in cams else None, matrix=matrix,
+            )  # fmt: skip
+        elif i in slides:
             lines += compose_slide(
                 i, slides[i], r.src_in, fps, plan.out_size, slide_label=slide_in[i],
                 camera_label=f"c{i}" if i in cams else None, bg=bg, matrix=matrix,
