@@ -15,6 +15,7 @@ import { clock, money, useI18n } from "../i18n";
 import { kindOf, type RunKind } from "../progress";
 import { go } from "../router";
 import { PlanReview } from "./PlanReview";
+import { JobPublish } from "./JobPublish";
 import { Result } from "./Result";
 
 const MAX_LINES = 600;
@@ -252,6 +253,7 @@ export function JobPage({ id }: { id: string }) {
       {job.outputs?.reel && job.approved && job.stage !== "plan_revise" && (
         <>
           <Result live={live} />
+          <JobPublish id={job.id} reel={job.outputs?.reel} />
           <details className="details panel" onToggle={(e) => setPlanOpen(e.currentTarget.open)}>
             <summary>{t("job.plan.show")}</summary>
             {planOpen && <PlanReview live={live} />}

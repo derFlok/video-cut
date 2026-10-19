@@ -17,7 +17,8 @@ def path() -> Path:
 KEYCHAIN_SERVICE = "videocut"
 KEYCHAIN_ACCOUNT = "anthropic-api-key"
 # default_brand: the brand id the new-job form preselects and the app's look follows
-# (theme_follows_brand); None is neutral.
+# (theme_follows_brand); None is neutral. ai_label_illustrations: AI-generated illustrations
+# get the visible AI label too (realistic AI material always does: EU AI Act Art. 50).
 # Material (tools/material.py): the new-job form's default mode, the image generator
 # (image_provider: a name from tools/_material_providers, "none" for no generated stills),
 # the stock sources and the cost limit per job for generated images.
@@ -30,6 +31,7 @@ DEFAULTS = {
     "image_provider": "gemini",
     "stock_providers": ["pexels", "coverr"],
     "material_budget_usd": 1.0,
+    "ai_label_illustrations": True,
 }
 # Keychain accounts a key may be stored under (the Anthropic key and the material providers').
 SECRET_ACCOUNTS = (

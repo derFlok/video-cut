@@ -490,3 +490,38 @@ export interface TranscriptView {
   captions_stale: boolean;
   overlays_stale: boolean;
 }
+
+/** GET /api/jobs/{id}/disclosure: what to tick and credit when publishing (written by the
+ * last full render; `ready` false before one). Texts are in the job's language. */
+export type DisclosureAi = {
+  n: number;
+  kind: string;
+  t0: number;
+  t1: number;
+  model: string | null;
+  prompt: string | null;
+  style: "photo" | "illustration";
+  labelled: boolean;
+};
+export type DisclosureStock = {
+  n: number;
+  source: string | null;
+  author: string | null;
+  licence: string | null;
+  attribution: string | null;
+  source_url: string | null;
+};
+export type DisclosurePlatform = { id: string; label: string; status: "required" | "not needed"; why: string };
+export type Disclosure = {
+  ready: boolean;
+  lang?: string;
+  ai?: DisclosureAi[];
+  stock?: DisclosureStock[];
+  platforms?: DisclosurePlatform[];
+  snippet?: string;
+  comment?: string | null;
+  c2pa?: "signed" | "skipped" | "failed" | null;
+};
+
+/** GET/PUT /api/settings/labels. */
+export type LabelSettings = { ai_label_illustrations: boolean };

@@ -6,6 +6,8 @@ import type {
   Brand,
   BrandSettings,
   ClaudeDetection,
+  Disclosure,
+  LabelSettings,
   SetupStatus,
   ThemeView,
   JobDetail,
@@ -62,6 +64,8 @@ interface MockJob {
   edits?: { i: number; before: TranscriptWord }[];
   /** Material candidates and choices (after approval of a plan with wishes). */
   material?: MaterialView;
+  /** work/disclosure.json of the last full render (absent: none yet). */
+  disclosure?: Disclosure;
 }
 
 const WISHES: MaterialWish[] = [
@@ -120,6 +124,7 @@ export interface MockState {
   stopped: boolean;
   brandSettings: BrandSettings;
   materialSettings: MaterialSettings;
+  labels: LabelSettings;
   /** Every request the fake saw (method, path, body), newest last. */
   calls: { method: string; path: string; body: unknown }[];
 }
@@ -467,6 +472,7 @@ export function createMock(opts: MockOptions = {}) {
       secrets: { "pexels-api-key": false, "coverr-api-key": false, "gemini-api-key": false, "openai-api-key": false },
       ...opts.materialSettings,
     },
+    labels: { ai_label_illustrations: true },
     calls: [],
   };
   const listeners = new Map<string, Set<(ev: JobEvent) => void>>();
@@ -630,6 +636,10 @@ export function createMock(opts: MockOptions = {}) {
       if (typeof b.theme_follows_brand === "boolean") state.brandSettings.theme_follows_brand = b.theme_follows_brand;
       return json(200, themeView());
     }
+    if (a === "settings" && id === "labels") {
+      if (method === "PUT") state.labels = { ai_label_illustrations: !!(body as LabelSettings).ai_label_illustrations };
+      return json(200, state.labels);
+    }
     if (a === "brands") {
       if (!id && method === "GET")
         return json(200, [...state.brands.entries()].map(([bid, br]) => ({ id: bid, name: br.name, preview_url: `/api/brands/${bid}/sheet?format=9:16`, default: bid === state.brandSettings.default_brand })));
@@ -702,6 +712,7 @@ export function createMock(opts: MockOptions = {}) {
         state.jobs.set(nid, copy);
         return json(200, summary(copy));
       }
+      if (b === "disclosure" && method === "GET") return json(200, job.disclosure ? { ...job.disclosure, ready: true } : { ready: false });
       if (b === "title" && method === "PUT") {
         const title = String((body as { title?: string })?.title ?? "").trim();
         if (!title) return json(422, { detail: "the title is empty" });

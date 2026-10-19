@@ -49,6 +49,25 @@
   an agent run. `settings.json` `image_provider`; doctor check "image generation". The lock
   moves huggingface-hub to 1.x (mflux pins `<2`).
 
+### Added — AI labelling and provenance (block "Material", compliance)
+- Visible AI label: renderer scene `ai_badge` (tokens only, "KI-generiert"/"AI-generated" by
+  job language, top safe-area corner opposite the logo, off the face, above everything).
+  `overlays` adds it from `work/material.json` + the EDL for every chosen AI-generated
+  candidate on screen (`broll` segments, `still_card` overlays); the EDL cannot add or
+  remove it. Illustrations follow the new setting `ai_label_illustrations` (default on);
+  realistic AI material is always labelled (EU AI Act Art. 50). verify flag
+  `ai_label_missing`, verify.json `ai_material`, a badge tile in the overlay sheet.
+- Provenance on export (full render): container `comment` "Contains AI-generated material:
+  <models>"; a C2PA manifest via the pinned `c2patool` 0.27.22 (manifest/tools.json,
+  optional install step, `videocut doctor` line), signed with a local certificate chain in
+  `$VIDEOCUT_HOME/state/c2pa/` and read back after writing (render.json `c2pa`:
+  signed/skipped/failed, `provenance`). `_c2pa.inspect(path)` for the provenance of
+  generated stills.
+- Disclosure: `work/disclosure.json` + `.md` at render (AI items with model, span and
+  prompt; stock attributions; YouTube/Meta/TikTok checklist; description snippet),
+  `GET /api/jobs/{id}/disclosure`, the "Veröffentlichen"/"Publish" panel on the finished
+  job page, and the settings switch "KI-Kennzeichnung" (`GET/PUT /api/settings/labels`).
+
 ### Added — default brand, the app's look follows it
 - `settings.json` `default_brand` and `theme_follows_brand`; `PUT /api/settings/brand`,
   `GET /api/theme`. Brands screen: "Als Standard" per brand, a "Standard" badge, "Kein

@@ -463,6 +463,70 @@ loudness, true peak, size, black/frozen stretches. Slides (`_verify_slides.py`, 
 the end of its stretch). After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
 
+## AI labelling and provenance (`_ai_label.py`, `_c2pa.py`, `_disclosure.py`)
+
+EU AI Act Art. 50 (in force since 2026-08-02) and the platforms' own rules: realistic
+AI-generated material in a video is labelled visibly, and the file carries machine-readable
+provenance. Everything here is built from the material the host fetched (`material.load`: the
+trusted copy outside the job folder, every candidate with source, licence, attribution and
+`ai_generated`), the human's checked choices (`material.chosen`, never the `chosen` field of
+the work/material.json mirror) and the EDL; the agent cannot add, move or remove a label.
+`edl snap` belongs before `overlays`: an EDL changed afterwards leaves the overlay layer
+(with the badge) out of the render, and verify flags `ai_label_missing`.
+
+- **What is on screen** (`_ai_label.on_screen`): a segment with `"material": <wish n>`
+  (layout `broll`) over its output span (`edl.output_spans`), and an overlay `still_card`
+  with `props.material` over its `t0..t1`; the candidate is the wish's `chosen` one (a
+  `still_card` may name another candidate of the wish in `props.candidate`). A candidate
+  counts as AI-generated when `ai_generated` is true, its `source` is a generator
+  (`gemini`, `openai`, `local`) or its licence is `generated` (fail closed).
+- **Visible label**: `videocut tool overlays` adds one `ai_badge` item per merged span
+  (gaps < 0.5 s close) after the slide trimming and drops any `ai_badge` the EDL carries;
+  overlays.json `ai_label` lists them. Every AI item of style `photo` (anything not
+  `illustration`) is labelled; illustrations too while `settings.json`
+  `ai_label_illustrations` is true (default; Settings → "KI-Kennzeichnung"). The photo label
+  has no switch. The scene (`renderer/scenes/ai_badge.js`) is a small pill from tokens only
+  (surface fill, text colour, muted edge), text by job language ("KI-generiert" /
+  "AI-generated"), in the top safe-area corner opposite the logo (`tokens.logo.corner` when
+  `logo.placement` is `corner`, else top-left), in the other corner or below the face when
+  the face is there; laid out before every other item (they keep clear of it), drawn above
+  captions and plates (`top`) and also over a full-frame slide (`badge`). No motion.
+- **Verify**: `ai_label_missing` (`_verify_ai.py`) when an item that must be labelled has no
+  drawn `ai_badge` box (overlay_boxes.json) covering its span (1.5 frames slack); no boxes
+  at all count as missing. verify.json `ai_material` lists the AI items; each badge gets a
+  tile in `overlays_NN.jpg`.
+- **Container metadata** (full render): `comment` = "Contains AI-generated material:
+  <models>" when any AI item is shown.
+- **C2PA** (full render, `_c2pa.sign`): the pinned `c2patool` (manifest/tools.json,
+  contentauth/c2pa-rs, universal macOS build; optional install step) embeds a manifest:
+  claim generator "Video Cut <version>", `c2pa.actions` = `c2pa.created` (the reel:
+  digitalSourceType `compositeCapture`, or `compositeWithTrainedAlgorithmicMedia` with AI
+  material), `c2pa.edited`, and per AI model a `c2pa.created` with `trainedAlgorithmicMedia`
+  and the model as softwareAgent. No prompts, names or paths; no timestamp authority (no
+  network). Signed with a local chain created once with macOS openssl in
+  `$VIDEOCUT_HOME/state/c2pa/` (a "Video Cut local" root and an ES256 signer it issued; C2PA
+  refuses a self-signed end certificate; the root key is deleted after issuing). Validators
+  report the manifest as valid with `signingCredential.untrusted` ("unknown signer"); a
+  certificate from a trusted issuer is a later step. After writing, `c2patool <reel>` is read
+  back into render.json `provenance.c2pa_verify`; render.json `c2pa` is `signed`, `skipped`
+  (no c2patool: the reel is delivered without a manifest) or `failed` (a warning).
+- **Incoming provenance** of generated stills is never stripped: the material tools keep the
+  original file next to any derived copy and record `_c2pa.inspect(path)` (C2PA manifest
+  present/absent/unknown, its state, generator, digital source types, a hash of the active
+  manifest, and whether IPTC `trainedAlgorithmicMedia` metadata is in the file) in
+  material.json as each generated candidate's `provenance`. SynthID cannot be read locally; material.json `watermark` comes from the
+  provider.
+- **Disclosure** (`_disclosure.py`, full render): `work/disclosure.json` + `disclosure.md`:
+  the AI items (model, output span, prompt, style, labelled), one attribution line per
+  stock candidate shown, the platform checklist (YouTube "Altered or synthetic content",
+  Meta "AI info", TikTok "AI-generated content": `required` for realistic AI material, else
+  `not needed`), and a description snippet in the job language with the attributions.
+  `GET /api/jobs/{id}/disclosure` (`{"ready": false}` before a full render); the job page
+  shows it as "Veröffentlichen"/"Publish" under the result (checklist, snippet with a copy
+  button, AI items; one line when there is nothing to disclose).
+  `GET/PUT /api/settings/labels` reads and sets `ai_label_illustrations`.
+- `videocut doctor`: `c2patool` present and at the pinned version (optional check).
+
 ## Output format (`tools/_format.py`)
 
 Every job has one output format: job.json `format`, one of `9:16` 1080×1920, `16:9`

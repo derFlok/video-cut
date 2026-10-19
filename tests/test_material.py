@@ -410,6 +410,27 @@ def test_dry_run_uses_the_offline_fakes_without_keys(capsys, monkeypatch):
 
 
 @media
+def test_material_label_ignores_an_edited_mirror(fakes):
+    from videocut.tools import _ai_label
+
+    job = make_job()
+    mat.fetch(job, say=lambda _: None)
+    gen = next(c for c in mat.load(job)["wishes"][1]["candidates"] if c["ai_generated"])
+    assert gen["provenance"]["c2pa"] in ("absent", "unknown")  # inspected, file untouched
+    mat.choose(job, 2, gen["id"], say=lambda _: None)
+    data = json.loads((job / mat.FILE).read_text())
+    for c in data["wishes"][1]["candidates"]:
+        c["ai_generated"], c["source"], c["licence"] = False, "pexels", "Pexels License"
+    data["wishes"][0]["chosen"] = data["wishes"][0]["candidates"][0]["id"]  # never chosen
+    (job / mat.FILE).write_text(json.dumps(data))
+    read = _ai_label.read_material(job)
+    w1, w2 = read["wishes"]
+    assert w1["chosen"] is None and w2["chosen"] == gen["id"]
+    assert _ai_label.is_ai({"candidate": next(c for c in w2["candidates"]
+                                              if c["id"] == gen["id"])})  # fmt: skip
+
+
+@media
 def test_refusals_inside_an_agent_run(fakes, capsys, monkeypatch):
     make_job()
     monkeypatch.setenv("VIDEOCUT_AGENT", "1")

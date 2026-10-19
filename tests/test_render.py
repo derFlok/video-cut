@@ -89,8 +89,10 @@ def test_render_reel(capsys, request, orientation):
 
     report = json.loads((job / "out" / "render.json").read_text())
     assert set(report) == {
-        "edl_sha256", "output_duration", "cuts", "loudness", "preview", "snap", "xfade_ms"
+        "edl_sha256", "output_duration", "cuts", "loudness", "preview", "snap", "xfade_ms",
+        "c2pa", "provenance", "disclosure",
     }  # fmt: skip
+    assert report["c2pa"] in ("signed", "skipped") and report["provenance"]["comment"] is None
     style = _snap.cut_style(json.loads((job / "job.json").read_text()))
     assert report["xfade_ms"] == style["xfade_ms"] and report["snap"]["skipped"]  # no wav
     edl_bytes = (job / "work" / "edl.json").read_bytes()

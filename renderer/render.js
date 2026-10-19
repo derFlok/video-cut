@@ -201,12 +201,13 @@ function pageMain(spec) {
   function drawAt(t) {
     const boxes = [];
     const hideCaptions = hidesCaptions(plates, t);
-    // A full-frame slide (overlays.json views with "hide"): no caption, no overlay item.
+    // A full-frame slide (overlays.json views with "hide"): no caption, no overlay item
+    // (the AI label, `badge`, stays).
     const slide = (hidden || []).some((h) => t >= h.t0 && t < h.t1);
     items.forEach((item, i) => {
       if (t < item.t0 || t > item.t1) return;
       if (hideCaptions && item.scene === "caption") return;
-      if (slide && !scenes[item.scene].plate) return;
+      if (slide && !scenes[item.scene].plate && !scenes[item.scene].badge) return;
       ctx.save();
       const box = scenes[item.scene].draw(ctx, t - item.t0, item, env);
       ctx.restore();
@@ -452,10 +453,12 @@ function items(spec, known) {
     if (known.includes(o.scene) && o.scene !== "caption") list.push({ scene: o.scene, t0: o.t0, t1: o.t1, props: o.props || {} });
     else skipped.push(o.scene);
   }
-  // Captions last, so they draw on top of cards.
+  // Captions after the cards, so they draw on top of them; `top` scenes (the AI label)
+  // over everything.
   for (const c of require("./lib/seams").splitAtSeams(spec.captions || [], validViews(spec.views)))
     list.push({ scene: "caption", t0: c.t0, t1: c.t1, words: c.words || [] });
-  return { list, skipped };
+  const isTop = (it) => it.scene !== "caption" && Boolean(require(`./scenes/${it.scene}`).top);
+  return { list: [...list.filter((it) => !isTop(it)), ...list.filter(isTop)], skipped };
 }
 
 // Areas to keep clear in a product demo, flattened to {t0, t1, screen: [x0, y0, x1, y1]}

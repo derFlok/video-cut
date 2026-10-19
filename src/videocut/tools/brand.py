@@ -29,6 +29,7 @@ SHEET_AT_S = 1.1
 # never a message. A scene without an entry is shown with empty props.
 SAMPLE_IMAGE = "sample-screen.png"
 SAMPLES = {
+    "ai_badge": {"text": "AI-generated"},
     "keyword": {"text": "Keyword"},
     "number_card": {"value": "42 %", "label": "Sample label"},
     "list_item": {"index": 2, "text": "Second point of a list", "total": 3},

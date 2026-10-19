@@ -81,6 +81,7 @@ const SAMPLES = {
   bar_chart: { bars: [{ label: "Before", value: 12 }, { label: "After", value: 31 }, { label: "Goal", value: 40 }], unit: "%" },
   lower_third: { title: "Topic of the day", subtitle: "Part 2 of 5" },
   cta_end: { text: "Send this to someone who needs it", logo: true },
+  ai_badge: { text: "AI-generated" },
 };
 
 const FACES = { centre: [380, 780, 700, 1120], high: [400, 420, 680, 760], none: null };
@@ -364,4 +365,31 @@ test("a portrait screenshot uses the safe height, may cover the face, keeps capt
   const env2 = makeEnv(tokens, FACES.centre, { "shot.png": SHOT });
   const wide = mod.layout(fakeCtx(), { scene: "screenshot_frame", t0: 0, t1: 3, props: { file: "shot.png" } }, env2);
   assert.ok(!wide.stage && !wide.overlapsFace);
+});
+
+test("ai_badge sits in the top corner opposite the logo, off the face, laid out first", () => {
+  const badge = scene("ai_badge");
+  const item = { scene: "ai_badge", t0: 1, t1: 3, props: { text: "AI-generated" } };
+  const L = badge.layout(fakeCtx(), item, makeEnv(tokensFor("blur", { w: 13, z: 0.9 }), null));
+  assert.equal(L.box[0], SAFE.side);
+  assert.equal(L.box[1], SAFE.top);
+  assert.equal(badge.layoutFirst(item), true);
+  assert.equal(badge.top, true);
+  assert.equal(badge.badge, true);
+  // a logo in a left corner: the badge goes right
+  const right = tokensFor("blur", { w: 13, z: 0.9 });
+  right.logo = { ...right.logo, placement: "corner", corner: "top-left" };
+  const R = badge.layout(fakeCtx(), { ...item }, makeEnv(right, null));
+  assert.equal(R.box[2], SIZE[0] - SAFE.side);
+  // the face in the top-left corner: the other corner
+  const F = badge.layout(fakeCtx(), { ...item }, makeEnv(tokensFor("blur", { w: 13, z: 0.9 }), [0, 200, 500, 700]));
+  assert.equal(F.box[2], SIZE[0] - SAFE.side);
+  assert.equal(F.overlapsFace, false);
+  // the face across the whole top: below it
+  const W = badge.layout(fakeCtx(), { ...item }, makeEnv(tokensFor("blur", { w: 13, z: 0.9 }), [0, 200, 1080, 700]));
+  assert.ok(W.box[1] > 700 && !W.overlapsFace);
+  // drawn with tokens only: the surface fill and the text colour
+  const log = [];
+  badge.draw(fakeCtx(log), 0, { ...item }, makeEnv(tokensFor("blur", { w: 13, z: 0.9 }), null));
+  assert.ok(log.some((c) => c[0] === "fillText" && c[1] === "AI-generated"));
 });

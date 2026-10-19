@@ -45,6 +45,13 @@
              screen segments it overlaps (render.json "redaction")
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
+    provenance (full render only) AI-generated material on screen (work/material.json,
+             _ai_label) puts "Contains AI-generated material: <models>" into the container
+             `comment`; the reel gets a C2PA manifest through c2patool (_c2pa: "Video Cut"
+             as generator, the AI models, no prompts, no personal data), verified after
+             writing; render.json "c2pa": "signed"|"skipped" (no c2patool)|"failed" plus
+             "provenance". work/disclosure.json + .md (_disclosure) say what to tick and
+             credit when publishing.
 
 Audio: work/audio.wav when ingest made it from this source (so `ingest --denoise` reaches
 the reel; it is sample-aligned with the source), else the source's audio stream chosen
@@ -64,8 +71,20 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
+from .. import __version__
 from ..edl import EdlError, is_broll, is_screen, is_slide, load, read_sync, validate
-from . import _audio_env, _broll, _layouts, _plates, _redact_blur, _redact_style, _snap
+from . import (
+    _ai_label,
+    _audio_env,
+    _broll,
+    _c2pa,
+    _disclosure,
+    _layouts,
+    _plates,
+    _redact_blur,
+    _redact_style,
+    _snap,
+)
 from . import _render_plan as plan_mod
 from . import slides as slides_mod
 from ._color import is_hdr, output_tags, to_sdr
@@ -84,7 +103,7 @@ from .common import (
 )
 from .edl import snap_job
 from .ingest import audio_offset, probe
-from .job import PROJECT, is_approved, redaction_enforced
+from .job import PROJECT, is_approved, job_lang, redaction_enforced
 
 CRF, PRESET = "18", "medium"
 PREVIEW_PRESET = "veryfast"
@@ -419,6 +438,8 @@ def render(args) -> dict:
 
     dst = out / ("preview.mp4" if preview else "reel.mp4")
     print(f"rendering {dst.name}: {len(edl.segments)} segments, {len(plan.ranges)} ranges")
+    shown = _ai_label.on_screen(job, edl, data)  # chosen material on screen (provenance)
+    ai_comment = None if preview else _disclosure.comment(shown)
     ffmpeg_to(
         dst,
         *inputs,
@@ -447,9 +468,13 @@ def render(args) -> dict:
         "-ar",
         str(plan_mod.RATE),
         *output_tags(info),
+        *(["-metadata", f"comment={ai_comment}"] if ai_comment else []),
         "-movflags",
         "+faststart",
     )
+    provenance = None if preview else _provenance(dst, shown, ai_comment)
+    if provenance and provenance["c2pa"] == "failed":
+        warnings.append(f"no C2PA manifest: {provenance.get('c2pa_error')}")
 
     cover = None
     if not preview:
@@ -510,6 +535,12 @@ def render(args) -> dict:
         }  # fmt: skip
     if plan.tail:
         report["tail_s"] = round(float(plan.tail / plan.fps), 3)
+    if provenance:
+        report["c2pa"] = provenance.pop("c2pa")
+        report["provenance"] = provenance
+        report["disclosure"] = "work/disclosure.json"
+        _disclosure.write(job, edl, data, job_lang(read_job(job)),
+                          {"comment": ai_comment, "c2pa": report["c2pa"]})  # fmt: skip
     if loud["integrated_lufs"] is None:
         warnings.append("the reel is silent")
     elif abs(off := loud["integrated_lufs"] - plan_mod.TARGET_I) > 1:
@@ -546,8 +577,29 @@ def render(args) -> dict:
         "speaker": speaker,
         "redaction": report.get("redaction"),
         "snap": report.get("snap"),
+        "c2pa": report.get("c2pa"),
         "warnings": warnings,
     }
+
+
+def _provenance(dst: Path, shown: list[dict], ai_comment: str | None) -> dict:
+    """Sign the finished reel with a C2PA manifest (_c2pa; replaced in place) and say what
+    the file carries: {"c2pa": "signed"|"skipped"|"failed", "comment", "ai_models",
+    "c2pa_valid"/"c2pa_verify" | "c2pa_reason" | "c2pa_error"}."""
+    ai = [{"model": m} for m in _ai_label.models(shown)]
+    signed = dst.with_name(f"{dst.stem}.c2pa{dst.suffix}")
+    result = _c2pa.sign(dst, signed, ai, __version__)
+    if result["c2pa"] == "signed":
+        signed.replace(dst)
+    signed.unlink(missing_ok=True)
+    doc = {"c2pa": result["c2pa"], "comment": ai_comment, "ai_models": [a["model"] for a in ai]}
+    if result["c2pa"] == "signed":
+        doc |= {"c2pa_valid": result["valid"], "c2pa_verify": result["verify"]}
+    elif "reason" in result:
+        doc["c2pa_reason"] = result["reason"]
+    else:
+        doc["c2pa_error"] = result.get("error")
+    return doc
 
 
 def register(subparsers) -> None:

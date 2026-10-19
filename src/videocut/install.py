@@ -99,10 +99,11 @@ def install_zipped_binary(name: str) -> None:
     _step(f"Installing {name} {t['version']}")
     with tempfile.TemporaryDirectory(dir=TOOLS) as tmp:
         archive = fetch(t["url"], t["sha256"], DOWNLOADS / f"{name}-{t['version']}.zip", name)
+        member = t.get("member", name)  # the binary's path inside the zip
         with zipfile.ZipFile(archive) as zf:
-            zf.extract(name, tmp)
+            zf.extract(member, tmp)
         archive.unlink()
-        shutil.move(Path(tmp) / name, dest)
+        shutil.move(Path(tmp) / member, dest)
     _make_exec(dest)
     _mark(name, t["sha256"])
 
@@ -338,7 +339,7 @@ def _folder_gb(p: Path) -> float:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1e9 if p.exists() else 0
 
 
-TOOL_NAMES = ("node", "ffmpeg", "ffprobe", "deep-filter")
+TOOL_NAMES = ("node", "ffmpeg", "ffprobe", "deep-filter", "c2patool")
 # Measured download sizes (MB) of the parts that are not single pinned files.
 RENDERER_MB = 120  # renderer npm packages + headless Chromium
 APP_MB = 60  # app npm packages (the build itself is local)
@@ -357,11 +358,15 @@ def run(models: bool = True) -> None:
     BIN.mkdir(parents=True, exist_ok=True)
     MODELS.mkdir(parents=True, exist_ok=True)
     tools_mb = sum(manifest.tool(n).get("approx_size_mb", 0) for n in TOOL_NAMES)
-    headline(4, "tools: Node, FFmpeg, FFprobe, DeepFilterNet", tools_mb, _tools_done())
+    headline(4, "tools: Node, FFmpeg, FFprobe, DeepFilterNet, c2patool", tools_mb, _tools_done())
     install_node()
     install_zipped_binary("ffmpeg")
     install_zipped_binary("ffprobe")
     install_plain_binary("deep-filter")
+    try:  # optional: without it a render is delivered without a C2PA manifest
+        install_zipped_binary("c2patool")
+    except Exception as e:  # noqa: BLE001 — a failed optional download must not stop setup
+        print(f"   c2patool not installed ({e}); videos get no C2PA manifest until it is")
     from .download import sha256_of
 
     lock = sha256_of(RENDERER / "package-lock.json")

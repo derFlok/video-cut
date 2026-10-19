@@ -22,7 +22,8 @@ Everything is logged in work/material.json (version 1):
 {"version": 1, "wishes": [{n, kind, src_from, src_to, query, prompt, style, why,
   "chosen": id|null, "decided": bool, "candidates": [{id, kind: video|image, file, thumb,
   width, height, duration_s, source, source_url, author, licence, attribution,
-  ai_generated, model, prompt, seed, watermark, sha256, source_sha256, fetched}]}],
+  ai_generated, model, prompt, seed, watermark, sha256, source_sha256, provenance,
+  fetched}]}],
  "cost_usd": spent on generation, "runs": [{at, wishes, stock, generated, cost_usd,
  wall_s, errors}]}
 Files live in work/material/<n>/ (cN.mp4|jpg|png and cN_sm.jpg, ≤ THUMB px). A generated
@@ -626,9 +627,21 @@ def _generate(job: Path, w: dict, count: int, first: int, data: dict, say) -> tu
             "prompt": w["prompt"], "seed": res.seed, "watermark": res.watermark,
             "sha256": sha, "source_sha256": sha, "fetched": now(),
             "cost_usd": res.cost_usd, "elapsed_s": res.elapsed_s, "hdr": False,
+            "provenance": _provenance(res.file),
         })  # fmt: skip
     say(f"  wish {w['n']}: {len(out)} generated candidate(s) ({name})")
     return out, errors
+
+
+def _provenance(path: Path) -> dict:
+    """What provenance the generator's file carries (C2PA manifest and its hash, IPTC AI
+    marker; _c2pa.inspect). The file stays as it came; derived copies sit next to it."""
+    from . import _c2pa
+
+    try:
+        return _c2pa.inspect(path)
+    except (OSError, ValueError, RuntimeError) as e:
+        return {"c2pa": "unknown", "error": str(e)[:200]}
 
 
 def _next_id(cands: list[dict]) -> int:

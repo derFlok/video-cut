@@ -8,6 +8,7 @@ import type {
   BrandSettings,
   BrandSummary,
   CutStyleChoice,
+  Disclosure,
   RedactStyle,
   Format,
   FormatChoice,
@@ -18,6 +19,7 @@ import type {
   MaterialMode,
   MaterialSettings,
   MaterialView,
+  LabelSettings,
   Plan,
   SecretAccount,
   RedactionDecision,
@@ -207,6 +209,9 @@ export const api = {
   /** Write-only: the key goes to the keychain; "" removes it. */
   setSecret: (account: SecretAccount, value: string) =>
     call<{ secrets: Record<SecretAccount, boolean> }>("PUT", "/api/settings/secrets", { account, value }),
+  labelSettings: () => call<LabelSettings>("GET", "/api/settings/labels"),
+  saveLabelSettings: (s: LabelSettings) => call<LabelSettings>("PUT", "/api/settings/labels", s),
+  disclosure: (id: string) => call<Disclosure>("GET", `${J(id)}/disclosure`),
 
   jobs: () => call<JobSummary[]>("GET", "/api/jobs"),
   job: (id: string) => call<JobDetail>("GET", J(id)),
