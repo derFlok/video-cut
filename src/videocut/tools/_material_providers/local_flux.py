@@ -148,10 +148,18 @@ def prompt_text(prompt: str, palette: list[str], style: str) -> str:
 
 def _footprint(pid: int) -> int | None:
     """Physical footprint of a process in bytes (what Activity Monitor calls Memory; it
-    includes the GPU buffers MLX allocates in unified memory), or None when unknown."""
+    includes the GPU buffers MLX allocates in unified memory), or None when unknown.
+    Off macOS (CI) the resident set from /proc stands in, so the guard is still exercised."""
     try:
         libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
     except OSError:
+        try:
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            pass
         return None
     buf = (ctypes.c_uint64 * 64)()  # rusage_info_v2 and more
     if libproc.proc_pid_rusage(pid, 2, ctypes.byref(buf)) != 0:  # RUSAGE_INFO_V2
