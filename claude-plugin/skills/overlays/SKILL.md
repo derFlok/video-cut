@@ -159,6 +159,11 @@ No overlay repeating a slide's words or numbers elsewhere either. Never change
    - `overlay_boxes_untrusted` → `work/overlay.mov`, `overlay_boxes.json` or `overlays.json`
      changed after `videocut tool overlays` wrote them. Never edit those files; run
      `videocut tool overlays` again.
+   - `ai_badge` is the "KI-generiert"/"AI-generated" label `videocut tool overlays` adds by
+     itself while AI-generated material is on screen. Never write one, never remove or cover
+     it, never edit `work/material.json`; keep your overlays clear of it.
+     `ai_label_missing` → run `videocut tool overlays` again; if it stays, note it in the
+     report (the human decides).
 4. Look only at `out/verify/overlays_NN.jpg` (one tile per overlay) and, if a caption is in
    doubt, one `out/verify/captions_NN.jpg`. Check: readable, not on the face, brand look.
 

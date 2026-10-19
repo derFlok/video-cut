@@ -55,8 +55,13 @@ track are in the output px of work/overlays.json)
     Trust: the boxes are only believed when work/overlay.mov, overlay_boxes.json and
     overlays.json are exactly what `videocut tool overlays` recorded outside the job folder
     (overlays.check_record); otherwise one entry with flag `overlay_boxes_untrusted`.
+    AI label (_verify_ai.py): flag `ai_label_missing` when AI-generated material that must
+    be labelled (work/material.json, _ai_label) is on screen and no drawn "ai_badge" box
+    covers its whole span (boxes count only when render composited the overlay);
+    `ai_label_unchecked` when the EDL cannot be read or is stale while work/material.json
+    has a chosen AI-generated candidate; verify.json "ai_material" lists every AI item.
     out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
-    out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
+    out/verify/overlays_NN.jpg: one tile per overlay and per AI label, at its middle.
 Slides (_verify_slides.py; EDL segments with a slide layout): per slide the layout report
 of `videocut tool slides render` (trusted only as recorded): `slide_text_overflow`,
 `slide_reading_time`, `slide_bubble_over_text`, `slide_missing` / `slide_untrusted` /
@@ -86,7 +91,7 @@ import numpy as np
 from ..edl import Edl, EdlError, load, output_spans
 from ..paths import tool_env
 from . import _image as im
-from . import _plates, _verify_audio, _verify_screen, _verify_slides
+from . import _plates, _verify_ai, _verify_audio, _verify_screen, _verify_slides
 from . import overlays as overlays_mod
 from ._geometry import job_size, overlap, safe_zones, sized
 from .common import (
@@ -821,7 +826,15 @@ def verify(args) -> dict:
     for old in vdir.glob("slides_*.jpg"):
         if old not in sl_sheets:
             old.unlink()
-    ov_times = overlay_times(sched.overlays, fps, video_dur) if sched is not None else []
+    ai = (  # a reel without a composited overlay has no label, whatever old boxes say
+        _verify_ai.check(job, edl, json.loads(edl_path.read_text()),
+                         boxes if render.get("overlay") else None, fps)
+        if edl is not None and not stale
+        else _verify_ai.unchecked(job, video_dur)
+    )  # fmt: skip
+    ov_times = (
+        overlay_times(sched.overlays + ai["badges"], fps, video_dur) if sched is not None else []
+    )
     ov_sheets = caption_sheets(reel, v, ov_times, vdir, "overlays") if ov_times else []
     for old in vdir.glob("overlays_*.jpg"):
         if old not in ov_sheets:
@@ -831,6 +844,7 @@ def verify(args) -> dict:
         for o in overlay_docs
         if o["flags"]
     ]
+    overlay_flagged += ai["flagged"]
     if untrusted:  # run `videocut tool overlays` again; never edit its outputs
         overlay_flagged.insert(
             0,
@@ -872,6 +886,7 @@ def verify(args) -> dict:
         "info": info,
         "overlays": overlay_docs,
         "overlay_flagged": overlay_flagged,
+        "ai_material": ai["items"],
         "screen": {
             k: demo[k]
             for k in ("coverage", "redaction", "text_cut", "screen_time", "clamped", "readability")

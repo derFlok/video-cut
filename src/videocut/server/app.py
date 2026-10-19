@@ -40,7 +40,7 @@ from ..tools.job import (
     set_target,
     set_title,
 )
-from . import brands, setup, state, theme
+from . import brands, disclosure, setup, state, theme
 from .runs import Busy, Runs
 from .security import Guard
 from .uploads import (
@@ -868,6 +868,7 @@ def create_app(
 
     app.include_router(theme.router)  # before brands: /api/brands/{id}/theme and /assets
     app.include_router(brands.router)
+    app.include_router(disclosure.router)
     app.state.setup = setup_router or setup.router()
     app.include_router(app.state.setup)
 

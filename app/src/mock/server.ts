@@ -6,6 +6,8 @@ import type {
   Brand,
   BrandSettings,
   ClaudeDetection,
+  Disclosure,
+  LabelSettings,
   SetupStatus,
   ThemeView,
   JobDetail,
@@ -53,6 +55,8 @@ interface MockJob {
   /** The transcript (made on first use) and the edits an undo can take back. */
   words?: TranscriptWord[];
   edits?: { i: number; before: TranscriptWord }[];
+  /** work/disclosure.json of the last full render (absent: none yet). */
+  disclosure?: Disclosure;
 }
 
 const SAMPLE = "Heute zeige ich euch, wie Zentrowia den Ablauf einfacher macht. Ähm, also, zuerst öffnet ihr die Übersicht. Dann wählt ihr den Bericht aus und klickt auf Senden. Das war's schon!";
@@ -83,6 +87,7 @@ export interface MockState {
   apiKey: string | null;
   stopped: boolean;
   brandSettings: BrandSettings;
+  labels: LabelSettings;
   /** Every request the fake saw (method, path, body), newest last. */
   calls: { method: string; path: string; body: unknown }[];
 }
@@ -404,6 +409,7 @@ export function createMock(opts: MockOptions = {}) {
     apiKey: null,
     stopped: false,
     brandSettings: { default_brand: null, theme_follows_brand: true, ...opts.brandSettings },
+    labels: { ai_label_illustrations: true },
     calls: [],
   };
   const listeners = new Map<string, Set<(ev: JobEvent) => void>>();
@@ -531,6 +537,10 @@ export function createMock(opts: MockOptions = {}) {
       if (typeof b.theme_follows_brand === "boolean") state.brandSettings.theme_follows_brand = b.theme_follows_brand;
       return json(200, themeView());
     }
+    if (a === "settings" && id === "labels") {
+      if (method === "PUT") state.labels = { ai_label_illustrations: !!(body as LabelSettings).ai_label_illustrations };
+      return json(200, state.labels);
+    }
     if (a === "brands") {
       if (!id && method === "GET")
         return json(200, [...state.brands.entries()].map(([bid, br]) => ({ id: bid, name: br.name, preview_url: `/api/brands/${bid}/sheet?format=9:16`, default: bid === state.brandSettings.default_brand })));
@@ -603,6 +613,7 @@ export function createMock(opts: MockOptions = {}) {
         state.jobs.set(nid, copy);
         return json(200, summary(copy));
       }
+      if (b === "disclosure" && method === "GET") return json(200, job.disclosure ? { ...job.disclosure, ready: true } : { ready: false });
       if (b === "title" && method === "PUT") {
         const title = String((body as { title?: string })?.title ?? "").trim();
         if (!title) return json(422, { detail: "the title is empty" });

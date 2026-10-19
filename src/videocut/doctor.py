@@ -81,6 +81,16 @@ def check_ffmpeg_features() -> Check:
     )
 
 
+def check_c2patool(want: str) -> Check:
+    """Optional: without it videos are delivered without a C2PA manifest (render.json
+    "c2pa": "skipped")."""
+    c = _binary("c2patool", ("--version",), want)
+    c.required = False
+    c.detail = (c.detail + " (C2PA provenance for finished videos)") if c.ok else (
+        f"{c.detail}: finished videos get no C2PA manifest")  # fmt: skip
+    return c
+
+
 def check_renderer() -> Check:
     from . import install
 
@@ -227,6 +237,7 @@ def collect() -> list[Check]:
         _binary("ffprobe", ("-hide_banner", "-version"), t["ffprobe"]["version"]),
         check_ffmpeg_features(),
         _binary("deep-filter", ("--version",), t["deep-filter"]["version"]),
+        check_c2patool(t["c2patool"]["version"]),
         check_renderer(),
         check_app(),
         *check_models(),

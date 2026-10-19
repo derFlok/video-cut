@@ -46,6 +46,15 @@
       "license": "MIT OR Apache-2.0",
       "approx_size_mb": 27
     },
+    "c2patool": {
+      "version": "0.27.22",
+      "url": "https://github.com/contentauth/c2pa-rs/releases/download/c2patool-v0.27.22/c2patool-v0.27.22-universal-apple-darwin.zip",
+      "sha256": "d064ca72e599c74e5fdc2ed04b47d6cb62210a2b14db589d078c2ec27c98d3df",
+      "member": "c2patool/c2patool",
+      "license": "MIT OR Apache-2.0",
+      "approx_size_mb": 21,
+      "optional": true
+    },
     "chromium-headless-shell": {
       "version": "153.0.8010.12",
       "revision": "1243",

@@ -306,6 +306,7 @@ export function Settings({ onSaved }: { onSaved?: () => void }) {
         </section>
       )}
       <BrandLook />
+      <AiLabels />
       {version && <p className="muted">{t("settings.version", { v: version })}</p>}
     </div>
   );
@@ -343,6 +344,42 @@ function BrandLook() {
         </select>
       </div>
       <ThemeSwitch />
+      <ErrorBanner error={err} />
+    </section>
+  );
+}
+
+/** Settings: whether AI illustrations are labelled too (realistic AI images always are). */
+function AiLabels() {
+  const { t } = useI18n();
+  const [on, setOn] = useState<boolean | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  useEffect(() => {
+    api
+      .labelSettings()
+      .then((s) => setOn(s.ai_label_illustrations))
+      .catch(setErr);
+  }, []);
+  return (
+    <section className="panel stack" aria-labelledby="labels-title">
+      <h2 id="labels-title">{t("settings.labels")}</h2>
+      {on !== null && (
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={(e) => {
+              setErr(null);
+              api
+                .saveLabelSettings({ ai_label_illustrations: e.target.checked })
+                .then((s) => setOn(s.ai_label_illustrations))
+                .catch(setErr);
+            }}
+          />
+          <span>{t("settings.labels.illustrations")}</span>
+        </label>
+      )}
+      <p className="hint">{t("settings.labels.why")}</p>
       <ErrorBanner error={err} />
     </section>
   );

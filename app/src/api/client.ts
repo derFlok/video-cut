@@ -8,6 +8,7 @@ import type {
   BrandSettings,
   BrandSummary,
   CutStyleChoice,
+  Disclosure,
   RedactStyle,
   Format,
   FormatChoice,
@@ -15,6 +16,7 @@ import type {
   JobEvent,
   JobSummary,
   JobVocabulary,
+  LabelSettings,
   Plan,
   RedactionDecision,
   Session,
@@ -192,6 +194,10 @@ export const api = {
   },
   sheetUrl: (id: string, format: Format, bust = "") =>
     transport.url(`/api/brands/${enc(id)}/sheet?format=${enc(format)}${bust ? `&v=${enc(bust)}` : ""}`),
+
+  labelSettings: () => call<LabelSettings>("GET", "/api/settings/labels"),
+  saveLabelSettings: (s: LabelSettings) => call<LabelSettings>("PUT", "/api/settings/labels", s),
+  disclosure: (id: string) => call<Disclosure>("GET", `${J(id)}/disclosure`),
 
   jobs: () => call<JobSummary[]>("GET", "/api/jobs"),
   job: (id: string) => call<JobDetail>("GET", J(id)),
