@@ -43,7 +43,8 @@ track are in the output px of work/overlays.json)
     bottom 350 px, 6 % at the sides, docs/BRIEF.md §8); flag `overlay_on_face` when a box
     covers more than 2 % of the face box at any face sample (output time) while it is
     visible; flag `overlay_overlap` when an overlay and a caption drawn at the same time
-    (longer than OVERLAP_MIN_S) share more than 10 % of the smaller box (one hides the other: there was no free room).
+    (longer than OVERLAP_MIN_S) share more than 10 % of the smaller box (one hides the
+    other: there was no free room).
     A caption on the seam of a stacked slide_split may cover the slide part's empty margin
     and the forehead: flag `overlay_on_slide_content` when a box touches the slide's content
     box, and judge that caption on the face below the brow line only.
