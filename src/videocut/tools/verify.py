@@ -66,7 +66,8 @@ out/verify/slides_NN.jpg: one tile per slide, near the end of its stretch.
 B-roll (_verify_broll.py; render.json "broll"): the middle frame of each stretch flags
 `broll_black` (mostly black) or `broll_aspect` (letterbox/pillarbox bars: not cropped to
 fill); check "broll". A broll segment shows no camera for the blink check. A b-roll image
-(a slow Ken Burns push-in) is a still on purpose for the frozen check; a b-roll clip is not.
+(a slow Ken Burns push-in; kind from the trusted choice, span from the EDL) is a still on
+purpose for the frozen check; a b-roll clip is not.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size of the job's format (job.json "format": 1080x1920 for 9:16, 1920x1080 for
 16:9, ...), no black or frozen stretch longer than 0.5 s. A preview is
@@ -87,10 +88,11 @@ from pathlib import Path
 
 import numpy as np
 
-from ..edl import Edl, EdlError, load, output_spans
+from ..edl import Edl, EdlError, is_broll, load, output_spans
 from ..paths import tool_env
 from . import _image as im
 from . import _plates, _verify_audio, _verify_broll, _verify_screen, _verify_slides
+from . import material as material_mod
 from . import overlays as overlays_mod
 from ._geometry import job_size, overlap, safe_zones, sized
 from .common import (
@@ -557,6 +559,18 @@ def loudness(reel: Path) -> dict:
     }
 
 
+def broll_image_spans(job: Path, edl: Edl) -> list[tuple[float, float]]:
+    """Output spans of the b-roll segments that show an image (a slow Ken Burns drift: a
+    still on purpose). The kind comes from the human's trusted choice (material.chosen),
+    the span from the EDL render was checked against, never from render.json."""
+    chosen = material_mod.chosen(job)
+    return [
+        span
+        for s, span in zip(edl.segments, output_spans(edl), strict=True)
+        if is_broll(s.layout) and (chosen.get(s.material) or {}).get("kind") == "image"
+    ]
+
+
 def bad_stretches(reel: Path, duration: float, box: list[int] | None = None) -> list[dict]:
     """Black or frozen stretches longer than MAX_STRETCH_S (ffmpeg blackdetect/freezedetect),
     of the whole frame or only inside `box` ([x0, y0, x1, y1] px)."""
@@ -734,9 +748,7 @@ def verify(args) -> dict:
         else {}
     )
     still_screen = still_screen + slide_doc.get("still", [])  # a full slide is a still
-    still_screen += [  # a b-roll image only drifts (Ken Burns): still on purpose
-        (b["out_t0"], b["out_t1"]) for b in render.get("broll") or [] if b.get("kind") == "image"
-    ]
+    still_screen += broll_image_spans(job, edl) if edl is not None and not stale else []
     bubbles = bubbles + slide_doc.get("bubbles", [])  # slide: the camera is the speaker area
 
     loud = loudness(reel)

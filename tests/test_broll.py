@@ -13,11 +13,12 @@ import pytest
 from clips import ffmpeg
 from helpers import run_tool
 
-from videocut.edl import from_dict, validate
+from videocut.edl import from_dict, load, validate
 from videocut.paths import tool_env
 from videocut.tools import _layouts as lay
 from videocut.tools import _verify_broll
 from videocut.tools import material as material_mod
+from videocut.tools import verify as verify_mod
 from videocut.tools.job import approve_job
 
 SRC = "input/clip-portrait.mp4"
@@ -269,6 +270,11 @@ def test_a_smooth_broll_image_is_not_a_frozen_picture(capsys, monkeypatch, portr
     run_tool(capsys, "verify", "--job", str(job))
     doc = json.loads((job / "out" / "verify.json").read_text())
     assert doc["checks"]["black_or_frozen"]["ok"], doc["checks"]["black_or_frozen"]
+    # the exempt span comes from the human's trusted choice and the EDL, not render.json
+    edl = load(job / "work" / "edl.json")
+    assert verify_mod.broll_image_spans(job, edl) == [(3.0, 6.0)]
+    material_mod.choose(job, 1, None, say=lambda _: None)
+    assert verify_mod.broll_image_spans(job, edl) == []
 
 
 @media
