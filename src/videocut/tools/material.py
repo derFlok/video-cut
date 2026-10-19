@@ -40,6 +40,10 @@ of the approved plan and the file still has the recorded SHA-256.
 Network only here, on the host: fetch/generate refuse inside an agent run
 (VIDEOCUT_AGENT=1), and the cost guard refuses generation above settings
 "material_budget_usd" per job (estimated from the providers' published prices).
+
+Offline run: with VIDEOCUT_MATERIAL_FAKE=1 (or `fetch|generate --dry-run`) the local
+stand-ins `fake-stock` / `fake-image` (_material_providers/fake.py) replace the configured
+providers: no key, no network, the rest of the chain unchanged.
 """
 
 import hashlib
@@ -553,7 +557,18 @@ def _hdr(info: dict) -> bool:
     return is_hdr(info)
 
 
+def fake() -> bool:
+    return os.environ.get("VIDEOCUT_MATERIAL_FAKE") == "1"
+
+
+def _load_fake() -> None:
+    from ._material_providers import fake as _fake  # noqa: F401 (registers itself)
+
+
 def provider_name() -> str:
+    if fake():
+        _load_fake()
+        return "fake-image"
     return str(settings.load().get("image_provider") or "none")
 
 
@@ -640,6 +655,10 @@ def fetch(job: Path, only: int | None = None, query: str | None = None,
     t0 = time.monotonic()
     conf = settings.load()
     stock_names = [n for n in conf.get("stock_providers") or [] if n in ("pexels", "coverr")]
+    if fake():
+        _load_fake()
+        stock_names = ["fake-stock"]
+        say("material: offline run with fake providers (VIDEOCUT_MATERIAL_FAKE=1)")
     errors: list[str] = []
     n_stock = n_gen = 0
     cost_before = float(data.get("cost_usd") or 0)
@@ -753,12 +772,19 @@ def show(args) -> dict:
 # ------------------------------------------------------------------ CLI
 
 
+def _dry_run(args) -> None:
+    if args.dry_run:
+        os.environ["VIDEOCUT_MATERIAL_FAKE"] = "1"
+
+
 def fetch_cmd(args) -> dict:
+    _dry_run(args)
     job = resolve_job(args.job_ref or args.job)
     return fetch(job, args.wish, args.query, args.prompt)
 
 
 def generate_cmd(args) -> dict:
+    _dry_run(args)
     job = resolve_job(args.job_ref or args.job)
     return fetch(job, args.wish, None, args.prompt, stock=False)
 
@@ -785,12 +811,18 @@ def register(subparsers) -> None:
     f.add_argument("--wish", type=int, help="only this wish")
     f.add_argument("--query", help="with --wish: the edited stock query")
     f.add_argument("--prompt", help="with --wish: the edited generator prompt")
+    f.add_argument(
+        "--dry-run", action="store_true", help="offline: local fake providers, no key, no network"
+    )
     f.set_defaults(handler=run_tool("material fetch", fetch_cmd))
     g = sub.add_parser("generate", help="generate images for still/icon wishes",
                        parents=[job_parent()])  # fmt: skip
     g.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
     g.add_argument("--wish", type=int, help="only this wish")
     g.add_argument("--prompt", help="with --wish: the edited prompt")
+    g.add_argument(
+        "--dry-run", action="store_true", help="offline: local fake providers, no key, no network"
+    )
     g.set_defaults(handler=run_tool("material generate", generate_cmd))
     c = sub.add_parser("choose", help="choose a candidate for a wish, or none (human only)")
     c.add_argument("job_ref", metavar="job", help="job folder or id")

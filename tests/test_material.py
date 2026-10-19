@@ -15,6 +15,7 @@ from helpers import run_tool
 from videocut import run as pipeline
 from videocut import settings
 from videocut.server import create_app
+from videocut.server import material as server_material
 from videocut.tools import _job_material
 from videocut.tools import _material_providers as mp
 from videocut.tools import material as mat
@@ -389,6 +390,22 @@ def test_fetch_choose_round_trip(fakes, capsys, monkeypatch):
     # a replaced file loses its choice
     (job / "work/material/1/c2.mp4").write_bytes(b"other")
     assert mat.chosen(job) == {} and mat.pending(job) == [1]
+
+
+@media
+def test_dry_run_uses_the_offline_fakes_without_keys(capsys, monkeypatch):
+    job = make_job()
+    settings.save(image_provider="gemini", stock_providers=["pexels"])  # no key stored
+    monkeypatch.setenv("VIDEOCUT_MATERIAL_FAKE", "0")  # restored after --dry-run sets it
+    code, out, _ = run_tool(capsys, "material", "fetch", "m1", "--dry-run")
+    assert code == 0 and out["stock"] == 4 + 2 and out["generated"] == 2 and out["cost_usd"] == 0
+    data = json.loads((job / mat.FILE).read_text())
+    for c in data["wishes"][0]["candidates"] + data["wishes"][1]["candidates"]:
+        assert c["source"] in ("fake-stock", "fake-image") and (job / c["file"]).is_file()
+        assert c["ai_generated"] == (c["source"] == "fake-image")
+    video = next(c for c in data["wishes"][0]["candidates"] if c["kind"] == "video")
+    assert video["height"] > video["width"] and video["duration_s"] > 1
+    assert "fake-stock" not in {p["name"] for p in server_material.image_providers()}
 
 
 @media

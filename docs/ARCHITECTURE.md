@@ -903,7 +903,11 @@ message and the stock part still runs. Every fetch appends to material.json `run
 `VIDEOCUT_AGENT=1`, waits on 429 (Retry-After, else 2^k s; 3 times), and scrubs key-like
 strings and URL queries from errors. Providers share one registry
 (`register_provider/get_provider/providers`); the local generator registers itself as
-`local`.
+`local`. Offline run: `VIDEOCUT_MATERIAL_FAKE=1` (or `fetch|generate --dry-run`) swaps in
+`_material_providers/fake.py` (`fake-stock`: moving FFmpeg gradients and stills in the job's
+orientation; `fake-image`: a still in the brand's first colour, AI-generated, $0), so the
+whole chain runs without keys or network; never listed in the settings, and the candidates
+say `licence: test material`.
 
 **Choice (human).** `material choose <job> <n> <id|none>` / `POST material/choose` writes
 `$VIDEOCUT_HOME/state/<job>/material_choice.json` (candidate, file, SHA-256, the wish's

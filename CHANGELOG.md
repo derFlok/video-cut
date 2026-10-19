@@ -17,6 +17,8 @@
   C2PA) generate up to 2 stills per wish from the prompt, the style and the brand's colours,
   stored byte for byte; cost limit `material_budget_usd` (default 1.00) per job from the
   published prices; 429 back-off. Everything is logged in `work/material.json`.
+- Offline run for tests and demos: `VIDEOCUT_MATERIAL_FAKE=1` or `material fetch
+  --dry-run` uses local fake providers (FFmpeg gradients, no key, no network).
 - The human's choice (`material choose`, the app's Material screen) is trusted only from
   `$VIDEOCUT_HOME/state/<job>/material_choice.json` with the file's SHA-256; `videocut run`
   fetches after the approval and waits (exit code 5, gate `material`) until every wish has
