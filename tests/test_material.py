@@ -286,7 +286,8 @@ def test_gemini_request_and_response(monkeypatch, keychain, tmp_path):
     fmt = sent["payload"]["response_format"]
     assert fmt["aspect_ratio"] == "9:16" and fmt["image_size"] == "2K"
     text = sent["payload"]["input"][0]["text"]
-    assert "#112233" in text and "No text" in text
+    assert "deep navy blue" in text and "#" not in text  # a hex string would be drawn as text
+    assert text.endswith("No text, no letters, no logos.")
     assert sent["headers"] == {"x-goog-api-key": "g-test"}
     assert prov.estimate_usd(1080, 1920) == 0.0504
 

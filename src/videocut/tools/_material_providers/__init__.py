@@ -5,8 +5,9 @@ are searched (StockProvider) and image generators (ImageProvider), in one regist
     get_provider(name)             an instance of it (ProviderError when unknown)
     providers(kind=None)           {name: cls}, all or only "stock" / "image" ones
 
-Built in: `pexels`, `coverr` (stock), `gemini`, `openai` (image). Other modules in this
-package register themselves on import (`local_flux`: the local generator).
+Built in: `pexels`, `coverr` (stock), `gemini`, `openai` (image), and `local` (local_flux:
+FLUX.2 [klein] through mflux; its module is imported on first use and registers itself
+with its `register()`, so `import mflux` only happens when it is asked for).
 
 Everything here runs on the host only: the HTTP helpers refuse inside an agent run
 (VIDEOCUT_AGENT=1), and only what the contract allows leaves the machine (a stock query,
@@ -37,6 +38,13 @@ class ProviderError(RuntimeError):
     """A provider failed; the message is safe to show (never contains a key)."""
 
 
+class UnknownProvider(ProviderError, KeyError):
+    """No provider of that name (a KeyError too, for callers that look names up)."""
+
+    def __str__(self) -> str:
+        return RuntimeError.__str__(self)
+
+
 @dataclass
 class StockHit:
     id: str
@@ -56,6 +64,8 @@ class StockHit:
 
 @dataclass
 class GenResult:
+    """What a generator made: the file and everything material.json records about it."""
+
     file: Path
     model: str
     revision: str
@@ -65,6 +75,10 @@ class GenResult:
     width: int = 0
     height: int = 0
     cost_usd: float | None = None
+    prompt: str = ""  # the exact text sent to the model (when the provider builds its own)
+    steps: int | None = None  # local models: denoising steps
+    quantisation: str | None = None  # local models: e.g. "8-bit"
+    extra: dict = field(default_factory=dict)  # provider specifics
 
 
 class StockProvider:
@@ -115,7 +129,7 @@ def get_provider(name: str):
     _load_builtin()
     cls = _REGISTRY.get(name)
     if cls is None:
-        raise ProviderError(f"unknown material provider {name!r}")
+        raise UnknownProvider(f"unknown material provider {name!r}")
     return cls()
 
 
@@ -130,10 +144,13 @@ BUILTIN = ("pexels", "coverr", "gemini", "openai_image", "local_flux")
 def _load_builtin() -> None:
     for mod in BUILTIN:
         try:
-            importlib.import_module(f"{__name__}.{mod}")
+            m = importlib.import_module(f"{__name__}.{mod}")
         except ModuleNotFoundError as e:
             if e.name != f"{__name__}.{mod}":  # a missing dependency inside it: say so
                 raise
+            continue
+        if hasattr(m, "register"):  # registers on request, not on import (local_flux)
+            m.register()
 
 
 # --------------------------------------------------------------------------- helpers
@@ -273,11 +290,51 @@ STYLE_WORDS = {
 }
 
 
+NO_TEXT = "no text, no letters, no logos"  # the end of every generator prompt
+_HUES = ((15, "red"), (40, "orange"), (52, "amber"), (68, "yellow"), (160, "green"),
+         (195, "teal"), (250, "blue"), (290, "violet"), (330, "magenta"), (346, "pink"),
+         (360, "red"))  # fmt: skip
+
+
+def colour_word(hex_colour: str) -> str | None:
+    """A plain colour name for "#rrggbb" ("deep navy blue", "warm amber"), None when it is
+    not one. Generators get these words, never the hex string: a model draws "#F2A33A" as
+    literal text into the picture."""
+    h = hex_colour.strip().lstrip("#")
+    if len(h) != 6 or any(c not in "0123456789abcdefABCDEF" for c in h):
+        return None
+    import colorsys
+
+    r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    hue, light, sat = colorsys.rgb_to_hls(r, g, b)
+    if sat < 0.15 or light < 0.06 or light > 0.95:
+        greys = ((0.12, "black"), (0.35, "charcoal grey"), (0.7, "grey"), (0.92, "light grey"))
+        return next((n for limit, n in greys if light < limit), "white")
+    deg = hue * 360
+    name = next(n for limit, n in _HUES if deg < limit)
+    if name == "blue" and light < 0.3:
+        name = "navy blue"
+    tone = ("deep" if light < 0.3 else "pale" if light > 0.8 else "light" if light > 0.65
+            else "warm" if name in ("red", "orange", "amber", "yellow") else "")  # fmt: skip
+    return f"{tone} {name}".strip()
+
+
+def colour_words(palette: list, limit: int = 5) -> str:
+    """The palette as one phrase: "deep navy blue and warm amber" ("" for none)."""
+    words: list[str] = []
+    for c in palette:
+        w = colour_word(c) if isinstance(c, str) else None
+        if w and w not in words:
+            words.append(w)
+    words = words[:limit]
+    return " and ".join(words) if len(words) < 3 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
 def full_prompt(prompt: str, palette: list[str], style: str) -> str:
-    """The generator prompt: the plan's sentence, the style words and the brand palette
-    (hex values only). No text in the image."""
+    """The generator prompt: the plan's sentence, the style words, the brand palette as
+    colour names (never hex) and, last, NO_TEXT."""
     parts = [prompt.strip().rstrip(".") + ".", STYLE_WORDS.get(style, "") + "."]
-    if palette:
-        parts.append("Colour palette: " + ", ".join(palette[:5]) + ".")
-    parts.append("No text, no letters, no logos, no watermark.")
+    if colours := colour_words(palette):
+        parts.append(f"Colours: {colours}.")
+    parts.append(NO_TEXT[0].upper() + NO_TEXT[1:] + ".")
     return " ".join(p for p in parts if p != ".")

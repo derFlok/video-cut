@@ -19,6 +19,10 @@
   published prices; 429 back-off. Everything is logged in `work/material.json`.
 - verify: a b-roll image (slow Ken Burns push-in) is a still on purpose for the frozen
   check, like a full slide; b-roll clips stay checked.
+- Generator prompts carry the brand palette as colour names ("deep navy blue and warm
+  orange"), never hex codes (a model drew "#F2A33A" as text into a picture), and end with
+  "no text, no letters, no logos"; the plan skill writes scene-only prompts (no signs,
+  screens, "copy space"). One provider registry for stock, cloud and local generators.
 - Offline run for tests and demos: `VIDEOCUT_MATERIAL_FAKE=1` or `material fetch
   --dry-run` uses local fake providers (FFmpeg gradients, no key, no network).
 - The human's choice (`material choose`, the app's Material screen) is trusted only from
@@ -35,6 +39,15 @@
   `edl check` rules (chosen only, inside the wish span, not in the first 2 s, ≤ 40 %);
   captions in the lower band over b-roll; verify `broll_black` / `broll_aspect`; render.json
   `broll`; `sheet material`; the cut, overlays and revise skills know b-roll.
+
+### Added — local image generation (optional)
+- `videocut models pull --image` (or `setup --image`): FLUX.2 [klein] 4B (Apache-2.0) through
+  mflux 0.23.0 (extra `image`), pinned Hugging Face revision, 16 GB download saved as an
+  8-bit copy of 8 GB; provider `local`
+  (`_material_providers/local_flux.py`, registry `register_provider`/`get_provider`/`providers`)
+  generates stills on the Mac in a child process with timeout and memory guard, never inside
+  an agent run. `settings.json` `image_provider`; doctor check "image generation". The lock
+  moves huggingface-hub to 1.x (mflux pins `<2`).
 
 ### Added — default brand, the app's look follows it
 - `settings.json` `default_brand` and `theme_follows_brand`; `PUT /api/settings/brand`,

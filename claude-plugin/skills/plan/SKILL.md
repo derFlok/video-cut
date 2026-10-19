@@ -262,7 +262,10 @@ should not cover more than 40 % of the reel.
   office", "city street rain night"), no brand or product names, no persons' names.
 - `prompt`: one English sentence for an image generator, concrete (subject, setting,
   light, composition), **no text, letters or logos in the image**, no real persons' names,
-  no brand or product names, nothing that imitates a real person.
+  no brand or product names, nothing that imitates a real person. Describe a scene only:
+  never signs, screens, labels, calendars or anything with writing on it, never "room for
+  text" or "copy space" (generators fill it with garbled letters), and no colour codes
+  (the host adds the brand colours as words).
 - `style`: `photo` or `illustration` (follow the wish; `illustration` for abstract ideas).
 - `why`: one line in the job's language: what it makes clearer.
 

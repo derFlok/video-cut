@@ -110,6 +110,8 @@ def check_app() -> Check:
 def check_models() -> list[Check]:
     checks = []
     for name, m in manifest.models().items():
+        if m.get("extra"):  # comes with its packages, see check_image
+            continue
         path = MODELS / (m.get("filename") or name)
         ok = path.exists()
         default = bool(m.get("default"))
@@ -117,6 +119,27 @@ def check_models() -> list[Check]:
         fix = "" if ok else (RESTART if default else f"optional: `videocut models pull {name}`")
         checks.append(Check(f"model {name}", ok, detail, required=default, fix=fix))
     return checks
+
+
+def check_image() -> Check:
+    """Optional local image generation: model at the pinned revision, mflux, memory."""
+    from .tools._material_providers import local_flux as lf
+
+    name = "image generation"
+    pull = "optional: `videocut models pull --image` (about 16 GB download)"
+    mem = lf.memory_gb()
+    if mem < lf.MIN_MEMORY_GB - 0.5:
+        detail = f"local: not on this Mac ({mem:.0f} GB memory, needs {lf.MIN_MEMORY_GB} GB)"
+        return Check(name, True, detail, required=False)
+    version, ready = lf.mflux_version(), lf.model_ready()
+    if version and ready:
+        return Check(name, True, f"local FLUX.2 [klein] 4B ready (mflux {version})",
+                     required=False)  # fmt: skip
+    if not version and not ready:
+        return Check(name, False, "local: optional, not installed", required=False, fix=pull)
+    missing = "model not downloaded completely" if version else "mflux package missing"
+    return Check(name, False, f"local: {missing}", required=False,
+                 fix="`videocut models pull --image` finishes it")  # fmt: skip
 
 
 SIGN_IN = (
@@ -230,6 +253,7 @@ def collect() -> list[Check]:
         check_renderer(),
         check_app(),
         *check_models(),
+        check_image(),
         *check_claude(),
         check_launcher(),
         check_default_brand(),

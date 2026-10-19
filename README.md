@@ -62,6 +62,7 @@ Video Cut is free and open source. Claude is paid through your own access:
 - 16 GB memory recommended
 - About 4 GB of disk space for the installation (about 2.5 GB is downloaded), plus room for your videos (the installer needs at least 8 GB free and recommends 15 GB)
 - Claude Code, signed in with a Claude Pro or Max plan or an Anthropic API key
+- Optional, local image generation (`videocut models pull --image`): 16 GB memory and about 8 GB more disk space (16 GB download, 26 GB free while it installs)
 
 ## Uninstall
 

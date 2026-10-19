@@ -24,13 +24,23 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("setup", help="install pinned tools and default models")
     s.add_argument("--no-models", action="store_true", help="skip model downloads")
+    s.add_argument(
+        "--image",
+        action="store_true",
+        help="also install local image generation (FLUX.2 [klein] 4B, 16 GB download)",
+    )
     d = sub.add_parser("doctor", help="check the installation (each failed check names a fix)")
     d.add_argument("--json", action="store_true", help="the checks as JSON, for a helper")
     sub.add_parser("selftest", help="run the pipeline on a generated test clip")
     m = sub.add_parser("models", help="manage models")
     msub = m.add_subparsers(dest="models_cmd", required=True)
     pull = msub.add_parser("pull", help="download an optional model")
-    pull.add_argument("name")
+    pull.add_argument("name", nargs="?")
+    pull.add_argument(
+        "--image",
+        action="store_true",
+        help="local image generation: FLUX.2 [klein] 4B (16 GB download, 8 GB kept)",
+    )
 
     u = sub.add_parser("ui", help="start the local app")
     u.add_argument(
@@ -183,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             install.run(models=not a.no_models)
+            if a.image:
+                install.install_image()
         except Exception as e:  # noqa: BLE001 — one readable line instead of a traceback
             print(
                 f"\033[31m✗ Setup failed: {e}\033[0m\n  Fix the cause and run ./start.sh again; "
@@ -201,8 +213,20 @@ def main(argv: list[str] | None = None) -> int:
         return selftest.run()
     if a.cmd == "models":
         from . import install, manifest
+        from .tools._material_providers import local_flux
 
+        if a.image or a.name == local_flux.MODEL:
+            try:
+                install.install_image()
+            except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
+                print(f"\033[31m✗ Not installed: {e}\033[0m\n  Run the command again; "
+                      "finished parts are kept.", file=sys.stderr)  # fmt: skip
+                return 1
+            return 0
         if a.name not in manifest.models():
+            if a.name is None:
+                print("name a model or pass --image; known: " + ", ".join(manifest.models()))
+                return 2
             print(f"unknown model {a.name}; known: {', '.join(manifest.models())}")
             return 2
         install.install_model(a.name)

@@ -18,8 +18,9 @@ KEYCHAIN_SERVICE = "videocut"
 KEYCHAIN_ACCOUNT = "anthropic-api-key"
 # default_brand: the brand id the new-job form preselects and the app's look follows
 # (theme_follows_brand); None is neutral.
-# Material (tools/material.py): the new-job form's default mode, the image generator, the
-# stock sources and the cost limit per job for generated images.
+# Material (tools/material.py): the new-job form's default mode, the image generator
+# (image_provider: a name from tools/_material_providers, "none" for no generated stills),
+# the stock sources and the cost limit per job for generated images.
 DEFAULTS = {
     "auth": "local",
     "model": None,
