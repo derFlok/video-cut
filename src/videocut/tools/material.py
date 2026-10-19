@@ -29,7 +29,9 @@ Files live in work/material/<n>/ (cN.mp4|jpg|png and cN_sm.jpg, ≤ THUMB px). A
 image is stored exactly as the generator returned it (its SynthID or C2PA stays intact);
 `source_sha256` is the hash of that original.
 
-The human's choices are trusted only from a record outside the job folder (agent runs may
+What was fetched is kept outside the job folder too ($VIDEOCUT_HOME/state/<job>/material.json,
+the trusted copy; work/material.json mirrors it for the skills and the app). The human's
+choices are trusted only from a record outside the job folder (agent runs may
 write work/): $VIDEOCUT_HOME/state/<job>/material_choice.json {"choices": {"<n>":
 {"candidate", "sha256", "file", "kind", "ai_generated", "wish"}}}; material.json "chosen"
 mirrors it for display. `chosen()` returns a choice only while the wish is still the one
@@ -77,6 +79,7 @@ QUERY_WORDS = (2, 8)  # a stock query has this many words (the skill asks for 3-
 PROMPT_MAX = 600
 LOCALES = {"de": "de-DE", "en": "en-US"}
 CHOICE_FILE = "material_choice.json"
+INDEX_FILE = "material.json"  # the trusted copy of work/material.json, in state/<job>/
 
 
 class MaterialError(ToolError):
@@ -148,7 +151,8 @@ def wish_errors(plan: dict, mode: str, duration: float | None = None) -> list[st
         n = w.get("n")
         if type(n) is not int or n < 1:
             errs.append(f"{p}.n: must be an integer >= 1")
-        ns.append(n)
+        if type(n) is int:
+            ns.append(n)
         kind = w.get("kind")
         if kind not in KINDS:
             errs.append(f"{p}.kind: must be one of {', '.join(KINDS)}")
@@ -183,7 +187,7 @@ def wish_errors(plan: dict, mode: str, duration: float | None = None) -> list[st
             errs.append(f"{p}.style: must be one of {', '.join(STYLES)}")
         if not (isinstance(w.get("why"), str) and w["why"].strip()):
             errs.append(f"{p}.why: must be a string")
-    if len([n for n in ns if n is not None]) != len(set(ns)):
+    if len(ns) != len(set(ns)):
         errs.append("$.material_wishes: numbers n must be unique")
     return errs
 
@@ -212,9 +216,15 @@ def approved_wishes(job: Path) -> list[dict]:
 # ------------------------------------------------------------------ material.json
 
 
+def index_path(job: Path) -> Path:
+    return state_dir() / job.resolve().name / INDEX_FILE
+
+
 def load(job: Path) -> dict:
+    """What the host fetched (the trusted copy outside the job folder; work/material.json
+    only mirrors it, so an agent run that edits that file changes nothing)."""
     try:
-        data = json.loads((job / FILE).read_text())
+        data = json.loads(index_path(job).read_text())
     except (OSError, ValueError):
         return {"version": VERSION, "wishes": [], "cost_usd": 0.0, "runs": []}
     if not isinstance(data, dict) or not isinstance(data.get("wishes"), list):
@@ -223,6 +233,9 @@ def load(job: Path) -> dict:
 
 
 def save(job: Path, data: dict) -> None:
+    """Store the trusted copy and its mirror work/material.json."""
+    index_path(job).parent.mkdir(parents=True, exist_ok=True)
+    write_json(index_path(job), data)
     (job / "work").mkdir(exist_ok=True)
     write_json(job / FILE, data)
 
@@ -285,9 +298,13 @@ def decisions(job: Path) -> dict[int, dict | None]:
         cand = next((x for x in (cands.get(w["n"]) or {}).get("candidates", [])
                      if x.get("id") == c["candidate"]), None)  # fmt: skip
         f = (job / str(c.get("file") or "")).resolve()
-        if cand is None or not f.is_relative_to(job.resolve()) or not f.is_file():
+        if (
+            cand is None
+            or cand.get("file") != c.get("file")
+            or cand.get("sha256") != c.get("sha256")
+        ):
             continue
-        if _sha(f) != c.get("sha256"):
+        if not f.is_relative_to((job / DIR).resolve()) or not f.is_file() or _sha(f) != c["sha256"]:
             continue
         out[w["n"]] = {**cand, "n": w["n"], "wish_kind": w.get("kind"), "style": w.get("style"),
                        "src_from": w.get("src_from"), "src_to": w.get("src_to")}  # fmt: skip
@@ -350,13 +367,17 @@ def choose(job: Path, n: int, candidate: str | None, say=print) -> dict:
         if cand is None:
             ids = ", ".join(c["id"] for c in w.get("candidates", [])) or "none fetched"
             raise MaterialError(f"wish {n} has no candidate {candidate!r} ({ids})")
-        f = job / cand["file"]
-        if not f.is_file():
+        f = (job / cand["file"]).resolve()
+        if not f.is_relative_to((job / DIR).resolve()) or not f.is_file():
             raise MaterialError(f"{cand['file']} is missing; fetch wish {n} again")
+        if _sha(f) != cand.get("sha256"):
+            raise MaterialError(
+                f"{cand['file']} changed since it was fetched; fetch wish {n} again"
+            )
         entry |= {
             "candidate": candidate,
             "file": cand["file"],
-            "sha256": _sha(f),
+            "sha256": cand["sha256"],
             "kind": cand.get("kind"),
             "ai_generated": bool(cand.get("ai_generated")),
         }
@@ -521,6 +542,8 @@ def _stock(job: Path, w: dict, prov_names: list[str], first: int,
             "sha256": _sha(dest), "fetched": now(), "hdr": _hdr(meta["info"]),
         })  # fmt: skip
     say(f'  wish {w["n"]}: {len(out)} stock candidate(s) for "{w["query"]}"')
+    if not out:
+        errors.append(f'wish {w["n"]}: no stock material found for "{w["query"]}"')
     return out, errors
 
 
@@ -629,20 +652,25 @@ def fetch(job: Path, only: int | None = None, query: str | None = None,
         old = w.get("candidates", [])
         do_stock = stock and mode in ("stock", "both") and w["kind"] in ("broll", "still")
         do_gen = gen and mode in ("generated", "both") and w["kind"] in ("still", "icon")
-        # a redo of only one part keeps the other part's candidates; new ones are numbered
-        # after the kept ones, so no file or id is ever shared
-        cands = [c for c in old if (not do_stock and not c.get("ai_generated"))
-                 or (not do_gen and c.get("ai_generated"))]  # fmt: skip
+        # A redo of one part keeps the other part's candidates, and a part that finds nothing
+        # keeps its old ones. New ones are numbered after every old id, so a new download
+        # never overwrites (or, failing, deletes) a file that is still listed.
+        old_stock = [c for c in old if not c.get("ai_generated")]
+        old_gen = [c for c in old if c.get("ai_generated")]
+        new_stock, new_gen = old_stock, old_gen
+        first = _next_id(old)
         if do_stock and w.get("query"):
-            got, e = _stock(job, w, stock_names, _next_id(cands), say)
-            cands += got
+            got, e = _stock(job, w, stock_names, first, say)
+            new_stock = got or old_stock
+            first += len(got)
             n_stock += len(got)
             errors += e
         if do_gen and w.get("prompt"):
-            got, e = _generate(job, w, MAX_GEN, _next_id(cands), data, say)
-            cands += got
+            got, e = _generate(job, w, MAX_GEN, max(first, _next_id(old)), data, say)
+            new_gen = got or old_gen
             n_gen += len(got)
             errors += e
+        cands = new_stock + new_gen
         w["candidates"] = cands
         _clean(job / DIR / str(w["n"]), {c["id"] for c in cands})
         save(job, data)

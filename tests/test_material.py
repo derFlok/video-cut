@@ -525,3 +525,40 @@ def test_api_fetch_needs_wishes(client):
     make_job(mode="none", wishes=[])
     r = client.post("/api/jobs/m1/material/fetch", json={})
     assert r.status_code == 409
+
+
+@media
+def test_an_edited_material_json_never_steers_the_choice_or_render(fakes):
+    job = make_job()
+    mat.fetch(job, say=lambda _: None)
+    mat.choose(job, 2, "c5", say=lambda _: None)  # a generated still
+    planted = job / "work/material/2/evil.mp4"
+    planted.write_bytes(b"x")
+    data = json.loads((job / mat.FILE).read_text())
+    for c in data["wishes"][1]["candidates"]:
+        c.update(file="work/material/2/evil.mp4", ai_generated=False, kind="video")
+    (job / mat.FILE).write_text(json.dumps(data))
+    got = mat.chosen(job)[2]
+    assert got["file"] == "work/material/2/c5.png" and got["ai_generated"]
+    # a candidate the agent adds to the mirror cannot be chosen
+    data["wishes"][1]["candidates"].append({"id": "c99", "file": "work/material/2/evil.mp4"})
+    (job / mat.FILE).write_text(json.dumps(data))
+    with pytest.raises(ToolError, match="no candidate"):
+        mat.choose(job, 2, "c99", say=lambda _: None)
+
+
+@media
+def test_a_refetch_that_finds_nothing_keeps_the_old_candidates(fakes, monkeypatch):
+    job = make_job()
+    mat.fetch(job, say=lambda _: None)
+    mat.choose(job, 1, "c1", say=lambda _: None)
+    monkeypatch.setattr(FakeStock, "search", lambda *a, **k: [])
+    with pytest.raises(ToolError, match="no material found"):
+        mat.fetch(job, 1, query="nothing to see here", say=lambda _: None)
+    assert len(mat.load(job)["wishes"][0]["candidates"]) == 4
+    assert mat.chosen(job)[1]["id"] == "c1"
+
+
+def test_plan_check_survives_odd_wish_numbers():
+    plan = plan_json([{**WISHES[0], "n": [1]}, {**WISHES[1], "n": {}}])
+    assert any(".n: must be an integer" in e for e in mat.wish_errors(plan, "both"))

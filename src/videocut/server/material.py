@@ -29,7 +29,7 @@ ACCOUNTS = tuple(a for a in settings.SECRET_ACCOUNTS if a != settings.KEYCHAIN_A
 IMAGE_PROVIDERS = ("none", "gemini", "openai", "local")
 STOCK = ("pexels", "coverr")
 BUDGET_MAX = 50.0
-FILE_RE = re.compile(r"c\d{1,2}(_sm)?\.(mp4|jpg|jpeg|png|webp)")
+FILE_RE = re.compile(r"c\d{1,3}(_sm)?\.(mp4|jpg|jpeg|png|webp)")
 MEDIA = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
          ".webp": "image/webp"}  # fmt: skip
 
@@ -203,7 +203,7 @@ def fetch_run(job: Path, body: FetchBody):
     def go(say, ask) -> int:
         stock = not body.generate
         mat.fetch(job, body.wish, None if body.generate else body.query, body.prompt,
-                  stock=stock, say=say)  # fmt: skip
+                  stock=stock, gen=body.generate or body.wish is None, say=say)  # fmt: skip
         return 5  # the material gate: the human chooses next
 
     return go

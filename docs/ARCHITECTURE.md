@@ -907,7 +907,10 @@ strings and URL queries from errors. Providers share one registry
 
 **Choice (human).** `material choose <job> <n> <id|none>` / `POST material/choose` writes
 `$VIDEOCUT_HOME/state/<job>/material_choice.json` (candidate, file, SHA-256, the wish's
-signature n/kind/span) and mirrors `chosen`/`decided` into material.json. `material.chosen()`
+signature n/kind/span) and mirrors `chosen`/`decided` into material.json. What was fetched is kept
+outside the job folder as well (`state/<job>/material.json`, the trusted copy;
+`work/material.json` is its mirror), so the candidates, their files, hashes and the AI flag
+come from the host, never from a file an agent run may edit. `material.chosen()`
 counts a choice only while the wish is still in the approved plan.json and the file still
 has that hash, so an agent run that edits material.json or swaps a file gains nothing.
 `videocut run` stops with exit code 5 (gate `material`, stage `material`, status `waiting`)
