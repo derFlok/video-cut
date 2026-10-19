@@ -3,14 +3,16 @@
 A run is a function `fn(say, ask) -> exit code` (src/videocut/run.py's `run(...)` with
 `say`/`ask` bound to the channel). Its `say` lines become events:
     {"t": "stage", "stage": ...}   a line that starts a pipeline stage ("prep:", "cut: ...");
-                                   stage ids: prep, plan, approval, cut, overlays, verify,
-                                   done, revise (a feedback run), plan_revise (a plan
+                                   stage ids: prep, plan, approval, material, cut, overlays,
+                                   verify, done, revise (a feedback run), plan_revise (a plan
                                    feedback run), error
     {"t": "tool", "text": ...}     a Claude tool call ("  · ...")
     {"t": "log", "text": ...}      everything else
 and its end:
     {"t": "gate", "gate": "plan"}    exit code 3: the plan waits for the human (/approve);
                                      stage "approval"
+    {"t": "gate", "gate": "material"} exit code 5: the material waits for the human's
+                                     choices (/material/choose); stage "material"
     {"t": "gate", "gate": "result"}  exit code 0 or 4: the reel is there (/feedback);
                                      stage "done"
     {"t": "error", "text": ...}      a failure, with the reason; stage "error"
@@ -31,7 +33,7 @@ from .. import agent
 from .. import run as pipeline
 from ..tools.common import ToolError
 
-STAGE_RE = re.compile(r"\n?(prep|plan|cut|overlays|revise|verify)\b")
+STAGE_RE = re.compile(r"\n?(prep|plan|material|cut|overlays|revise|verify)\b")
 # What a run.py stage line means in a run of each kind: a plan feedback run re-plans
 # (plan_revise), a feedback run revises the cut (revise) and then verifies.
 STAGE_BY_KIND = {
@@ -40,7 +42,8 @@ STAGE_BY_KIND = {
     # a recut keeps the approved plan ("plan: already approved"): no plan stage
     "recut": {"plan": "cut"},
 }
-GATE_CODES = {3: "plan", 0: "result", 4: "result"}
+GATE_CODES = {3: "plan", 5: "material", 0: "result", 4: "result"}
+GATE_STAGE = {"plan": "approval", "material": "material", "result": "done"}
 MAX_EVENTS = 5000  # per run; later log lines are dropped (stage/gate/done are kept)
 NOT_APPROVED = "Not approved"  # run.not_approved(): CLI hints, replaced by the gate event
 
@@ -181,7 +184,7 @@ class Runs:
                 code = fn(ch.say, no_ask)
                 gate = GATE_CODES.get(code)
                 if gate:
-                    ch.push({"t": "stage", "stage": "approval" if gate == "plan" else "done"})
+                    ch.push({"t": "stage", "stage": GATE_STAGE[gate]})
                     ch.push({"t": "gate", "gate": gate})
                 else:
                     ch.fail(f"the run ended with exit code {code}")

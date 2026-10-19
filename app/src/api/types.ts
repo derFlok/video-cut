@@ -47,6 +47,82 @@ export interface JobSlides {
   /** Where the reel shows each slide (output seconds). */
   marks: { id: string; t0: number; t1: number; layout?: string | null }[];
 }
+/** Material of a job (job.json "material"): stock footage, AI-generated stills, both. */
+export type MaterialMode = "none" | "stock" | "generated" | "both";
+export const MATERIAL_MODES: MaterialMode[] = ["none", "stock", "generated", "both"];
+export const MATERIAL_WISH_MAX = 2000;
+export type ImageProviderName = "none" | "gemini" | "openai" | "local";
+export const IMAGE_PROVIDERS: ImageProviderName[] = ["none", "gemini", "openai", "local"];
+export type StockProviderName = "pexels" | "coverr";
+export const STOCK_PROVIDERS: StockProviderName[] = ["pexels", "coverr"];
+/** Keychain accounts of the material providers' API keys (write-only from the app). */
+export type SecretAccount = "pexels-api-key" | "coverr-api-key" | "gemini-api-key" | "openai-api-key";
+export const SECRET_ACCOUNTS: SecretAccount[] = ["pexels-api-key", "coverr-api-key", "gemini-api-key", "openai-api-key"];
+
+/** GET/PUT /api/settings/material. */
+export interface MaterialSettings {
+  material_default_mode: MaterialMode;
+  image_provider: ImageProviderName;
+  stock_providers: StockProviderName[];
+  material_budget_usd: number;
+  image_providers: { name: Exclude<ImageProviderName, "none">; available: boolean; reason: string; registered: boolean }[];
+  secrets: Record<SecretAccount, boolean>;
+}
+
+export type MaterialKind = "broll" | "still" | "icon";
+export type MaterialStyle = "photo" | "illustration";
+
+/** A material wish of the plan (plan.json "material_wishes"). */
+export interface MaterialWish {
+  n: number;
+  kind: MaterialKind;
+  src_from: number;
+  src_to: number;
+  query?: string | null;
+  prompt?: string | null;
+  style?: MaterialStyle;
+  why?: string;
+}
+
+export interface MaterialCandidate {
+  id: string;
+  kind: "video" | "image";
+  thumb_url: string;
+  file_url: string;
+  width: number;
+  height: number;
+  duration_s?: number | null;
+  source: string;
+  source_url?: string | null;
+  author?: string | null;
+  licence: string;
+  attribution?: string | null;
+  ai_generated: boolean;
+  model?: string | null;
+  watermark?: string | null;
+}
+
+/** GET /api/jobs/{id}/material (also the answer of a choice). */
+export interface MaterialView {
+  mode: MaterialMode;
+  image_provider: ImageProviderName;
+  budget_usd: number;
+  cost_usd: number;
+  wishes: (MaterialWish & { decided: boolean; chosen: string | null; candidates: MaterialCandidate[] })[];
+  pending: number[];
+  fetched: boolean;
+}
+
+/** Job detail "material". */
+export interface JobMaterial {
+  mode: MaterialMode;
+  wish: string;
+  stale: boolean;
+  wishes: number;
+  pending: number[];
+  fetched: boolean;
+}
+
 /** The range the plan aims for; null: no fixed length. */
 export interface TargetRange {
   min_s: number;
@@ -60,6 +136,7 @@ export type Stage =
   | "prep"
   | "plan"
   | "approval"
+  | "material"
   | "cut"
   | "overlays"
   | "verify"
@@ -321,6 +398,9 @@ export interface JobDetail {
   plan_target_stale?: boolean;
   plan_target_s?: number | null;
   slides?: JobSlides;
+  material?: JobMaterial;
+  /** Where the job waits for the human (status "waiting"). */
+  gate?: "plan" | "material" | "result" | null;
   /** Length of the camera recording (work/probe.json), for the duration hints. */
   source_duration_s?: number | null;
   has_screen?: boolean;
@@ -355,6 +435,7 @@ export interface PlanJson {
   overlays?: { scene?: string; t0?: number; t1?: number; text?: string; [k: string]: unknown }[];
   personal_data?: PdCandidate[];
   slides?: PlanSlide[];
+  material_wishes?: MaterialWish[];
   risks?: (string | { text?: string; [k: string]: unknown })[];
   change_note?: string;
   /** The target the plan was made for and its estimate of the output length (seconds). */
@@ -374,7 +455,7 @@ export type JobEvent =
   | { t: "stage"; stage: Stage; at?: string }
   | { t: "log"; text: string }
   | { t: "tool"; text: string }
-  | { t: "gate"; gate: "plan" | "result" }
+  | { t: "gate"; gate: "plan" | "material" | "result" }
   | { t: "done"; ok: boolean }
   | { t: "error"; text: string };
 

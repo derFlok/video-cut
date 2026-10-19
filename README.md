@@ -40,6 +40,12 @@ Only this, only to Anthropic, and only through your own Claude access:
 - **small, downscaled still images** at the points where Claude has to decide something,
 - **screen text read on your Mac** (OCR) when you add a screen recording, screenshots or slides.
 
+Only when you switch on **material** for a video (off by default): the English search words
+of each wish go to the stock libraries you enabled (Pexels, Coverr) with the orientation and
+language, and the one-sentence picture description plus your brand's colour codes go to the
+image generator you chose (Google Gemini or OpenAI), with your own keys. Never a recording,
+a frame, a logo or a name.
+
 Recordings, audio and finished videos stay on your Mac. Video Cut sends nothing to anyone else: no telemetry, no statistics, no account. Downloads happen only at installation and updates (the tools and models listed in [`manifest/tools.json`](manifest/tools.json)). Claude Code itself is Anthropic's program and follows Anthropic's own [data usage rules](https://code.claude.com/docs/en/data-usage).
 
 ## What it costs
@@ -262,6 +268,27 @@ covered in the video.
 While a slide is on screen, no card or keyword is shown on top: the slide carries the
 content. Captions stay where you talk next to a slide: in a portrait or square video
 they sit on the line between the slide and you, clear of the slide's text and your face.
+
+## B-roll and generated pictures
+
+With **material** on, the plan proposes a few moments where a picture helps (at most one
+per 8 seconds): a short stock clip shown full screen while you keep talking (B-roll), a
+stock photo, or a generated picture. After you approve the plan, Video Cut searches Pexels
+and Coverr and/or asks the image generator, and shows the candidates per moment with their
+licence and credit; you pick one or "no material", search again with other words, or
+generate again. Only what you picked goes into the video. Generated pictures are marked
+"AI" in the app, their original files keep the generator's watermark (SynthID / C2PA), and a cost limit per video
+(default USD 1) stops generation before it gets expensive.
+
+Set it up once under **Settings → Material**: your Pexels key (free), optionally Coverr, and
+a Gemini or OpenAI key for generated pictures. Keys are kept in your Mac's keychain only.
+
+```bash
+.venv/bin/videocut run ~/Movies/me.mov --material-mode both --material-wish "calm office scenes"
+.venv/bin/videocut tool material show <id>                 # the candidates per wish
+.venv/bin/videocut tool material choose <id> 1 c2          # your pick (or: none)
+.venv/bin/videocut run <id>                                # cut with it (--material-skip: none)
+```
 
 ## Brands
 

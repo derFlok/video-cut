@@ -5,6 +5,7 @@ import {
   type BrandSummary,
   type CutStyleChoice,
   type FormatChoice,
+  type MaterialMode,
   type RedactStyle,
   type SlidesMode,
   type TargetChoice,
@@ -14,6 +15,7 @@ import {
 import { AspectIcon } from "../components/AspectIcon";
 import { CutStyleSelect } from "../components/CutStyle";
 import { RedactStyleSelect } from "../components/RedactStyle";
+import { MaterialPicker, materialErrors, useMaterialDefault } from "../components/Material";
 import { SlidesPicker, needsFiles, slideErrors } from "../components/Slides";
 import { TargetSelect } from "../components/TargetLength";
 import { DropZone, formatBytes, hasExt, IMAGE_EXT, VIDEO_EXT } from "../components/DropZone";
@@ -66,6 +68,11 @@ export function NewJob() {
   const [slidesMode, setSlidesMode] = useState<SlidesMode>("none");
   const [slideFiles, setSlideFiles] = useState<File[]>([]);
   const [slidesWish, setSlidesWish] = useState("");
+  // null until the human picks one: the setting's default applies
+  const [materialPick, setMaterialMode] = useState<MaterialMode | null>(null);
+  const materialDefault = useMaterialDefault();
+  const materialMode: MaterialMode = materialPick ?? materialDefault ?? "none";
+  const [materialWish, setMaterialWish] = useState("");
   const [tried, setTried] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState<"idle" | "upload" | "start">("idle");
@@ -88,6 +95,7 @@ export function NewJob() {
   if (target === undefined) errors.push(t("target.custom.invalid"));
   const sendFiles = needsFiles(slidesMode) ? slideFiles : [];
   errors.push(...slideErrors(slidesMode, sendFiles, slidesWish, t));
+  errors.push(...materialErrors(materialWish, t));
   const busy = phase !== "idle";
 
   const submit = async (e: FormEvent) => {
@@ -114,6 +122,8 @@ export function NewJob() {
           slides_mode: slidesMode,
           slides_wish: slidesMode === "none" ? undefined : slidesWish.trim() || undefined,
           slides: sendFiles,
+          material_mode: materialMode,
+          material_wish: materialMode === "none" ? undefined : materialWish.trim() || undefined,
         },
         (p) => setProgress(p.total ? Math.round((p.loaded / p.total) * 100) : null),
       );
@@ -246,6 +256,8 @@ export function NewJob() {
           )
         }
       />
+
+      <MaterialPicker mode={materialMode} onMode={setMaterialMode} wish={materialWish} onWish={setMaterialWish} disabled={busy} />
 
       <fieldset className="stack">
         <legend className="h2">{t("new.look")}</legend>

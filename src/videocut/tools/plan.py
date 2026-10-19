@@ -17,6 +17,8 @@ work/project.md that the plan run writes for the app.
      "slides": [{"id": "s1", "template": "steps", "content": {...}, "t0": t0, "t1": t1,
                  "layout": "slide", "why": "...", "source": "auto",
                  "still": "work/slides/stills/s1.jpg"}],
+     "material_wishes": [{"n": 1, "kind": "broll", "src_from": t0, "src_to": t1,
+                          "query": "...", "prompt": "...", "style": "photo", "why": "..."}],
      "risks": ["..."]}
 
 All times are source (camera) seconds. `views` is empty for a talking-head job.
@@ -31,8 +33,12 @@ measured ("measured"), otherwise the check fails. `still`, `still_t` (camera s) 
 ids, templates and content) with the source time of the words each slide illustrates
 (inside a kept range, no two at once) and its EDL layout; the job's slides mode limits what
 may be there (none: nothing; upload: only the human's pages, template "image"; auto: no
-"image"). `still` is the slide's preview (`videocut tool slides stills`). Prints one line
-per problem with its JSON path.
+"image"). `still` is the slide's preview (`videocut tool slides stills`).
+
+`material_wishes` (optional; job.json "material", tools/_job_material.py) are checked by
+tools/material.wish_errors: none for mode none, at most one per 8 s of the target length,
+each inside one keep row, kinds by mode, a stock query and/or a generator prompt. Prints
+one line per problem with its JSON path.
 """
 
 import json
@@ -40,7 +46,8 @@ from pathlib import Path
 
 from .. import redaction
 from ..edl import SCREEN_LAYOUTS, SLIDE_ID_RE, SLIDE_LAYOUTS
-from . import _format, _job_slides
+from . import _format, _job_material, _job_slides
+from . import material as material_tool
 from . import slides as slides_tool
 from .brand import SAMPLES
 from .common import ToolError, job_parent, read_job, resolve_job, run_tool
@@ -88,6 +95,7 @@ def _numbered(items: list, key: str) -> list[str]:
 def validate(
     data, fmt: str | None = None, duration: float | None = None, has_screen: bool = True,
     candidates: list[dict] | None = None, slides: dict | None = None,
+    material_mode: str | None = None,
 ) -> list[str]:  # fmt: skip
     """Problems in a plan.json dict; empty = valid. `fmt`: the job's output format;
     `candidates`: work/redaction.json's list (None: no file) that personal_data must repeat;
@@ -178,6 +186,7 @@ def validate(
     errs += _unmeasured(candidates or [])
 
     errs += _slide_errors(data, duration, slides)
+    errs += material_tool.wish_errors(data, material_mode or "both", duration)
 
     risks, e = _items(data, "risks")
     errs += e + [f"$.risks[{i}]: must be a string" for i, r in enumerate(risks) if not _text(r)]
@@ -330,7 +339,10 @@ def check_job(job: Path, path: Path | None = None) -> tuple[dict, list[str]]:
         cands = redaction.load(job)
     except redaction.RedactionError as e:
         return data, [str(e)]
-    errs = validate(data, fmt, duration, bool(meta.get("screen")), cands, slides_context(job, meta))
+    errs = validate(
+        data, fmt, duration, bool(meta.get("screen")), cands, slides_context(job, meta),
+        _job_material.stored(meta)["mode"],
+    )  # fmt: skip
     return data, errs
 
 
@@ -353,6 +365,7 @@ def check(args) -> dict:
         "overlays": len(data.get("overlays") or []),
         "personal_data": len(data.get("personal_data") or []),
         "slides": len(data.get("slides") or []),
+        "material_wishes": len(data.get("material_wishes") or []),
         "stills": sum(
             1 for it in (data.get("views") or []) + (data.get("personal_data") or [])
             if isinstance(it, dict) and it.get("still")

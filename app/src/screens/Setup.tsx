@@ -3,6 +3,7 @@
 // it said. An API key is sent once to the server, which keeps it in the macOS keychain.
 
 import { useEffect, useState } from "react";
+import { MaterialSettingsPanel } from "../components/Material";
 import { ApiError, api } from "../api/client";
 import type { AuthMode, BrandSummary, SetupStatus, SetupTest } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -306,6 +307,7 @@ export function Settings({ onSaved }: { onSaved?: () => void }) {
         </section>
       )}
       <BrandLook />
+      <MaterialSettingsPanel />
       {version && <p className="muted">{t("settings.version", { v: version })}</p>}
     </div>
   );

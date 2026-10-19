@@ -45,6 +45,7 @@ export function activity(job: JobDetail, running: boolean, kind: RunKind, lines:
   const stage = job.stage;
   if (!running) {
     if (stage === "approval") return t("now.approval");
+    if (stage === "material") return t("now.material.choose");
     if (stage === "done") return job.cut_stale ? t("now.stale") : t("now.done");
     if (stage === "error" || job.status === "error") {
       const at = job.failed_stage && job.failed_stage !== "error" ? t(`stage.${job.failed_stage}` as TKey) : null;
@@ -68,6 +69,8 @@ export function activity(job: JobDetail, running: boolean, kind: RunKind, lines:
     }
     case "overlays":
       return t("now.overlays");
+    case "material":
+      return t("now.material");
     case "verify":
       return kind === "revise" ? t("now.verify.revise") : t("now.verify");
     case "revise":
@@ -93,6 +96,8 @@ export function expectedSeconds(stage: Stage, duration_s: number | null | undefi
       return 120 + 1.4 * d;
     case "verify":
       return 20 + 0.2 * d;
+    case "material":
+      return 60;
     case "revise":
       return 60 + 0.6 * d;
     default:
@@ -121,6 +126,7 @@ export function lockReason(job: JobDetail, running: boolean, kind: RunKind, send
       case "prep":
       case "plan":
       case "plan_revise":
+      case "material":
         return t("lock.plan");
       default:
         return t("lock.busy");

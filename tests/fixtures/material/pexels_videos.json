@@ -1,0 +1,14 @@
+{"page": 1, "per_page": 4, "total_results": 2, "url": "https://www.pexels.com/search/videos/city/",
+ "videos": [
+  {"id": 101, "width": 2160, "height": 3840, "duration": 12, "url": "https://www.pexels.com/video/city-rain-101/",
+   "image": "https://images.pexels.com/videos/101/pictures/preview-0.jpg",
+   "user": {"id": 9, "name": "Zentra Lumen", "url": "https://www.pexels.com/@zentra"},
+   "video_files": [
+     {"id": 1, "quality": "sd", "file_type": "video/mp4", "width": 540, "height": 960, "link": "https://videos.pexels.com/video-files/101/101-sd_540_960.mp4"},
+     {"id": 2, "quality": "hd", "file_type": "video/mp4", "width": 1080, "height": 1920, "link": "https://videos.pexels.com/video-files/101/101-hd_1080_1920.mp4"},
+     {"id": 3, "quality": "uhd", "file_type": "video/mp4", "width": 2160, "height": 3840, "link": "https://videos.pexels.com/video-files/101/101-uhd_2160_3840.mp4"},
+     {"id": 4, "quality": "hls", "file_type": "hls", "width": null, "height": null, "link": "https://player.vimeo.invalid/x.m3u8"}]},
+  {"id": 102, "width": 1080, "height": 1920, "duration": 8, "url": "https://www.pexels.com/video/street-102/",
+   "image": "https://images.pexels.com/videos/102/pictures/preview-0.jpg",
+   "user": {"id": 10, "name": "Mira Quell", "url": "https://www.pexels.com/@mira"},
+   "video_files": [{"id": 5, "quality": "hd", "file_type": "video/mp4", "width": 1080, "height": 1920, "link": "https://videos.pexels.com/video-files/102/102-hd_1080_1920.mp4"}]}]}

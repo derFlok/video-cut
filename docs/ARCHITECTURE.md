@@ -56,6 +56,7 @@
 | `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets`, `sheet slides` | `sheets.py` |
 | `edl check [file]`, `edl snap [--dry-run]`, `edl locate <t> [--source]` | `edl.py` |
 | `slides check [job]`, `slides stills [job] [--id]`, `slides render [job] [--force]` | `slides.py` |
+| `material fetch [job] [--wish N --query/--prompt]`, `material generate`, `material choose <job> <n> <id\|none>`, `material show [job]`, `job material [job] [--mode] [--wish]` | `material.py`, `_material_providers/`, `_job_material.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
 
@@ -80,8 +81,9 @@ job.json   id, created, source (relative), type, brief, status, approval, brand,
            vocabulary (optional, the video's own terms; see Transcript vocabulary),
            redact_style (optional auto|blur|crop|block; absent = the brand's
            redaction.style, default auto),
+           material (optional {mode, wish}; plan_material: what the plan was made for),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
-           format and cut style of the cut)
+           format, cut style and chosen material of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
 work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4        ingest
            screen_probe.json, screen_audio.wav (+ screen_audio.json),
@@ -107,6 +109,7 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            slides.json (the slides as data)                                     plan run
            slides/stills/<id>.jpg, <id>_sm.jpg (≤ 960 px), <id>.layout.json    slides stills
            slides/<id>.mov, <id>.json (layout report), <id>.spec.json           slides render
+           material.json, material/<n>/c<k>.mp4|jpg|png, c<k>_sm.jpg           material fetch
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
            verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg,
            slides_NN.jpg                                                         verify
@@ -856,6 +859,72 @@ a plan run in revise-the-plan mode. The text goes to `work/plan_feedback.json` (
 the run); the skill changes only what the feedback asks and adds a "Changed after feedback"
 line. The approval is sha-bound, so a changed plan needs a new approval (the API also revokes
 an existing one before the run starts).
+
+## Material (B-roll and generated stills)
+
+`tools/_job_material.py`, `tools/material.py`, `tools/_material_providers/`,
+`server/material.py`, `app/src/components/Material.tsx`.
+
+**Setting.** job.json `material` = `{mode, wish}`: `none` (absent), `stock` (stock video and
+photos), `generated` (AI stills), `both`; the wish ≤ 2000 characters. Human only (`job
+material`, `run --material-mode/--material-wish`, the new-job form, whose default is
+settings `material_default_mode`); refused in an agent run. Like slides it changes the
+plan: a plan run records `plan_material`, a change makes the plan stale and revokes an
+approval. Settings also hold `image_provider` (none | gemini (default) | openai | local),
+`stock_providers` (pexels, coverr) and `material_budget_usd` (default 1.00 per job). Keys
+live only in the keychain, service `videocut`, accounts `pexels-api-key`, `coverr-api-key`,
+`gemini-api-key`, `openai-api-key` (`settings.set_secret/secret/has_secret`; `api_key()` /
+`set_api_key()` are the wrappers for `anthropic-api-key`); the API takes them write-only
+(`PUT /api/settings/secrets`, GET says only which are stored).
+
+**Plan (agent, no network).** The plan skill writes `material_wishes` [{n, kind
+broll|still|icon, src_from, src_to, query, prompt, style photo|illustration, why}] into
+plan.json and a *Material* table into project.md. `plan check` (`material.wish_errors`):
+none for mode none; at most one wish per 8 s of the plan's target (else estimate, else the
+keep rows' sum); each span ≥ 1 s inside one keep row; broll only with stock, icon only with
+a generator; a 2–8 word stock query where stock is searched, a prompt (≤ 600 characters)
+where one is generated. The human approves the wishes with the plan.
+
+**Fetch (host).** After the approval, `videocut run` (or `POST /api/jobs/{id}/material/fetch`,
+a queued run of kind `material`) calls `material fetch`: for broll/still wishes the stock
+providers in settings order (Pexels videos then photos with `orientation` from the job
+format, `locale` de-DE/en-US from the job language, `size=medium`; Coverr videos filtered by
+`is_vertical`), up to 4 candidates, each downloaded in the smallest rendition whose short
+side reaches the output's, cut to 30 s without re-encoding, probed, thumbed (≤ 480 px) and
+hashed; for still/icon wishes with mode generated/both the image provider makes up to 2
+(prompt + style words + the brand's hex colours + "no text"; Gemini: Interactions API,
+model `gemini-nano-banana-2.1`, `response_format` aspect ratio and 1K/2K; OpenAI: Image API,
+`gpt-image-2.5-flare`, a 16-px-aligned size of the output aspect, quality medium). The
+generator's file is stored byte for byte (SynthID / C2PA intact; `source_sha256`). Cost
+guard: the estimate (published per-image prices: Gemini 2K $0.0504, OpenAI ~$0.06) plus what
+the job spent must stay within the budget, otherwise generation is refused with a plain
+message and the stock part still runs. Every fetch appends to material.json `runs` and to
+`work/runs.jsonl` (`phase: material`). The HTTP helper refuses non-HTTPS and any call under
+`VIDEOCUT_AGENT=1`, waits on 429 (Retry-After, else 2^k s; 3 times), and scrubs key-like
+strings and URL queries from errors. Providers share one registry
+(`register_provider/get_provider/providers`); the local generator registers itself as
+`local`.
+
+**Choice (human).** `material choose <job> <n> <id|none>` / `POST material/choose` writes
+`$VIDEOCUT_HOME/state/<job>/material_choice.json` (candidate, file, SHA-256, the wish's
+signature n/kind/span) and mirrors `chosen`/`decided` into material.json. `material.chosen()`
+counts a choice only while the wish is still in the approved plan.json and the file still
+has that hash, so an agent run that edits material.json or swaps a file gains nothing.
+`videocut run` stops with exit code 5 (gate `material`, stage `material`, status `waiting`)
+while a wish is open, printing `material show` and the choose command; `--material-skip`
+chooses none for every open wish. The cut record carries `material_sha256` (a changed choice
+makes the cut stale). A Coverr pick is reported to Coverr's download counter (its API terms).
+
+**App.** New job: "Material" (Keins / Stock-Material / KI-Bilder / Beides, wish). Settings:
+section Material (default mode, generator — "local" only when registered, disabled with its
+reason when not available —, stock libraries, cost limit, the four keys write-only). Plan
+view: the wishes. Material screen (between approval and cut): per wish the why, candidates
+as thumbs (videos play muted on hover/click), licence and attribution, a "KI" marker on
+generated ones, choose / "Kein Material" / "Neu suchen" (edited query) / "Neu erzeugen"
+(edited prompt), progress while fetching, cost against the budget, then "Weiter zum
+Schnitt" (`/start`). Candidate files are served only from `work/material/<n>/c<k>[_sm].<ext>`.
+
+<!-- render -->
 
 ## Revision runs (`run.revise`, skill `revise`)
 

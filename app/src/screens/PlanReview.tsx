@@ -4,6 +4,7 @@ import type { PdCandidate, Plan, PlanJson, PlanKeep, RedactionDecision, RedactSt
 import { ErrorBanner } from "../components/ErrorBanner";
 import { LiveLog } from "../components/LiveLog";
 import { Markdown } from "../components/Markdown";
+import { PlanMaterialWishes } from "../components/Material";
 import { SlideCards } from "../components/Slides";
 import { TargetPanel } from "../components/TargetLength";
 import { clockFine, useI18n } from "../i18n";
@@ -76,7 +77,8 @@ export function PlanReview({ live }: { live: Live }) {
     plan !== null &&
     job.status !== "running" &&
     !job.plan_target_stale &&
-    !job.slides?.stale;
+    !job.slides?.stale &&
+    !job.material?.stale;
   const canAsk = !job.approved && !revising && !live.running;
 
   const sendAsk = async (e: FormEvent) => {
@@ -366,6 +368,8 @@ export function StructuredPlan({
       {plan.slides && plan.slides.length > 0 && (
         <SlideCards jobId={jobId} slides={plan.slides} keep={plan.keep_list} canAsk={canAsk} onAsk={onSlide} />
       )}
+
+      {plan.material_wishes && plan.material_wishes.length > 0 && <PlanMaterialWishes wishes={plan.material_wishes} />}
 
       {plan.overlays && plan.overlays.length > 0 && (
         <div className="stack-sm">

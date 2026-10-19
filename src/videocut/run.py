@@ -48,6 +48,14 @@ every plan run records the length it was made for (job.json "plan_target").
 target length they change what the plan contains: a plan made for other slides is planned
 again and needs a new approval (job.json "plan_slides"). The cut and overlay runs must keep
 the approved slides' content (work/slides.json against the approved work/plan.json).
+`--material-mode none|stock|generated|both` and `--material-wish TEXT` set the job's material
+(job.json "material", tools/_job_material.py); like the slides they change the plan (job.json
+"plan_material"). After the approval, a job with material wishes in the approved plan.json
+runs `tool material fetch` here on the host (stock search and downloads, image generation)
+and stops with exit code 5 until the human has chosen a candidate or "none" for every wish
+(`tool material choose`, or the app's Material screen); `--material-skip` chooses none for
+every open wish. The cut may only use chosen material, and a changed choice makes the cut
+stale (job.json "cut" "material_sha256").
 `--vocab "Term=variant,..."` gives a new job its transcript vocabulary (job.json
 "vocabulary", tools/vocab.py); transcribe applies it together with the brand's.
 The overlay stage runs when `--brand` is given or when the brand's overlays are not done for
@@ -76,7 +84,8 @@ from . import redaction as red
 from .edl import SCREEN_LAYOUTS
 from .edl import segments_sha as edl_segments_sha
 from .paths import ROOT
-from .tools import _format, _job_slides, _length, _redact_style, _style
+from .tools import _format, _job_material, _job_slides, _length, _redact_style, _style
+from .tools import material as material_tool
 from .tools import transcript as transcript_edits
 from .tools.common import ToolError, read_job, resolve_job, update_job
 from .tools.job import (
@@ -140,6 +149,15 @@ SLIDES_NOTE = (
     ' Slides (job.json "slides", a human sets them): mode {mode}, {pages} uploaded page(s)'
     "{wish}; `videocut tool job show` -> slides."
 )
+MATERIAL_NOTE = (
+    ' Material (job.json "material", a human sets it): mode {mode}{wish}; `videocut tool job '
+    "show` -> material."
+)
+MATERIAL_CUT_NOTE = (
+    " Material the human chose (B-roll and stills): {count} item(s); `videocut tool material "
+    "show` -> chosen. Use only these, only inside their wish's span."
+)
+MATERIAL_WAIT = 5  # exit code: the material waits for the human's choices
 TARGET_CHANGED = (
     " The human changed the target length since this plan was made (it was made for "
     "{old}, now: {new}): fit the keep list to the new length (never pad; if the material "
@@ -510,6 +528,8 @@ def cut_done(job: Path) -> bool:
             # (a record from before redaction styles: it stays until the style is changed,
             # which stamps the record, tools/job.set_redact_style)
             and rec.get("redact_style", drawn_now := _redact_style_used(job)) == drawn_now
+            # (a record from before material: it had none)
+            and rec.get("material_sha256", mat_now := material_tool.choices_sha(job)) == mat_now
         )
     vfile = job / "out" / "verify.json"
     try:
@@ -574,6 +594,7 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "cut_style": resolved_style(read_job(job)),
             "target_s": read_job(job).get("target_s"),
             "redact_style": _redact_style_used(job),
+            "material_sha256": material_tool.choices_sha(job),
             "verify_ok": bool(verify.get("ok")),
         },
         overlays=None,  # a new cut has no overlays yet
@@ -739,7 +760,53 @@ def format_note(job: Path) -> str:
         + STYLE_NOTE.format(name=resolved_style(data), splice=splice, lang=LANG_NAMES[lang], **st)
         + TARGET_NOTE.format(note=_length.describe(data))
         + slides_note(job, data)
+        + material_note(job, data)
     )
+
+
+def material_note(job: Path, data: dict) -> str:
+    m = _job_material.stored(data)
+    if m["mode"] == "none":
+        return ""
+    note = MATERIAL_NOTE.format(
+        mode=m["mode"], wish=" and a wish from the human" if m["wish"] else ""
+    )
+    if is_approved(job) and material_tool.approved_wishes(job):
+        note += MATERIAL_CUT_NOTE.format(count=len(material_tool.chosen(job)))
+    return note
+
+
+def material_stage(job: Path, skip: bool, say=print) -> int | None:
+    """After the approval, before the cut: fetch candidates for the approved plan's
+    material wishes (host side) and wait for the human's choice for every wish.
+    MATERIAL_WAIT while one is open, None when the cut may go on."""
+    if not material_tool.approved_wishes(job):
+        return None
+    data = material_tool.synced(job)
+    decided = material_tool.decisions(job)
+    todo = [w["n"] for w in data["wishes"] if not w.get("candidates") and w["n"] not in decided]
+    if todo and not skip:
+        say(f"material: fetching candidates for wish(es) {', '.join(map(str, todo))}")
+        for n in todo:
+            try:
+                material_tool.fetch(job, n, say=say)
+            except ToolError as e:
+                say(f"material: wish {n}: {e}")
+    if skip:
+        for n in material_tool.choose_all_none(job, say=lambda _: None):
+            say(f"material: wish {n}: no material (--material-skip)")
+    left = material_tool.pending(job)
+    if not left:
+        say(f"material: {len(material_tool.chosen(job))} item(s) chosen")
+        return None
+    for line in material_tool.table(job):
+        say(line)
+    say(
+        f"material: waiting for your choice for wish(es) {', '.join(map(str, left))}: "
+        f"videocut tool material choose {job.name} <n> <candidate id|none>, then "
+        f"videocut run {job.name} (or --material-skip for no material)"
+    )
+    return MATERIAL_WAIT
 
 
 def slides_note(job: Path, data: dict) -> str:
@@ -803,6 +870,8 @@ def stale_why(job: Path) -> str:
         why.append(f"the cut style changed from {rec.get('cut_style')} to {style}")
     if rec.get("redact_style", drawn := _redact_style_used(job)) != drawn:
         why.append(f"personal data is now shown as {drawn}, not {rec.get('redact_style')}")
+    if rec.get("material_sha256", mat := material_tool.choices_sha(job)) != mat:
+        why.append("the chosen material changed")
     if rec.get("target_s", target := data.get("target_s")) != target:
         why.append(
             f"the target length changed from {_length.label(rec.get('target_s'))} to "
@@ -1304,6 +1373,9 @@ def run(
     slides_mode: str | None = None,
     slides_wish: str | None = None,
     plan_feedback_slide: str | None = None,
+    material_mode: str | None = None,
+    material_wish: str | None = None,
+    material_skip: bool = False,
 ) -> int:
     if not agent.claude_cli.exe():
         raise RunError(agent.claude_cli.NOT_FOUND + "; see docs/AUTH.md")
@@ -1311,12 +1383,13 @@ def run(
         raise RunError("--at needs --feedback")
     others = (plan_feedback, replan or None, recut or None, brand, type_, brief, assets, screen,
               format_, cut_style, target, vocab or None, redact_style, slides_mode,
-              slides_wish)  # fmt: skip
+              slides_wish, material_mode, material_wish)  # fmt: skip
     if feedback is not None and any(v is not None for v in others):
         raise RunError(
             "--feedback revises the finished reel; it cannot be combined with --plan-feedback, "
             "--replan, --recut, --brand, --type, --brief, --asset, --screen, --format, "
-            "--cut-style, --target, --vocab, --redact-style, --slides-mode or --slides-wish"
+            "--cut-style, --target, --vocab, --redact-style, --slides-mode, --slides-wish, "
+            "--material-mode or --material-wish"
         )
     if redact_style is not None:
         _check_redact_style(redact_style)
@@ -1324,11 +1397,17 @@ def run(
         _job_slides.parse_mode(slides_mode)  # before a job is made
     if slides_wish is not None:
         _job_slides.parse_wish(slides_wish)
+    if material_mode is not None:
+        _job_material.parse_mode(material_mode)
+    if material_wish is not None:
+        _job_material.parse_wish(material_wish)
     job = open_job(ref, type_, brief, assets, screen, format_, say, cut_style, target, vocab)
     if redact_style is not None:
         set_redact_style(job, redact_style, say)  # a reel in another style goes stale
     if slides_mode is not None or slides_wish is not None:
         _job_slides.set_slides(job, slides_mode, slides_wish, say)  # a plan for others: stale
+    if material_mode is not None or material_wish is not None:
+        _job_material.set_material(job, material_mode, material_wish, say)
     say(f"job: {job}")
     if feedback is not None:
         return revise(job, feedback, at_s, max_turns, say)
@@ -1346,6 +1425,9 @@ def run(
     slides_changed = _job_slides.plan_stale(job)
     if slides_changed and not replan:
         say("plan: work/project.md was made for other slides; planning again")
+        replan = True
+    if _job_material.plan_stale(job) and not replan:
+        say("plan: work/project.md was made for other material; planning again")
         replan = True
     if brand:
         update_job(job, brand=brand_id(brand))
@@ -1383,6 +1465,7 @@ def run(
             try:
                 planned_for = read_job(job).get("target_s")  # what the prompt asked for
                 slides_for = _job_slides.signature(job)
+                material_for = _job_material.stored(read_job(job))
                 res = claude(job, "plan", prompt, max_turns, None, say)
             finally:
                 request.unlink(missing_ok=True)
@@ -1396,6 +1479,7 @@ def run(
                 raise RunError("the plan run wrote an EDL or rendered; it must only plan")
             stamp_plan_target(job, planned_for)  # the target this plan run was asked for
             _job_slides.stamp_plan(job, slides_for)  # and the slides
+            _job_material.stamp_plan(job, material_for)  # and the material
             if plan_target_stale(job):
                 say("plan: the target length changed during the plan run; plan again")
             plan_session, plan_sha = res.session_id, project_sha(job)
@@ -1412,6 +1496,8 @@ def run(
         decide_personal_data(job, demo_data, interactive, ask, say)
 
     approved_sha = read_approval(job)["project_sha256"]
+    if (code := material_stage(job, material_skip, say)) is not None:
+        return code
     if cut_done(job) and not recut and not plan_session:
         say("cut: already done for the approved plan (--recut cuts again)")
         if not isinstance(read_job(job).get("cut"), dict):
@@ -1567,6 +1653,9 @@ def main(args) -> int:
             redact_style=args.redact_style,
             slides_mode=args.slides_mode,
             slides_wish=args.slides_wish,
+            material_mode=args.material_mode,
+            material_wish=args.material_wish,
+            material_skip=args.material_skip,
             say=functools.partial(print, flush=True),  # progress also when piped to a log
         )
     except (RunError, agent.AgentError, ToolError) as e:

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { JobDetail, JobEvent, Stage } from "../api/types";
 import { CutStylePanel } from "../components/CutStyle";
+import { MaterialScreen, showMaterial } from "../components/Material";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { JobHeader } from "../components/JobHeader";
 import { LiveLog, type LogLine } from "../components/LiveLog";
@@ -17,7 +18,7 @@ import { PlanReview } from "./PlanReview";
 import { Result } from "./Result";
 
 const MAX_LINES = 600;
-const GATES: Stage[] = ["approval", "done", "error"];
+const GATES: Stage[] = ["approval", "material", "done", "error"];
 
 export interface Live {
   job: JobDetail | null;
@@ -194,9 +195,13 @@ export function JobPage({ id }: { id: string }) {
     }
   };
 
-  const atGateOrLater = ["approval", "cut", "overlays", "verify", "done", "revise", "plan_revise"].includes(job.stage) || job.approved;
+  const atGateOrLater = ["approval", "material", "cut", "overlays", "verify", "done", "revise", "plan_revise"].includes(job.stage) || job.approved;
   const showPlan = atGateOrLater && !(job.outputs?.reel && job.approved && job.stage !== "plan_revise");
-  const canStart = !running && (job.status === "new" || job.status === "error" || (job.stage === "prep" && job.status !== "waiting"));
+  const materialOpen = showMaterial(job);
+  const canStart =
+    !running &&
+    !(materialOpen && job.stage === "material") &&
+    (job.status === "new" || job.status === "error" || (job.stage === "prep" && job.status !== "waiting"));
 
   return (
     <div className="stack-lg">
@@ -209,7 +214,12 @@ export function JobPage({ id }: { id: string }) {
       </div>
 
       <section className="panel stack">
-        <Stepper stage={job.stage} status={running ? "running" : job.status} lastGood={live.lastStage} />
+        <Stepper
+          stage={job.stage}
+          status={running ? "running" : job.status}
+          lastGood={live.lastStage}
+          material={!!job.material && job.material.mode !== "none"}
+        />
         <StatusLine live={live} />
         <div className="meta-row">
           <span>{t("job.elapsed", { t: clock(wall) })}</span>
@@ -231,7 +241,14 @@ export function JobPage({ id }: { id: string }) {
       <CaptionsRefreshBanner live={live} />
       <JobVocabularyPanel live={live} />
       {job.status !== "new" && job.stage !== "prep" && <TranscriptPanel live={live} />}
-      {showPlan && <PlanReview live={live} />}
+      {materialOpen && <MaterialScreen live={live} />}
+      {showPlan && !materialOpen && <PlanReview live={live} />}
+      {showPlan && materialOpen && (
+        <details className="details panel" onToggle={(e) => setPlanOpen(e.currentTarget.open)}>
+          <summary>{t("job.plan.show")}</summary>
+          {planOpen && <PlanReview live={live} />}
+        </details>
+      )}
       {job.outputs?.reel && job.approved && job.stage !== "plan_revise" && (
         <>
           <Result live={live} />

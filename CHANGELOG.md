@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Added — Material: stock B-roll and generated stills
+- job.json `material {mode, wish}` (none | stock | generated | both): `videocut tool job
+  material`, `videocut run --material-mode/--material-wish/--material-skip`, the new-job
+  form ("Material", default from settings `material_default_mode`). Like slides, a change
+  makes the plan stale (`plan_material`) and revokes an approval.
+- Plan skill: `material_wishes` in plan.json and a *Material* table in project.md (≤ 1 wish
+  per 8 s, inside a keep row, English stock query, generator prompt without text, names or
+  brands); `plan check` validates them; the plan view lists them.
+- `videocut tool material fetch|generate|choose|show` (host only, refused inside an agent
+  run): Pexels (videos, photos) and Coverr (videos) search with orientation and locale, up
+  to 4 candidates per wish (smallest rendition that covers the output, ≤ 30 s, thumbs ≤ 480
+  px, SHA-256); Gemini (`gemini-nano-banana-2.1`, SynthID) or OpenAI (`gpt-image-2.5-flare`,
+  C2PA) generate up to 2 stills per wish from the prompt, the style and the brand's colours,
+  stored byte for byte; cost limit `material_budget_usd` (default 1.00) per job from the
+  published prices; 429 back-off. Everything is logged in `work/material.json`.
+- The human's choice (`material choose`, the app's Material screen) is trusted only from
+  `$VIDEOCUT_HOME/state/<job>/material_choice.json` with the file's SHA-256; `videocut run`
+  fetches after the approval and waits (exit code 5, gate `material`) until every wish has
+  a choice or "none"; a changed choice makes the cut stale.
+- Settings → Material: default mode, image generator, stock libraries, cost limit, and the
+  Pexels / Coverr / Gemini / OpenAI keys, kept only in the keychain
+  (`settings.set_secret/secret`; `PUT /api/settings/material`, write-only
+  `PUT /api/settings/secrets`). API: `GET /api/jobs/{id}/material`, `POST material/fetch`,
+  `POST material/choose`, `GET material/files/<n>/<file>`.
+
 ### Added — default brand, the app's look follows it
 - `settings.json` `default_brand` and `theme_follows_brand`; `PUT /api/settings/brand`,
   `GET /api/theme`. Brands screen: "Als Standard" per brand, a "Standard" badge, "Kein

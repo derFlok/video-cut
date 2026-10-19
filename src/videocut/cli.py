@@ -140,6 +140,23 @@ def main(argv: list[str] | None = None) -> int:
         help='what the slides should show, in plain words (e.g. "the three steps as a flow")',
     )
     r.add_argument(
+        "--material-mode",
+        metavar="MODE",
+        help="B-roll and stills: none (default), stock (stock video and photos), generated "
+        "(AI-generated stills), both; for an existing job a plan made for other material is "
+        "planned again",
+    )
+    r.add_argument(
+        "--material-wish",
+        metavar="TEXT",
+        help='what the material should show, in plain words (e.g. "calm office scenes")',
+    )
+    r.add_argument(
+        "--material-skip",
+        action="store_true",
+        help="use no material for every wish not chosen yet (instead of waiting for a choice)",
+    )
+    r.add_argument(
         "--feedback",
         metavar="TEXT",
         help="revise the finished reel: what to change, in plain words (no new approval)",

@@ -1,0 +1,10 @@
+{"page": 0, "pages": 1, "page_size": 30, "total": 2,
+ "hits": [
+  {"id": "v1", "slug": "rain-on-window", "title": "Rain on a window", "duration": 14.2, "is_vertical": false,
+   "thumbnail": "https://cdn.coverr.co/videos/v1/thumbnail", "poster": "https://cdn.coverr.co/videos/v1/poster",
+   "max_width": 1920, "max_height": 1080,
+   "urls": {"mp4": "https://cdn.coverr.co/videos/v1/1080p.mp4", "mp4_preview": "https://cdn.coverr.co/videos/v1/preview.mp4", "mp4_download": "https://cdn.coverr.co/videos/v1/1080p.mp4?download=true"}},
+  {"id": "v2", "slug": "street-at-night", "title": "Street at night", "duration": 9.0, "is_vertical": true,
+   "thumbnail": "https://cdn.coverr.co/videos/v2/thumbnail", "poster": "https://cdn.coverr.co/videos/v2/poster",
+   "max_width": 1080, "max_height": 1920,
+   "urls": {"mp4": "https://cdn.coverr.co/videos/v2/1080p.mp4", "mp4_download": "https://cdn.coverr.co/videos/v2/1080p.mp4?download=true"}}]}

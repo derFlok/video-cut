@@ -22,7 +22,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .. import __version__, claude_cli, settings
 from .. import redaction as red
 from .. import run as pipeline
-from ..tools import _format, _job_slides, _length, _redact_style, _style, transcript, vocab
+from ..tools import (
+    _format,
+    _job_material,
+    _job_slides,
+    _length,
+    _redact_style,
+    _style,
+    transcript,
+    vocab,
+)
 from ..tools.common import ToolError, home, update_job
 from ..tools.job import (
     LANGS,
@@ -41,6 +50,7 @@ from ..tools.job import (
     set_title,
 )
 from . import brands, setup, state, theme
+from . import material as material_api
 from .runs import Busy, Runs
 from .security import Guard
 from .uploads import (
@@ -389,6 +399,8 @@ def create_app(
                     "redact_style",
                     "slides_mode",
                     "slides_wish",
+                    "material_mode",
+                    "material_wish",
                 },  # fmt: skip
                 field_caps={"slides": (MAX_SLIDE_FILES, MAX_SLIDE_BYTES)},
             )
@@ -866,6 +878,7 @@ def create_app(
         filename = f"{name}-{(fmt or 'video').replace(':', 'x')}.mp4"
         return FileResponse(p, media_type="video/mp4", filename=filename)
 
+    material_api.register(app, job_or_404, submit, not_running, decision)
     app.include_router(theme.router)  # before brands: /api/brands/{id}/theme and /assets
     app.include_router(brands.router)
     app.state.setup = setup_router or setup.router()
@@ -970,6 +983,11 @@ def _new_job(form) -> dict:
         slides_wish = _job_slides.parse_wish(f.get("slides_wish"))
     except ToolError as e:
         raise HTTPException(400, str(e)) from None
+    try:
+        material_mode = _job_material.parse_mode(f.get("material_mode") or "none")
+        material_wish = _job_material.parse_wish(f.get("material_wish"))
+    except ToolError as e:
+        raise HTTPException(400, str(e)) from None
     if slide_files and slides_mode in ("none", "auto"):
         raise HTTPException(400, f"slide files need slides_mode upload or both, not {slides_mode}")
     try:
@@ -998,6 +1016,8 @@ def _new_job(form) -> dict:
         raise HTTPException(400, str(e)) from None
     try:
         _new_job_settings(job, brand_ref, words, f, slide_files, slides_mode, slides_wish)
+        if material_mode != "none" or material_wish:
+            _job_material.set_material(job, material_mode, material_wish, say=lambda _: None)
     except HTTPException:
         shutil.rmtree(job, ignore_errors=True)  # no half-made job is left behind
         raise
