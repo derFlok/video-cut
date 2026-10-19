@@ -23,6 +23,10 @@
   orange"), never hex codes (a model drew "#F2A33A" as text into a picture), and end with
   "no text, no letters, no logos"; the plan skill writes scene-only prompts (no signs,
   screens, "copy space"). One provider registry for stock, cloud and local generators.
+- Integration: the AI label reads only the trusted material copy and the human's checked
+  choices; generated candidates record their incoming provenance (`_c2pa.inspect`) and the
+  exact prompt the model got; a local-generator failure is one error line, not a crash;
+  verify counts an overlay/caption overlap only when both are drawn together > 0.05 s.
 - Offline run for tests and demos: `VIDEOCUT_MATERIAL_FAKE=1` or `material fetch
   --dry-run` uses local fake providers (FFmpeg gradients, no key, no network).
 - The human's choice (`material choose`, the app's Material screen) is trusted only from

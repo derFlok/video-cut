@@ -431,6 +431,26 @@ def test_material_label_ignores_an_edited_mirror(fakes):
 
 
 @media
+def test_a_generator_failure_is_an_error_line_and_dest_is_png(fakes, monkeypatch):
+    seen = []
+
+    class Picky(FakeGen):  # like local_flux: a .png dest only, ValueError / RuntimeError
+        def generate(self, prompt, width, height, seed, palette, style, dest):
+            seen.append(dest.suffix)
+            if len(seen) == 1:
+                raise ValueError("dest must be a .png file")
+            return super().generate(prompt, width, height, seed, palette, style, dest)
+
+    monkeypatch.setitem(mp._REGISTRY, "fakegen", Picky)
+    job = make_job()
+    res = mat.fetch(job, say=lambda _: None)
+    assert seen == [".png", ".png"] and res["generated"] == 1
+    gen = [c for w in mat.load(job)["wishes"] for c in w["candidates"] if c["ai_generated"]]
+    assert gen[0]["prompt"] == "A tidy desk with a laptop in soft light" and "steps" in gen[0]
+    assert any("fakegen: dest must be a .png file" in e for e in res["errors"])
+
+
+@media
 def test_refusals_inside_an_agent_run(fakes, capsys, monkeypatch):
     make_job()
     monkeypatch.setenv("VIDEOCUT_AGENT", "1")

@@ -23,7 +23,8 @@ Everything is logged in work/material.json (version 1):
   "chosen": id|null, "decided": bool, "candidates": [{id, kind: video|image, file, thumb,
   width, height, duration_s, source, source_url, author, licence, attribution,
   ai_generated, model, prompt, seed, watermark, sha256, source_sha256, provenance,
-  fetched}]}],
+  fetched; generated ones also prompt_sent (the exact text the model got), steps,
+  quantisation, generator (provider specifics)}]}],
  "cost_usd": spent on generation, "runs": [{at, wishes, stock, generated, cost_usd,
  wall_s, errors}]}
 Files live in work/material/<n>/ (cN.mp4|jpg|png and cN_sm.jpg, ≤ THUMB px). A generated
@@ -608,11 +609,12 @@ def _generate(job: Path, w: dict, count: int, first: int, data: dict, say) -> tu
         seed = random.randint(1, 2**31 - 1)
         try:
             res = prov.generate(w["prompt"], ow, oh, seed, pal, w.get("style") or "photo",
-                                folder / cid)  # fmt: skip
+                                folder / f"{cid}.png")  # fmt: skip
             meta = _probe(res.file)
             thumb = folder / f"{cid}_sm.jpg"
             _thumb(res.file, thumb, False)
-        except (ProviderError, ToolError) as e:
+        except (ProviderError, ToolError, RuntimeError, ValueError, OSError) as e:
+            # every provider's failure (local_flux: FluxError, ValueError) is one error line
             errors.append(f"{name}: {e}")
             continue
         data["cost_usd"] = round(float(data.get("cost_usd") or 0) + (res.cost_usd or 0), 4)
@@ -627,7 +629,8 @@ def _generate(job: Path, w: dict, count: int, first: int, data: dict, say) -> tu
             "prompt": w["prompt"], "seed": res.seed, "watermark": res.watermark,
             "sha256": sha, "source_sha256": sha, "fetched": now(),
             "cost_usd": res.cost_usd, "elapsed_s": res.elapsed_s, "hdr": False,
-            "provenance": _provenance(res.file),
+            "provenance": _provenance(res.file), "prompt_sent": res.prompt or None,
+            "steps": res.steps, "quantisation": res.quantisation, "generator": res.extra or None,
         })  # fmt: skip
     say(f"  wish {w['n']}: {len(out)} generated candidate(s) ({name})")
     return out, errors

@@ -42,8 +42,8 @@ track are in the output px of work/overlays.json)
     flag `overlay_in_safe_zone` when a box reaches into the organic safe zones (top 250 px,
     bottom 350 px, 6 % at the sides, docs/BRIEF.md §8); flag `overlay_on_face` when a box
     covers more than 2 % of the face box at any face sample (output time) while it is
-    visible; flag `overlay_overlap` when an overlay and a caption on screen at the same time
-    share more than 10 % of the smaller box (one hides the other: there was no free room).
+    visible; flag `overlay_overlap` when an overlay and a caption drawn at the same time
+    (longer than OVERLAP_MIN_S) share more than 10 % of the smaller box (one hides the other: there was no free room).
     A caption on the seam of a stacked slide_split may cover the slide part's empty margin
     and the forehead: flag `overlay_on_slide_content` when a box touches the slide's content
     box, and judge that caption on the face below the brow line only.
@@ -131,6 +131,9 @@ FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
 FOREHEAD = 0.25  # top share of the face box a seam caption may cover (renderer lib/layout.js)
 CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
 BLOCK_OVERLAP_MAX = 0.1  # share of the smaller box an overlay and a caption may share
+# an overlay and a caption that share a frame or so where one hands over to the other (a
+# caption group running into the next cut) is not an overlap anyone sees
+OVERLAP_MIN_S = 0.05
 FULL_FRAME_SCENES = _plates.PLATE_SCENES  # the end card: an opaque full-frame plate, by design
 CAPTION_COLS = 3
 STAGE_SCENES = ("screenshot_frame",)  # portrait: may cover the speaker on purpose
@@ -356,6 +359,12 @@ def _drawn(b: dict) -> tuple[float, float]:
     return b["t0"], b["t1"]
 
 
+def _together(a: dict, b: dict) -> float:
+    """Seconds two items were drawn at the same time (renderer "drawn" spans)."""
+    (a0, a1), (b0, b1) = _drawn(a), _drawn(b)
+    return min(a1, b1) - max(a0, b0)
+
+
 def overlay_checks(
     boxes: list[dict],
     face: list[dict],
@@ -421,8 +430,7 @@ def overlay_checks(
             flags.append("overlay_on_slide_content")
         if b.get("scene") not in ("caption", *FULL_FRAME_SCENES) and any(
             c.get("scene") == "caption"
-            and c["t0"] < b["t1"]
-            and c["t1"] > b["t0"]
+            and _together(b, c) > OVERLAP_MIN_S
             and overlap(b["box"], c["box"])
             > BLOCK_OVERLAP_MAX * min(_area(b["box"]), _area(c["box"]))
             for c in boxes
