@@ -65,7 +65,8 @@ slide_split the frozen check looks inside the speaker area only.
 out/verify/slides_NN.jpg: one tile per slide, near the end of its stretch.
 B-roll (_verify_broll.py; render.json "broll"): the middle frame of each stretch flags
 `broll_black` (mostly black) or `broll_aspect` (letterbox/pillarbox bars: not cropped to
-fill); check "broll". A broll segment shows no camera for the blink check.
+fill); check "broll". A broll segment shows no camera for the blink check. A b-roll image
+(a slow Ken Burns push-in) is a still on purpose for the frozen check; a b-roll clip is not.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size of the job's format (job.json "format": 1080x1920 for 9:16, 1920x1080 for
 16:9, ...), no black or frozen stretch longer than 0.5 s. A preview is
@@ -733,6 +734,9 @@ def verify(args) -> dict:
         else {}
     )
     still_screen = still_screen + slide_doc.get("still", [])  # a full slide is a still
+    still_screen += [  # a b-roll image only drifts (Ken Burns): still on purpose
+        (b["out_t0"], b["out_t1"]) for b in render.get("broll") or [] if b.get("kind") == "image"
+    ]
     bubbles = bubbles + slide_doc.get("bubbles", [])  # slide: the camera is the speaker area
 
     loud = loudness(reel)

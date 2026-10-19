@@ -120,7 +120,8 @@ WISHES = [
 ]  # fmt: skip
 
 
-def _material_job(capsys, monkeypatch, clip: Path, job_id="broll", black=False) -> Path:
+def _material_job(capsys, monkeypatch, clip: Path, job_id="broll", black=False,
+                  image: str | None = None) -> Path:  # fmt: skip
     monkeypatch.delenv("VIDEOCUT_AGENT", raising=False)
     code, s, _ = run_tool(capsys, "job", "new", str(clip), "--id", job_id)
     assert code == 0, s
@@ -137,7 +138,7 @@ def _material_job(capsys, monkeypatch, clip: Path, job_id="broll", black=False) 
     folder = job / "work" / "material"
     (folder / "1").mkdir(parents=True)
     (folder / "2").mkdir(parents=True)
-    src = "color=c=black:s=1600x1200" if black else "mandelbrot=size=1600x1200"
+    src = image or ("color=c=black:s=1600x1200" if black else "mandelbrot=size=1600x1200")
     _ff("-f", "lavfi", "-i", src, "-frames:v", "1", str(folder / "1" / "c1.png"))
     _ff("-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=1.4",
         "-c:v", "libx264", "-pix_fmt", "yuv420p", str(folder / "2" / "c1.mp4"))  # fmt: skip
@@ -254,6 +255,19 @@ def test_render_and_verify_broll(capsys, monkeypatch, portrait_clip):
     doc = json.loads((job / "out" / "verify.json").read_text())
     assert [d["flags"] for d in doc["broll"]] == [[], []], doc["broll"]
     assert doc["checks"]["broll"]["ok"]
+    assert doc["checks"]["black_or_frozen"]["ok"], doc["checks"]["black_or_frozen"]
+
+
+@media
+def test_a_smooth_broll_image_is_not_a_frozen_picture(capsys, monkeypatch, portrait_clip):
+    # a soft gradient under the slow push-in barely changes: freezedetect calls it frozen
+    smooth = "gradients=s=1600x1200:c0=0x2a6f97:c1=0x61a5c2:x0=0:y0=0:x1=1600:y1=1200"
+    job = _material_job(capsys, monkeypatch, portrait_clip, "broll-smooth", image=smooth)
+    _write_edl(job, [_seg(0, 3), _seg(3, 6, layout="broll", material=1), _seg(6, 9.3)])
+    code, s, _ = run_tool(capsys, "render", "--job", str(job))
+    assert code == 0, s
+    run_tool(capsys, "verify", "--job", str(job))
+    doc = json.loads((job / "out" / "verify.json").read_text())
     assert doc["checks"]["black_or_frozen"]["ok"], doc["checks"]["black_or_frozen"]
 
 
