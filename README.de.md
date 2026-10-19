@@ -40,6 +40,12 @@ Nur das, nur an Anthropic, und nur über deinen eigenen Claude-Zugang:
 - **verkleinerte Standbilder** an den Stellen, an denen Claude etwas entscheiden muss,
 - **auf deinem Mac per Texterkennung gelesener Bildschirmtext**, wenn du eine Bildschirmaufnahme, Screenshots oder Folien dazugibst.
 
+Nur wenn du für ein Video **Material** einschaltest (standardmäßig aus): die englischen
+Suchwörter jedes Wunschs gehen an die Bildarchive, die du aktiviert hast (Pexels, Coverr),
+mit Ausrichtung und Sprache, und die Bildbeschreibung in einem Satz plus die Farbcodes deiner
+Marke an den gewählten Bildgenerator (Google Gemini oder OpenAI), mit deinen eigenen
+Schlüsseln. Nie eine Aufnahme, ein Standbild, ein Logo oder ein Name.
+
 Aufnahmen, Ton und fertige Videos bleiben auf deinem Mac. Video Cut schickt nichts an andere: keine Telemetrie, keine Statistiken, kein Konto. Downloads gibt es nur bei Installation und Updates (die Werkzeuge und Modelle aus [`manifest/tools.json`](manifest/tools.json)). Claude Code selbst ist Anthropics Programm und folgt Anthropics eigenen [Regeln zur Datennutzung](https://code.claude.com/docs/de/data-usage).
 
 ## Was es kostet
@@ -56,6 +62,7 @@ Video Cut ist kostenlos und Open Source. Claude bezahlst du über deinen eigenen
 - 16 GB Arbeitsspeicher empfohlen
 - Rund 4 GB Speicher für die Installation (rund 2,5 GB werden heruntergeladen), dazu Platz für deine Videos (der Installer braucht mindestens 8 GB frei und empfiehlt 15 GB)
 - Claude Code, angemeldet mit einem Claude-Pro- oder -Max-Abo oder einem Anthropic-API-Key
+- Optional, lokale Bilderzeugung (`videocut models pull --image`): 16 GB Arbeitsspeicher und rund 8 GB zusätzlicher Speicher (16 GB Download, 26 GB frei während der Installation)
 
 ## Deinstallieren
 
@@ -274,6 +281,28 @@ Solange eine Folie zu sehen ist, liegt keine Karte und kein Stichwort darüber: 
 trägt den Inhalt. Untertitel bleiben, wo du neben einer Folie sprichst: im Hoch- oder
 Quadratformat stehen sie auf der Linie zwischen Folie und dir, weg vom Folientext und von
 deinem Gesicht.
+
+## B-Roll und erzeugte Bilder
+
+Mit **Material** schlägt der Plan ein paar Stellen vor, an denen ein Bild hilft (höchstens
+eine pro 8 Sekunden): einen kurzen Archiv-Clip im Vollbild, während du weitersprichst
+(B-Roll), ein Archivfoto oder ein erzeugtes Bild. Nach deiner Freigabe sucht Video Cut bei
+Pexels und Coverr und/oder fragt den Bildgenerator und zeigt pro Stelle die Kandidaten mit
+Lizenz und Urheberangabe; du wählst einen oder „Kein Material", suchst mit anderen Wörtern
+neu oder lässt neu erzeugen. Nur was du gewählt hast, kommt ins Video. Erzeugte Bilder sind
+in der App als „KI" markiert, ihre Originaldateien behalten das Wasserzeichen des Generators (SynthID / C2PA), und ein
+Kostenlimit pro Video (Standard 1 USD) stoppt die Erzeugung, bevor es teuer wird.
+
+Einmal einrichten unter **Einstellungen → Material**: dein Pexels-Schlüssel (kostenlos),
+optional Coverr, und ein Gemini- oder OpenAI-Schlüssel für erzeugte Bilder. Die Schlüssel
+liegen nur im Schlüsselbund deines Macs.
+
+```bash
+.venv/bin/videocut run ~/Movies/ich.mov --material-mode both --material-wish "ruhige Büroszenen"
+.venv/bin/videocut tool material show <id>                 # die Kandidaten pro Wunsch
+.venv/bin/videocut tool material choose <id> 1 c2          # deine Wahl (oder: none)
+.venv/bin/videocut run <id>                                # damit schneiden (--material-skip: keins)
+```
 
 ## Marken
 

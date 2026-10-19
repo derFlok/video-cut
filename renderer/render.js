@@ -109,7 +109,7 @@ window.__load = (id) => __require("", id);
 
 // Runs inside the page. Everything it needs arrives as data; no clock, no randomness.
 function pageMain(spec) {
-  const { size, fps, safe, face, views, hidden, tokens, items, sceneNames, fontFamily } = spec;
+  const { size, fps, safe, face, views, hidden, bands, tokens, items, sceneNames, fontFamily } = spec;
   const images = window.__images || {};
   const { faceAt, faceDuring } = window.__load("lib/layout");
   const { step } = window.__load("lib/spring");
@@ -159,6 +159,11 @@ function pageMain(spec) {
       return { y: on[0].seam, content: on.map((v) => v.content), parts: on.map((v) => v.screen) };
     },
     addBlock: (t0, t1, box) => blocks.push({ t0, t1, box }),
+    // The caption band a view asks for while it is on screen (b-roll: "lower", no face).
+    bandDuring: (t0, t1) => {
+      const on = (bands || []).find((b) => b.t0 < t1 - 1e-3 && b.t1 > t0 + 1e-3);
+      return on ? on.band : null;
+    },
     // Decoded image for an asset reference a scene declared (null when not loaded),
     // and an offscreen canvas for scenes that prepare images once (redaction).
     image: (ref) => images[ref] || null,
@@ -196,12 +201,13 @@ function pageMain(spec) {
   function drawAt(t) {
     const boxes = [];
     const hideCaptions = hidesCaptions(plates, t);
-    // A full-frame slide (overlays.json views with "hide"): no caption, no overlay item.
+    // A full-frame slide (overlays.json views with "hide"): no caption, no overlay item
+    // (the AI label, `badge`, stays).
     const slide = (hidden || []).some((h) => t >= h.t0 && t < h.t1);
     items.forEach((item, i) => {
       if (t < item.t0 || t > item.t1) return;
       if (hideCaptions && item.scene === "caption") return;
-      if (slide && !scenes[item.scene].plate) return;
+      if (slide && !scenes[item.scene].plate && !scenes[item.scene].badge) return;
       ctx.save();
       const box = scenes[item.scene].draw(ctx, t - item.t0, item, env);
       ctx.restore();
@@ -447,10 +453,12 @@ function items(spec, known) {
     if (known.includes(o.scene) && o.scene !== "caption") list.push({ scene: o.scene, t0: o.t0, t1: o.t1, props: o.props || {} });
     else skipped.push(o.scene);
   }
-  // Captions last, so they draw on top of cards.
+  // Captions after the cards, so they draw on top of them; `top` scenes (the AI label)
+  // over everything.
   for (const c of require("./lib/seams").splitAtSeams(spec.captions || [], validViews(spec.views)))
     list.push({ scene: "caption", t0: c.t0, t1: c.t1, words: c.words || [] });
-  return { list, skipped };
+  const isTop = (it) => it.scene !== "caption" && Boolean(require(`./scenes/${it.scene}`).top);
+  return { list: [...list.filter((it) => !isTop(it)), ...list.filter(isTop)], skipped };
 }
 
 // Areas to keep clear in a product demo, flattened to {t0, t1, screen: [x0, y0, x1, y1]}
@@ -481,6 +489,13 @@ function hiddenSpans(views) {
   return (Array.isArray(views) ? views : [])
     .filter((v) => v && v.hide === true && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1)
     .map((v) => ({ t0: v.t0, t1: v.t1 }));
+}
+
+// Output spans [t0, t1) of the views that set a caption band (b-roll: "lower").
+function bandSpans(views) {
+  return (Array.isArray(views) ? views : [])
+    .filter((v) => v && (v.band === "lower" || v.band === "center") && Number.isFinite(v.t0) && Number.isFinite(v.t1) && v.t0 < v.t1)
+    .map((v) => ({ t0: v.t0, t1: v.t1, band: v.band }));
 }
 
 // The frame size: spec.size, else spec.width x spec.height, else 1080x1920 (the 9:16
@@ -710,7 +725,7 @@ async function main() {
     if (assets.length) summary.images = await loadImages(page, assets);
     const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
     await page.evaluate(pageMain, {
-      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), hidden: hiddenSpans(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
+      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), hidden: hiddenSpans(spec.views), bands: bandSpans(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
     });
     // Items that could not be placed clear of the face / of each other / inside the safe
     // area even at their smallest size (no room left).

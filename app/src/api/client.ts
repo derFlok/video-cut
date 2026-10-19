@@ -8,6 +8,7 @@ import type {
   BrandSettings,
   BrandSummary,
   CutStyleChoice,
+  Disclosure,
   RedactStyle,
   Format,
   FormatChoice,
@@ -15,7 +16,12 @@ import type {
   JobEvent,
   JobSummary,
   JobVocabulary,
+  MaterialMode,
+  MaterialSettings,
+  MaterialView,
+  LabelSettings,
   Plan,
+  SecretAccount,
   RedactionDecision,
   Session,
   SetupStatus,
@@ -193,6 +199,20 @@ export const api = {
   sheetUrl: (id: string, format: Format, bust = "") =>
     transport.url(`/api/brands/${enc(id)}/sheet?format=${enc(format)}${bust ? `&v=${enc(bust)}` : ""}`),
 
+  materialSettings: () => call<MaterialSettings>("GET", "/api/settings/material"),
+  /** Only the fields given change. */
+  saveMaterialSettings: (
+    changes: Partial<Pick<MaterialSettings, "material_default_mode" | "image_provider" | "stock_providers" | "material_budget_usd">>,
+  ) => call<MaterialSettings>("PUT", "/api/settings/material", changes),
+  /** Which keys are stored (never their values). */
+  secrets: () => call<{ secrets: Record<SecretAccount, boolean> }>("GET", "/api/settings/secrets"),
+  /** Write-only: the key goes to the keychain; "" removes it. */
+  setSecret: (account: SecretAccount, value: string) =>
+    call<{ secrets: Record<SecretAccount, boolean> }>("PUT", "/api/settings/secrets", { account, value }),
+  labelSettings: () => call<LabelSettings>("GET", "/api/settings/labels"),
+  saveLabelSettings: (s: LabelSettings) => call<LabelSettings>("PUT", "/api/settings/labels", s),
+  disclosure: (id: string) => call<Disclosure>("GET", `${J(id)}/disclosure`),
+
   jobs: () => call<JobSummary[]>("GET", "/api/jobs"),
   job: (id: string) => call<JobDetail>("GET", J(id)),
   createJob: async (
@@ -214,6 +234,9 @@ export const api = {
       slides_mode?: SlidesMode;
       slides_wish?: string;
       slides?: File[];
+      /** Material: stock footage and/or AI-generated stills, with a free-text wish. */
+      material_mode?: MaterialMode;
+      material_wish?: string;
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -230,6 +253,8 @@ export const api = {
     if (fields.slides_mode && fields.slides_mode !== "none") form.append("slides_mode", fields.slides_mode);
     if (fields.slides_wish) form.append("slides_wish", fields.slides_wish);
     for (const f of fields.slides ?? []) form.append("slides", f);
+    if (fields.material_mode && fields.material_mode !== "none") form.append("material_mode", fields.material_mode);
+    if (fields.material_wish) form.append("material_wish", fields.material_wish);
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);
@@ -283,6 +308,14 @@ export const api = {
   refreshCaptions: (id: string) => call<unknown>("POST", `${J(id)}/captions/refresh`),
   feedback: (id: string, text: string, at_s?: number) =>
     call<unknown>("POST", `${J(id)}/feedback`, at_s === undefined ? { text } : { text, at_s }),
+
+  material: (id: string) => call<MaterialView>("GET", `${J(id)}/material`),
+  /** Fetch candidates (all wishes, or one with an edited query / prompt; generate: images only). */
+  fetchMaterial: (id: string, body: { wish?: number; query?: string; prompt?: string; generate?: boolean } = {}) =>
+    call<{ id: string; run: string; state: string }>("POST", `${J(id)}/material/fetch`, body),
+  /** The human's pick for a wish; null = no material there. */
+  chooseMaterial: (id: string, n: number, candidate: string | null) =>
+    call<MaterialView>("POST", `${J(id)}/material/choose`, { n, candidate }),
 
   stillUrl: (id: string, path: string) =>
     transport.url(`${J(id)}/stills/${path.split("/").map(enc).join("/")}`),

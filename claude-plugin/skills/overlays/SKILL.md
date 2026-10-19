@@ -76,6 +76,11 @@ measured `track` boxes when it has a `track`, else its `box`)
 drawn as tall as the safe area allows, at its top, with the caption below it (it may cover
 the speaker, verify marks it `stage`).
 
+**B-roll** (segments with `layout` broll): the chosen material fills the frame and there
+is no face; captions go to the lower band there by themselves (overlays.json views
+`band: "lower"`). Keep overlay cards short over b-roll and never use one to repeat what the
+picture shows.
+
 **Product demos with a screen recording:** captions and overlays keep clear of the screen
 and the speaker by themselves (overlays.json `views`). How depends on the format
 (`videocut tool job show` → `format`):
@@ -159,6 +164,11 @@ No overlay repeating a slide's words or numbers elsewhere either. Never change
    - `overlay_boxes_untrusted` → `work/overlay.mov`, `overlay_boxes.json` or `overlays.json`
      changed after `videocut tool overlays` wrote them. Never edit those files; run
      `videocut tool overlays` again.
+   - `ai_badge` is the "KI-generiert"/"AI-generated" label `videocut tool overlays` adds by
+     itself while AI-generated material is on screen. Never write one, never remove or cover
+     it, never edit `work/material.json`; keep your overlays clear of it.
+     `ai_label_missing` → run `videocut tool overlays` again; if it stays, note it in the
+     report (the human decides).
 4. Look only at `out/verify/overlays_NN.jpg` (one tile per overlay) and, if a caption is in
    doubt, one `out/verify/captions_NN.jpg`. Check: readable, not on the face, brand look.
 

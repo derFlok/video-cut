@@ -42,8 +42,9 @@ track are in the output px of work/overlays.json)
     flag `overlay_in_safe_zone` when a box reaches into the organic safe zones (top 250 px,
     bottom 350 px, 6 % at the sides, docs/BRIEF.md §8); flag `overlay_on_face` when a box
     covers more than 2 % of the face box at any face sample (output time) while it is
-    visible; flag `overlay_overlap` when an overlay and a caption on screen at the same time
-    share more than 10 % of the smaller box (one hides the other: there was no free room).
+    visible; flag `overlay_overlap` when an overlay and a caption drawn at the same time
+    (longer than OVERLAP_MIN_S) share more than 10 % of the smaller box (one hides the
+    other: there was no free room).
     A caption on the seam of a stacked slide_split may cover the slide part's empty margin
     and the forehead: flag `overlay_on_slide_content` when a box touches the slide's content
     box, and judge that caption on the face below the brow line only.
@@ -55,14 +56,24 @@ track are in the output px of work/overlays.json)
     Trust: the boxes are only believed when work/overlay.mov, overlay_boxes.json and
     overlays.json are exactly what `videocut tool overlays` recorded outside the job folder
     (overlays.check_record); otherwise one entry with flag `overlay_boxes_untrusted`.
+    AI label (_verify_ai.py): flag `ai_label_missing` when AI-generated material that must
+    be labelled (work/material.json, _ai_label) is on screen and no drawn "ai_badge" box
+    covers its whole span (boxes count only when render composited the overlay);
+    `ai_label_unchecked` when the EDL cannot be read or is stale while work/material.json
+    has a chosen AI-generated candidate; verify.json "ai_material" lists every AI item.
     out/verify/captions_NN.jpg: one tile per caption group change (3x3 per sheet);
-    out/verify/overlays_NN.jpg: one tile per overlay, at its middle.
+    out/verify/overlays_NN.jpg: one tile per overlay and per AI label, at its middle.
 Slides (_verify_slides.py; EDL segments with a slide layout): per slide the layout report
 of `videocut tool slides render` (trusted only as recorded): `slide_text_overflow`,
 `slide_reading_time`, `slide_bubble_over_text`, `slide_missing` / `slide_untrusted` /
 `slide_stale` / `slide_unchecked`. A slide_full stretch is a still on purpose; in slide /
 slide_split the frozen check looks inside the speaker area only.
 out/verify/slides_NN.jpg: one tile per slide, near the end of its stretch.
+B-roll (_verify_broll.py; render.json "broll"): the middle frame of each stretch flags
+`broll_black` (mostly black) or `broll_aspect` (letterbox/pillarbox bars: not cropped to
+fill); check "broll". A broll segment shows no camera for the blink check. A b-roll image
+(a slow Ken Burns push-in; kind from the trusted choice, span from the EDL) is a still on
+purpose for the frozen check; a b-roll clip is not.
 Global checks: duration vs. render.json (+-1 frame), integrated loudness -14 +-1 LU, true peak
 <= -1.0 dBTP, size of the job's format (job.json "format": 1080x1920 for 9:16, 1920x1080 for
 16:9, ...), no black or frozen stretch longer than 0.5 s. A preview is
@@ -83,10 +94,11 @@ from pathlib import Path
 
 import numpy as np
 
-from ..edl import Edl, EdlError, load, output_spans
+from ..edl import Edl, EdlError, is_broll, load, output_spans
 from ..paths import tool_env
 from . import _image as im
-from . import _plates, _verify_audio, _verify_screen, _verify_slides
+from . import _plates, _verify_ai, _verify_audio, _verify_broll, _verify_screen, _verify_slides
+from . import material as material_mod
 from . import overlays as overlays_mod
 from ._geometry import job_size, overlap, safe_zones, sized
 from .common import (
@@ -120,6 +132,9 @@ FACE_OVERLAP_MAX = 0.02  # share of the face box an overlay may cover
 FOREHEAD = 0.25  # top share of the face box a seam caption may cover (renderer lib/layout.js)
 CAPTION_SETTLE_S = 0.15  # caption tiles show this long after the change (entry animation)
 BLOCK_OVERLAP_MAX = 0.1  # share of the smaller box an overlay and a caption may share
+# an overlay and a caption that share a frame or so where one hands over to the other (a
+# caption group running into the next cut) is not an overlap anyone sees
+OVERLAP_MIN_S = 0.05
 FULL_FRAME_SCENES = _plates.PLATE_SCENES  # the end card: an opaque full-frame plate, by design
 CAPTION_COLS = 3
 STAGE_SCENES = ("screenshot_frame",)  # portrait: may cover the speaker on purpose
@@ -286,9 +301,10 @@ def reframes(edl: Edl) -> list[bool]:
 def blinks_at_cuts(edl: Edl, blinks: list[dict]) -> list[bool]:
     """Per inner cut: does one of the two output frames before or after it show a blink?
     Output frames map to source time: the last ones of segment a end at a.end, the first
-    ones of segment b start at b.start. A "screen" or "slide_full" segment shows no camera."""
+    ones of segment b start at b.start. A "screen", "slide_full" or "broll" segment shows no
+    camera."""
     dt = 1 / edl.fps
-    blind = ("screen", "slide_full")
+    blind = ("screen", "slide_full", "broll")
     out = []
     for a, b in pairwise(edl.segments):
         ts = (a.end - 2 * dt, a.end - dt) if a.layout not in blind else ()
@@ -342,6 +358,12 @@ def _drawn(b: dict) -> tuple[float, float]:
     if isinstance(d, list) and len(d) == 2 and all(map(_num, d)):
         return d[0], d[1]
     return b["t0"], b["t1"]
+
+
+def _together(a: dict, b: dict) -> float:
+    """Seconds two items were drawn at the same time (renderer "drawn" spans)."""
+    (a0, a1), (b0, b1) = _drawn(a), _drawn(b)
+    return min(a1, b1) - max(a0, b0)
 
 
 def overlay_checks(
@@ -409,8 +431,7 @@ def overlay_checks(
             flags.append("overlay_on_slide_content")
         if b.get("scene") not in ("caption", *FULL_FRAME_SCENES) and any(
             c.get("scene") == "caption"
-            and c["t0"] < b["t1"]
-            and c["t1"] > b["t0"]
+            and _together(b, c) > OVERLAP_MIN_S
             and overlap(b["box"], c["box"])
             > BLOCK_OVERLAP_MAX * min(_area(b["box"]), _area(c["box"]))
             for c in boxes
@@ -550,6 +571,18 @@ def loudness(reel: Path) -> dict:
         "integrated_lufs": _last(r"I:\s+(-?[\d.]+|-inf) LUFS", tail),
         "true_peak_dbtp": _last(r"Peak:\s+(-?[\d.]+|-inf) dBFS", tail),
     }
+
+
+def broll_image_spans(job: Path, edl: Edl) -> list[tuple[float, float]]:
+    """Output spans of the b-roll segments that show an image (a slow Ken Burns drift: a
+    still on purpose). The kind comes from the human's trusted choice (material.chosen),
+    the span from the EDL render was checked against, never from render.json."""
+    chosen = material_mod.chosen(job)
+    return [
+        span
+        for s, span in zip(edl.segments, output_spans(edl), strict=True)
+        if is_broll(s.layout) and (chosen.get(s.material) or {}).get("kind") == "image"
+    ]
 
 
 def bad_stretches(reel: Path, duration: float, box: list[int] | None = None) -> list[dict]:
@@ -729,6 +762,7 @@ def verify(args) -> dict:
         else {}
     )
     still_screen = still_screen + slide_doc.get("still", [])  # a full slide is a still
+    still_screen += broll_image_spans(job, edl) if edl is not None and not stale else []
     bubbles = bubbles + slide_doc.get("bubbles", [])  # slide: the camera is the speaker area
 
     loud = loudness(reel)
@@ -790,6 +824,12 @@ def verify(args) -> dict:
         ],
         speech_db=speech["speech_db"],
     )
+    broll_docs = _verify_broll.check(render, reel, (v["width"], v["height"]))
+    if broll_docs:
+        checks["broll"] = _check(
+            not any(d["flags"] for d in broll_docs),
+            flagged=[d for d in broll_docs if d["flags"]],
+        )
     if "error" in demo:
         checks["screen_layouts"] = _check(False, error=demo["error"])
     elif "overlap" in demo:
@@ -821,7 +861,15 @@ def verify(args) -> dict:
     for old in vdir.glob("slides_*.jpg"):
         if old not in sl_sheets:
             old.unlink()
-    ov_times = overlay_times(sched.overlays, fps, video_dur) if sched is not None else []
+    ai = (  # a reel without a composited overlay has no label, whatever old boxes say
+        _verify_ai.check(job, edl, json.loads(edl_path.read_text()),
+                         boxes if render.get("overlay") else None, fps)
+        if edl is not None and not stale
+        else _verify_ai.unchecked(job, video_dur)
+    )  # fmt: skip
+    ov_times = (
+        overlay_times(sched.overlays + ai["badges"], fps, video_dur) if sched is not None else []
+    )
     ov_sheets = caption_sheets(reel, v, ov_times, vdir, "overlays") if ov_times else []
     for old in vdir.glob("overlays_*.jpg"):
         if old not in ov_sheets:
@@ -831,6 +879,7 @@ def verify(args) -> dict:
         for o in overlay_docs
         if o["flags"]
     ]
+    overlay_flagged += ai["flagged"]
     if untrusted:  # run `videocut tool overlays` again; never edit its outputs
         overlay_flagged.insert(
             0,
@@ -872,6 +921,7 @@ def verify(args) -> dict:
         "info": info,
         "overlays": overlay_docs,
         "overlay_flagged": overlay_flagged,
+        "ai_material": ai["items"],
         "screen": {
             k: demo[k]
             for k in ("coverage", "redaction", "text_cut", "screen_time", "clamped", "readability")
@@ -881,6 +931,7 @@ def verify(args) -> dict:
         "screen_zoom_clamped": demo.get("clamped", []),
         "slides": slide_doc.get("slides", []),
         "slide_flagged": slide_flagged,
+        "broll": broll_docs,
         "slide_sheets": [str(p.relative_to(job)) for p in sl_sheets],
         "caption_sheets": [str(p.relative_to(job)) for p in sheets],
         "caption_times": times,
@@ -898,6 +949,9 @@ def verify(args) -> dict:
         print(f"screen {d['check']} {where}: {', '.join(d['flags'])}")
     for d in slide_flagged:
         print(f"slide {d.get('id')}: {', '.join(d['flags'])}")
+    for d in broll_docs:
+        if d["flags"]:
+            print(f"b-roll segment {d['segment']} at {d['t']}s: {', '.join(d['flags'])}")
     for c in demo.get("clamped", []):
         print(f"info: segment {c['segment']} screen zoom {c['zoom']}x at {c['t']}s clamped "
               f"to {c['max_zoom']}x (sharpness)")  # fmt: skip

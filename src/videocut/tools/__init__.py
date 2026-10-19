@@ -29,6 +29,7 @@ MODULES = [
     "vocab",
     "slides",
     "transcript",
+    "material",
 ]
 
 

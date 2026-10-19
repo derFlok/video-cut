@@ -403,6 +403,14 @@ def test_overlay_covering_a_caption_is_flagged():
     ]
     flags = [o["flags"] for o in verify.overlay_checks(boxes, [], (1080, 1920))]
     assert flags == [[], ["overlay_overlap"], [], []]
+    # a caption handing over to a badge at a cut: one shared frame is no overlap
+    touch = [
+        {"scene": "caption", "t0": 9.4, "t1": 12.0, "box": [194, 263, 886, 491],
+         "drawn": [9.4, 12.0]},
+        {"scene": "ai_badge", "t0": 11.967, "t1": 14.167, "box": [65, 250, 267, 306],
+         "drawn": [12.0, 14.167]},
+    ]  # fmt: skip
+    assert [o["flags"] for o in verify.overlay_checks(touch, [], (1080, 1920))] == [[], []]
     assert verify.full_frame_spans([{"scene": "cta_end", "t0": 1, "t1": 2}, {"scene": "x"}]) == [
         (1, 2)
     ]

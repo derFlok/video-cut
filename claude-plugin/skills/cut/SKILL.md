@@ -184,6 +184,32 @@ source seconds), as segment fields:
   word on the slide + 1 s) and a speaker bubble covering slide text: lengthen the segment
   to the next word gap, or switch the layout as the plan allows; report what you changed.
 
+### B-roll (job show → `material.mode` is not `none`)
+
+`videocut tool material show` → `chosen`: the material the **human** picked for the plan's
+material wishes (`n`, `kind` video|image, `wish_kind`, `src_from`–`src_to` = the source
+seconds of the words it belongs to, `duration_s` of a clip). Use only that: a wish the human
+answered with "none" or left open has no b-roll, and you never fetch, generate, choose or
+copy material yourself (those commands refuse in this run).
+
+A b-roll is a normal segment of the keep row with `"layout": "broll"` and `"material": <n>`:
+
+```json
+{"in": 12.40, "out": 15.10, "layout": "broll", "material": 2}
+```
+
+- `in`/`out` stay **camera seconds** and lie inside the wish's `src_from`–`src_to`: split
+  the keep row at word gaps there (`out` of one = `in` of the next is a join, not a cut).
+  The voice goes on; the picture shows the material full frame (cropped to fill, an image
+  with a slow push-in, a clip from its start, muted; a clip shorter than the segment by
+  more than 1 s ends and the speaker shows again — keep such a segment ≤ the clip's
+  `duration_s`).
+- **Never over the hook:** no b-roll in the first 2 s of the output. **At most 40 %** of the
+  output is b-roll; the face carries the message, b-roll illustrates. 1.5–4 s per b-roll
+  segment; never two b-roll segments in a row longer than ~6 s together.
+- `edl check` refuses a b-roll whose wish was not chosen, outside its span, over the hook
+  or above 40 %. List every b-roll (output time, wish, kind) in the report.
+
 Then `videocut tool edl snap` and `videocut tool edl check`. Fix every reported path until
 it passes. `cut_in_speech` (error) means an `in`/`out` lies in full speech: a word is
 clipped there. Move it to the word gap before/after (`videocut tool sheet burst <t>`),
@@ -213,6 +239,9 @@ Each round:
    picture does not match the synced time: write it in the report; never change
    `work/sync.json`). `screen_zoom_clamped` is info: the zoom was widened for sharpness.
    A cut into or out of a screen view is a view change (info `reframe`), not a jump.
+   B-roll: `failed` check `broll` lists `broll_black` (the material shows black there) or
+   `broll_aspect` (bars: it does not fill the frame); drop that b-roll segment (make it
+   `face`) and say so in the report — never choose other material yourself.
 3. Read only the images of **flagged** cuts (`out/verify/cut_NN.jpg`: frames −2…+2 around the
    cut, waveform ±100 ms, red marker at the cut). Decide whether it is real.
 4. Fix in `work/edl.json` (move the boundary into the gap, drop a stray syllable, give a
@@ -238,6 +267,8 @@ Output: out/reel.mp4 · <duration> s · <n> segments · cut style: <style> · ve
 1. <what verify said> → <what you changed>
 ## Slides
 - <id> at output <t0>–<t1> s · <template> · <layout> · reveal on "<word>", …
+## B-roll
+- wish <n> at output <t0>–<t1> s · <video|image> · <why it fits there>
 ## Deviations from the plan
 - <and why>
 ## Open doubts for the human

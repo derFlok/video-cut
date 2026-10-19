@@ -14,6 +14,12 @@ by side, `slide_full`: the slide only) names its slide (`"slide": "<id>"`) and m
 `reveal` times for the build steps, seconds after the segment's `in_src` (the cut point
 before `edl snap`; `in` when there is none). One slide id keeps one layout.
 
+B-roll (tools/material.py): a segment with layout `broll` shows the material the human
+chose for a wish of the approved plan (`"material": <wish n>`) full frame while the voice
+goes on; `in`/`out` stay camera time like every other segment. `edl check` adds the
+job-aware rules (a chosen candidate, inside the wish span, not over the hook, at most
+BROLL_MAX_SHARE of the output).
+
 Validation works on the raw JSON and reports every problem with a JSON path
 (`$.segments[2].out`), so Claude can fix an EDL in one round.
 """
@@ -32,7 +38,10 @@ XFADE_MAX_MS = 300
 BLINK_SEARCH_MS = 150  # how far a blink-free cut point may be suggested from the original
 SCREEN_LAYOUTS = ("screen", "pip", "split")  # layouts that show the screen recording
 SLIDE_LAYOUTS = ("slide", "slide_split", "slide_full")  # layouts that show a slide
-LAYOUTS = ("face", *SCREEN_LAYOUTS, *SLIDE_LAYOUTS)
+BROLL_LAYOUTS = ("broll",)  # layouts that show chosen material (stock video, stills)
+LAYOUTS = ("face", *SCREEN_LAYOUTS, *SLIDE_LAYOUTS, *BROLL_LAYOUTS)
+BROLL_MAX_SHARE = 0.4  # at most this share of the output is b-roll
+BROLL_HOOK_S = 2.0  # never b-roll in the first seconds of the output (the hook)
 DEFAULT_LAYOUT = "face"
 SLIDE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
 MIN_BOX_SIDE = 0.02  # a screen box narrower than 2 % of the screen is a typo, not a zoom
@@ -67,6 +76,7 @@ class Segment:
     slide: str | None = None  # slide id (work/slides.json) of a slide layout
     reveal: list[float] = field(default_factory=list)  # build steps, s after reveal_base
     reveal_base: float | None = None  # in_src of the segment (None: its `in`)
+    material: int | None = None  # wish n of the chosen material (layout broll)
 
     @property
     def duration(self) -> float:
@@ -86,6 +96,11 @@ def is_screen(layout: str | None) -> bool:
 def is_slide(layout: str | None) -> bool:
     """Whether `layout` shows a slide (slide, slide_split, slide_full)."""
     return layout in SLIDE_LAYOUTS
+
+
+def is_broll(layout: str | None) -> bool:
+    """Whether `layout` shows chosen material full frame (broll)."""
+    return layout in BROLL_LAYOUTS
 
 
 @dataclass
@@ -131,6 +146,8 @@ class Edl:
                 d["slide"] = s.slide
             if s.reveal:
                 d["reveal"] = s.reveal
+            if s.material is not None:
+                d["material"] = s.material
             if s.xfade_ms is not None:
                 d["xfade_ms"] = s.xfade_ms
             if s.speech_cut_ok:
@@ -257,6 +274,21 @@ def _slide_errors(s: dict, p: str, a, b) -> list[str]:
             )
         last = r
     return errs
+
+
+def _broll_errors(s: dict, p: str) -> list[str]:
+    """`material` of one segment: a wish number on a broll segment, nothing elsewhere."""
+    layout = s.get("layout", DEFAULT_LAYOUT)
+    m = s.get("material")
+    if is_broll(layout):
+        if not (isinstance(m, int) and not isinstance(m, bool) and m >= 1):
+            return [
+                f"{p}.material: layout broll needs the number of a material wish "
+                "(`videocut tool material show`)"
+            ]
+    elif m is not None:
+        return [f"{p}.material: needs layout broll"]
+    return []
 
 
 def slide_layout_errors(segs: list) -> list[str]:
@@ -432,6 +464,7 @@ def validate(
                 errs.append(f"{kp}: zoom must be in {ZOOM_MIN}..{ZOOM_MAX}")
         errs += _screen_errors(s, p, a, b)
         errs += _slide_errors(s, p, a, b)
+        errs += _broll_errors(s, p)
     errs += slide_layout_errors(segs)
 
     # Loose checks for the later phases: shape, output-time ranges, paths inside the job.
@@ -494,6 +527,7 @@ def from_dict(
                 slide=s.get("slide"),
                 reveal=[float(r) for r in s.get("reveal") or []],
                 reveal_base=float(s["in_src"]) if _num(s.get("in_src")) else None,
+                material=s.get("material"),
             )
         )
     return Edl(

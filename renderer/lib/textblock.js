@@ -87,7 +87,8 @@ function attempt(ctx, env, texts, { px, role, maxLines, position, anchor, share,
     // On the seam the slide's content box is the hard block, not its whole part.
     avoid: sm ? env.blocksDuring(t0, t1).filter((b) => !sm.parts.includes(b)) : env.blocksDuring(t0, t1),
     hard: sm ? sm.content : env.hardDuring ? env.hardDuring(t0, t1) : [],
-    position: sm ? "seam" : position || cs.position,
+    // A view may ask for a band while it is on screen (b-roll: "lower", there is no face).
+    position: sm ? "seam" : position || (env.bandDuring && env.bandDuring(t0, t1)) || cs.position,
     seam: sm ? sm.y : null,
     anchor,
     margin: reach,

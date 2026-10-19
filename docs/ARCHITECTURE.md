@@ -56,6 +56,7 @@
 | `sheet contact [--every]`, `sheet burst <t> [--span]`, `sheet timeline <t0> <t1>`, `sheet screen [t0 t1] [--tiles]`, `sheet assets`, `sheet slides` | `sheets.py` |
 | `edl check [file]`, `edl snap [--dry-run]`, `edl locate <t> [--source]` | `edl.py` |
 | `slides check [job]`, `slides stills [job] [--id]`, `slides render [job] [--force]` | `slides.py` |
+| `material fetch [job] [--wish N --query/--prompt]`, `material generate`, `material choose <job> <n> <id\|none>`, `material show [job]`, `job material [job] [--mode] [--wish]` | `material.py`, `_material_providers/`, `_job_material.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
 
@@ -80,8 +81,9 @@ job.json   id, created, source (relative), type, brief, status, approval, brand,
            vocabulary (optional, the video's own terms; see Transcript vocabulary),
            redact_style (optional auto|blur|crop|block; absent = the brand's
            redaction.style, default auto),
+           material (optional {mode, wish}; plan_material: what the plan was made for),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
-           format and cut style of the cut)
+           format, cut style and chosen material of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
 work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4        ingest
            screen_probe.json, screen_audio.wav (+ screen_audio.json),
@@ -107,6 +109,7 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            slides.json (the slides as data)                                     plan run
            slides/stills/<id>.jpg, <id>_sm.jpg (≤ 960 px), <id>.layout.json    slides stills
            slides/<id>.mov, <id>.json (layout report), <id>.spec.json           slides render
+           material.json, material/<n>/c<k>.mp4|jpg|png, c<k>_sm.jpg           material fetch
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
            verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg,
            slides_NN.jpg                                                         verify
@@ -459,6 +462,70 @@ loudness, true peak, size, black/frozen stretches. Slides (`_verify_slides.py`, 
 `slide_untrusted` / `slide_stale` / `slide_unchecked`; `slides_NN.jpg` (one tile per slide, near
 the end of its stretch). After `render --preview`, verify checks
 `out/preview.mp4` at half size and does not judge its single-pass loudness.
+
+## AI labelling and provenance (`_ai_label.py`, `_c2pa.py`, `_disclosure.py`)
+
+EU AI Act Art. 50 (in force since 2026-08-02) and the platforms' own rules: realistic
+AI-generated material in a video is labelled visibly, and the file carries machine-readable
+provenance. Everything here is built from the material the host fetched (`material.load`: the
+trusted copy outside the job folder, every candidate with source, licence, attribution and
+`ai_generated`), the human's checked choices (`material.chosen`, never the `chosen` field of
+the work/material.json mirror) and the EDL; the agent cannot add, move or remove a label.
+`edl snap` belongs before `overlays`: an EDL changed afterwards leaves the overlay layer
+(with the badge) out of the render, and verify flags `ai_label_missing`.
+
+- **What is on screen** (`_ai_label.on_screen`): a segment with `"material": <wish n>`
+  (layout `broll`) over its output span (`edl.output_spans`), and an overlay `still_card`
+  with `props.material` over its `t0..t1`; the candidate is the wish's `chosen` one (a
+  `still_card` may name another candidate of the wish in `props.candidate`). A candidate
+  counts as AI-generated when `ai_generated` is true, its `source` is a generator
+  (`gemini`, `openai`, `local`) or its licence is `generated` (fail closed).
+- **Visible label**: `videocut tool overlays` adds one `ai_badge` item per merged span
+  (gaps < 0.5 s close) after the slide trimming and drops any `ai_badge` the EDL carries;
+  overlays.json `ai_label` lists them. Every AI item of style `photo` (anything not
+  `illustration`) is labelled; illustrations too while `settings.json`
+  `ai_label_illustrations` is true (default; Settings → "KI-Kennzeichnung"). The photo label
+  has no switch. The scene (`renderer/scenes/ai_badge.js`) is a small pill from tokens only
+  (surface fill, text colour, muted edge), text by job language ("KI-generiert" /
+  "AI-generated"), in the top safe-area corner opposite the logo (`tokens.logo.corner` when
+  `logo.placement` is `corner`, else top-left), in the other corner or below the face when
+  the face is there; laid out before every other item (they keep clear of it), drawn above
+  captions and plates (`top`) and also over a full-frame slide (`badge`). No motion.
+- **Verify**: `ai_label_missing` (`_verify_ai.py`) when an item that must be labelled has no
+  drawn `ai_badge` box (overlay_boxes.json) covering its span (1.5 frames slack); no boxes
+  at all count as missing. verify.json `ai_material` lists the AI items; each badge gets a
+  tile in `overlays_NN.jpg`.
+- **Container metadata** (full render): `comment` = "Contains AI-generated material:
+  <models>" when any AI item is shown.
+- **C2PA** (full render, `_c2pa.sign`): the pinned `c2patool` (manifest/tools.json,
+  contentauth/c2pa-rs, universal macOS build; optional install step) embeds a manifest:
+  claim generator "Video Cut <version>", `c2pa.actions` = `c2pa.created` (the reel:
+  digitalSourceType `compositeCapture`, or `compositeWithTrainedAlgorithmicMedia` with AI
+  material), `c2pa.edited`, and per AI model a `c2pa.created` with `trainedAlgorithmicMedia`
+  and the model as softwareAgent. No prompts, names or paths; no timestamp authority (no
+  network). Signed with a local chain created once with macOS openssl in
+  `$VIDEOCUT_HOME/state/c2pa/` (a "Video Cut local" root and an ES256 signer it issued; C2PA
+  refuses a self-signed end certificate; the root key is deleted after issuing). Validators
+  report the manifest as valid with `signingCredential.untrusted` ("unknown signer"); a
+  certificate from a trusted issuer is a later step. After writing, `c2patool <reel>` is read
+  back into render.json `provenance.c2pa_verify`; render.json `c2pa` is `signed`, `skipped`
+  (no c2patool: the reel is delivered without a manifest) or `failed` (a warning).
+- **Incoming provenance** of generated stills is never stripped: the material tools keep the
+  original file next to any derived copy and record `_c2pa.inspect(path)` (C2PA manifest
+  present/absent/unknown, its state, generator, digital source types, a hash of the active
+  manifest, and whether IPTC `trainedAlgorithmicMedia` metadata is in the file) in
+  material.json as each generated candidate's `provenance`. SynthID cannot be read locally; material.json `watermark` comes from the
+  provider.
+- **Disclosure** (`_disclosure.py`, full render): `work/disclosure.json` + `disclosure.md`:
+  the AI items (model, output span, prompt, style, labelled), one attribution line per
+  stock candidate shown, the platform checklist (YouTube "Altered or synthetic content",
+  Meta "AI info", TikTok "AI-generated content": `required` for realistic AI material, else
+  `not needed`), and a description snippet in the job language with the attributions.
+  `GET /api/jobs/{id}/disclosure` (`{"ready": false}` before a full render); the job page
+  shows it as "Veröffentlichen"/"Publish" under the result (checklist, snippet with a copy
+  button, AI items; one line when there is nothing to disclose).
+  `GET/PUT /api/settings/labels` reads and sets `ai_label_illustrations`.
+- `videocut doctor`: `c2patool` present and at the pinned version (optional check).
 
 ## Output format (`tools/_format.py`)
 
@@ -857,6 +924,103 @@ the run); the skill changes only what the feedback asks and adds a "Changed afte
 line. The approval is sha-bound, so a changed plan needs a new approval (the API also revokes
 an existing one before the run starts).
 
+## Material (B-roll and generated stills)
+
+`tools/_job_material.py`, `tools/material.py`, `tools/_material_providers/`,
+`server/material.py`, `app/src/components/Material.tsx`.
+
+**Setting.** job.json `material` = `{mode, wish}`: `none` (absent), `stock` (stock video and
+photos), `generated` (AI stills), `both`; the wish ≤ 2000 characters. Human only (`job
+material`, `run --material-mode/--material-wish`, the new-job form, whose default is
+settings `material_default_mode`); refused in an agent run. Like slides it changes the
+plan: a plan run records `plan_material`, a change makes the plan stale and revokes an
+approval. Settings also hold `image_provider` (none | gemini (default) | openai | local),
+`stock_providers` (pexels, coverr) and `material_budget_usd` (default 1.00 per job). Keys
+live only in the keychain, service `videocut`, accounts `pexels-api-key`, `coverr-api-key`,
+`gemini-api-key`, `openai-api-key` (`settings.set_secret/secret/has_secret`; `api_key()` /
+`set_api_key()` are the wrappers for `anthropic-api-key`); the API takes them write-only
+(`PUT /api/settings/secrets`, GET says only which are stored).
+
+**Plan (agent, no network).** The plan skill writes `material_wishes` [{n, kind
+broll|still|icon, src_from, src_to, query, prompt, style photo|illustration, why}] into
+plan.json and a *Material* table into project.md. `plan check` (`material.wish_errors`):
+none for mode none; at most one wish per 8 s of the plan's target (else estimate, else the
+keep rows' sum); each span ≥ 1 s inside one keep row; broll only with stock, icon only with
+a generator; a 2–8 word stock query where stock is searched, a prompt (≤ 600 characters)
+where one is generated. The human approves the wishes with the plan.
+
+**Fetch (host).** After the approval, `videocut run` (or `POST /api/jobs/{id}/material/fetch`,
+a queued run of kind `material`) calls `material fetch`: for broll/still wishes the stock
+providers in settings order (Pexels videos then photos with `orientation` from the job
+format, `locale` de-DE/en-US from the job language, `size=medium`; Coverr videos filtered by
+`is_vertical`), up to 4 candidates, each downloaded in the smallest rendition whose short
+side reaches the output's, cut to 30 s without re-encoding, probed, thumbed (≤ 480 px) and
+hashed; for still/icon wishes with mode generated/both the image provider makes up to 2
+(prompt + style words + the brand's colours as names, never hex codes, which models draw
+as text + "no text, no letters, no logos" last; Gemini: Interactions API,
+model `gemini-nano-banana-2.1`, `response_format` aspect ratio and 1K/2K; OpenAI: Image API,
+`gpt-image-2.5-flare`, a 16-px-aligned size of the output aspect, quality medium). The
+generator's file is stored byte for byte (SynthID / C2PA intact; `source_sha256`). Cost
+guard: the estimate (published per-image prices: Gemini 2K $0.0504, OpenAI ~$0.06) plus what
+the job spent must stay within the budget, otherwise generation is refused with a plain
+message and the stock part still runs. Every fetch appends to material.json `runs` and to
+`work/runs.jsonl` (`phase: material`). The HTTP helper refuses non-HTTPS and any call under
+`VIDEOCUT_AGENT=1`, waits on 429 (Retry-After, else 2^k s; 3 times), and scrubs key-like
+strings and URL queries from errors. Providers share one registry
+(`register_provider/get_provider/providers`); the local generator registers itself as
+`local`. Offline run: `VIDEOCUT_MATERIAL_FAKE=1` (or `fetch|generate --dry-run`) swaps in
+`_material_providers/fake.py` (`fake-stock`: moving FFmpeg gradients and stills in the job's
+orientation; `fake-image`: a still in the brand's first colour, AI-generated, $0), so the
+whole chain runs without keys or network; never listed in the settings, and the candidates
+say `licence: test material`.
+
+**Choice (human).** `material choose <job> <n> <id|none>` / `POST material/choose` writes
+`$VIDEOCUT_HOME/state/<job>/material_choice.json` (candidate, file, SHA-256, the wish's
+signature n/kind/span) and mirrors `chosen`/`decided` into material.json. What was fetched is kept
+outside the job folder as well (`state/<job>/material.json`, the trusted copy;
+`work/material.json` is its mirror), so the candidates, their files, hashes and the AI flag
+come from the host, never from a file an agent run may edit. `material.chosen()`
+counts a choice only while the wish is still in the approved plan.json and the file still
+has that hash, so an agent run that edits material.json or swaps a file gains nothing.
+`videocut run` stops with exit code 5 (gate `material`, stage `material`, status `waiting`)
+while a wish is open, printing `material show` and the choose command; `--material-skip`
+chooses none for every open wish. The cut record carries `material_sha256` (a changed choice
+makes the cut stale). A Coverr pick is reported to Coverr's download counter (its API terms).
+
+**App.** New job: "Material" (Keins / Stock-Material / KI-Bilder / Beides, wish). Settings:
+section Material (default mode, generator — "local" only when registered, disabled with its
+reason when not available —, stock libraries, cost limit, the four keys write-only). Plan
+view: the wishes. Material screen (between approval and cut): per wish the why, candidates
+as thumbs (videos play muted on hover/click), licence and attribution, a "KI" marker on
+generated ones, choose / "Kein Material" / "Neu suchen" (edited query) / "Neu erzeugen"
+(edited prompt), progress while fetching, cost against the budget, then "Weiter zum
+Schnitt" (`/start`). Candidate files are served only from `work/material/<n>/c<k>[_sm].<ext>`.
+
+**B-roll in the cut.** EDL layout `broll` (`edl.BROLL_LAYOUTS`) is a normal segment in
+camera time with `"material": <wish n>`; it shows the material the human chose for that wish
+full frame while the voice goes on. `edl check` refuses a wish without a valid choice
+(`material.chosen`: the record outside the job folder and the file's SHA-256), a segment
+outside the wish's `src_from`–`src_to`, b-roll in the first 2 s of the output (the hook), and
+more than 40 % of the output in b-roll. Render plans each b-roll range from the same choices
+(`_broll.plan_broll`; without one it refuses) and draws it with `_layouts.compose_broll`:
+centre-cropped to fill the output aspect (never letterboxed); images get a 5 % Ken Burns
+push-in (zoompan on a 2× upscale); clips start at their beginning, muted (the audio graph is
+unchanged); a clip shorter than its range by less than 1 s loops (`-stream_loop`), a longer
+gap lets the clip end and the face-framed camera shows for the rest (`overlay
+eof_action=pass`). HDR clips are tonemapped like the camera; everything is converted to the
+reel's matrix in limited range. Material inputs are extra ffmpeg inputs (indexes counted by
+`-i`). render.json `broll` lists `{segment, wish, candidate, file, kind, ai_generated, style,
+source, model, out_t0, out_t1, looped}` (`out_t1`: the end of the shown material); the AI
+label and the disclosure are built from it. Captions: overlays.json `views` carries `{layout:
+"broll", band: "lower"}` per b-roll range; the face track has no samples there and the
+renderer puts captions in the lower band while such a view is on screen (`env.bandDuring`).
+Verify (`_verify_broll.py`) reads the middle frame of each stretch: `broll_black` (mostly
+black), `broll_aspect` (flat dark bands on two opposite edges), `broll_unreadable`; a broll
+segment counts as showing no camera for `blink_at_cut`. `videocut tool sheet material` puts
+the candidates' thumbs on `work/sheets/material_NN.jpg`, labelled `<wish>/<id>` (+ "AI").
+The cut skill uses only chosen material, only inside its wish's span, never over the hook's
+first 2 s, at most 40 % of the reel.
+
 ## Revision runs (`run.revise`, skill `revise`)
 
 `videocut run <job> --feedback TEXT [--at S]` (and `POST /api/jobs/{id}/feedback`) revises the
@@ -1091,6 +1255,73 @@ whenever stdin is not a terminal, unless `VIDEOCUT_UI_SERVER=1` (set by `videocu
 own process; the app's decisions come through its authenticated requests; `agent.command`
 removes it from agent runs). A helper such as the person's Claude Code, which runs commands
 without a terminal, therefore cannot approve a plan; the install skill also forbids cutting.
+
+## Local image generation (optional)
+
+`tools/_material_providers/local_flux.py`, provider name `local` (`settings.json`
+`image_provider: "local"`, `get_provider("local")` in `_material_providers/__init__.py`):
+generated stills for a person without any API key, made on the Mac and never sent anywhere.
+Model: FLUX.2 [klein] 4B (Black Forest Labs, Apache-2.0), the distilled 4-step variant, run
+by mflux (MIT, MLX), quantised to 8 bit when it loads.
+
+Install: `videocut models pull --image` (or `videocut setup --image`; `models pull
+flux2-klein-4b` leads to the same place). Refused inside an agent run and on a Mac with less
+than 16 GB memory. It prints the sizes first (16.0 GB download, the time at 100 Mbit/s, 8 GB
+on disk afterwards), checks free disk space (download + copy + 2 GB while it installs), then
+(1) adds the `image` extra from `uv.lock` (`pyproject.toml` `[project.optional-dependencies]
+image = ["mflux==<pin>"]`) with `uv sync --frozen --inexact --extra image` in start.sh's uv
+environment (`install.uv_env`: pinned Python only, `.tools/uv-cache`, `UV_NO_DEV` where no
+developer tools are installed), then `uv cache prune --ci`; (2) downloads
+`black-forest-labs/FLUX.2-klein-4B` at the revision pinned in `manifest/tools.json`
+(`models.flux2-klein-4b`: `allow_patterns` take only what mflux loads, transformer, Qwen3
+text encoder, tokenizer, VAE, plus the licence) into `$VIDEOCUT_HOME/models/.download/`
+(`snapshot_download` resumes; `.videocut-revision` marks it complete); (3) saves the 8-bit
+copy the app loads into `models/flux2-klein-4b/` (`local_flux.quantise`, mflux
+`save_model` in the child process below, about 15 s; written to `.part`, renamed when done,
+marker `<revision> 8-bit`) and deletes the download. A run that stopped after (2) only does
+(3). Why the copy: loading the full-precision weights and quantising at every start costs
+memory and 16 GB more disk for nothing. Hugging Face models now keep the marker next to the
+model; older installs are still recognised by `.tools/installed.json`. start.sh keeps the
+extra on every later sync while `models/flux2-klein-4b` or the download folder exists
+(`uv sync` is exact and would remove mflux otherwise). The mflux pin is the one that knows
+the model id `flux2-klein-4b` and pins the same repo revision itself (`ModelRevisions`);
+mflux pins `huggingface-hub<2`, so the lock moved from 2.x to 1.x for everyone (whisper,
+parakeet and the model downloads use only `snapshot_download`). `videocut doctor`: "image
+generation" (optional): ready with the mflux version, half installed, not installed, or not
+on this Mac.
+
+Generation (`LocalFlux.generate(prompt, width, height, seed, palette, style, dest)`):
+refused inside an agent run (`VIDEOCUT_AGENT`), and when `available()` says no (Apple
+Silicon, ≥ 16 GB memory, mflux importable, model complete at the pinned revision; the reason
+is a plain sentence). Size: the nearest of 1024×1024, 1024×1792 and 1792×1024 by aspect
+(< 0.8 portrait, > 1.25 landscape, else square; multiples of 16 as the model needs); the
+material step crops to the output format. Prompt: the sentence, then the brand palette as
+colour names (`colour_words`: never hex, which the model drew as literal text), the style
+words and `NO_TEXT` last: `a tidy desk with a laptop; colours deep navy blue and warm
+orange; clean editorial photo; no text, no letters, no logos` (`illustration` → `flat
+illustration`; at most 5 valid `#RRGGBB` colours). Seed: the given one or a random one, always recorded. Each image
+runs in a child process (`python -I -m videocut.tools._material_providers.local_flux`,
+request as JSON on stdin, one JSON line back) with `HF_HUB_OFFLINE=1`, a timeout (240 s) and
+a memory guard: the parent reads the child's physical footprint (`proc_pid_rusage`, which
+includes MLX's unified-memory buffers) four times a second and stops it above the Mac's
+memory minus 4 GB (at most 80 %); the child also sets `mx.set_memory_limit` to that value.
+The child caps MLX's buffer cache at 1 GB (without it MLX keeps freed buffers up to its
+limit: 27 GB footprint measured on a 36 GB Mac, no faster) and, on Macs under 20 GB, decodes
+the VAE in tiles (1024×1792 needs a 15.4 GB footprint untiled, about 10–11 GB tiled; tiling
+leaves a faint grid in fine detail, mean difference 7/255, invisible at video size, so only
+where needed). The PNG is written without metadata. `GenResult`: model `flux2-klein-4b`, revision (the
+pinned commit), seed, watermark `none` (the model adds none; the AI label and C2PA come from
+our render), elapsed_s, steps 4, quantisation `8-bit`, the exact prompt, and in `extra` the
+mflux version, load and generation seconds and the peak memory.
+
+Measured on an M3 Pro with 36 GB (2026-10-19, mflux 0.23.0, 4 steps, 8-bit): download
+16.0 GB in 25 min, quantise 15 s, 8.0 GB on disk. Per image (child start and model load
+about 1 s included): 1024×1024 40–45 s, 1024×1792 75–81 s. Peak physical footprint of the
+child: 12.6 GB square / 19.6 GB portrait untiled (36 GB Mac); with a 16 GB Mac's settings
+(12 GB guard, tiled decode) 9.7 GB square / 10.3 GB portrait at about the same speed. Not yet
+run on a real 16 GB Mac. Hex colours in the prompt are sometimes drawn as text into the
+image (FLUX renders strings it is given); a prompt asking for "room for text" gets garbled
+lettering.
 
 ## Decisions
 

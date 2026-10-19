@@ -1,9 +1,10 @@
 """`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style|target|duplicate|
-title|redact-style|vocab|slides|slides-import`: create a job folder, inspect it, approve its
-plan, decide which personal-data candidates are demo data (human only,
+title|redact-style|vocab|slides|slides-import|material`: create a job folder, inspect it,
+approve its plan, decide which personal-data candidates are demo data (human only,
 src/videocut/redaction.py), set its brand, its screen recording, its output format, its cut
 style, its target length or how personal data is hidden, duplicate it, give it a display
-title, edit its transcript vocabulary, or set its slides and import the human's own pages.
+title, edit its transcript vocabulary, set its slides and import the human's own pages, or
+set its material (stock video and generated stills).
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -27,6 +28,8 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                copy_of (the id of the job this one was duplicated from),
                slides (optional {mode: none|upload|auto|both, wish}; absent: none;
                plan_slides records what the plan was made for; _job_slides.py),
+               material (optional {mode: none|stock|generated|both, wish}; absent: none;
+               plan_material records what the plan was made for; _job_material.py),
                vocabulary (optional transcript vocabulary of this video, tools/vocab.py:
                [{term, variants, note?}]; merged with the brand's, the job wins),
     input/     the recording (hard link or copy, never moved) and other uploads;
@@ -62,7 +65,7 @@ from pathlib import Path
 from .. import brand
 from .. import redaction as red
 from ..paths import state_dir
-from . import _format, _job_slides, _length, _redact_style, _style, vocab
+from . import _format, _job_material, _job_slides, _length, _redact_style, _style, vocab
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -220,6 +223,10 @@ def approve_job(job: Path) -> dict:
     if _job_slides.plan_stale(job, data):
         raise ToolError(
             f"the plan was made for other slides: plan again (`videocut run {job.name} --replan`)"
+        )
+    if _job_material.plan_stale(job, data):
+        raise ToolError(
+            f"the plan was made for other material: plan again (`videocut run {job.name} --replan`)"
         )
     try:
         cands = red.load(job) or []  # what the human saw; stays redacted (redaction.enforced)
@@ -698,6 +705,14 @@ def show(args) -> dict:
             + (f"; wish: {sl['wish']}" if sl["wish"] else "")
             + ("; the plan was made for other slides, stale" if sl["stale"] else "")
         )
+    out["material"] = mat = _job_material.view(job, data)
+    if mat["mode"] != "none":
+        print(
+            f"material: {mat['mode']}"
+            + (f"; wish: {mat['wish']}" if mat["wish"] else "")
+            + ("; the plan was made for other material, stale" if mat["stale"] else "")
+            + "; chosen material: `videocut tool material show`"
+        )
     return out
 
 
@@ -976,6 +991,7 @@ def register(subparsers) -> None:
     vocab.register_job(sub)
     _register_redact_style(sub)
     _job_slides.register(sub, job_parent)
+    _job_material.register(sub, job_parent)
 
 
 # --- redaction style (_redact_style.py) ----------------------------------------------------

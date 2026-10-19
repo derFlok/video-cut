@@ -122,9 +122,10 @@ def _done(job: Path, data: dict) -> bool:
         return False
 
 
-# Status ids: new | running | waiting (at the plan gate) | done (the reel of the approved
-# plan is there: the result gate, feedback possible) | error (the last run failed).
-# Stage ids: prep, plan, approval, cut, overlays, verify, done, revise, plan_revise, error.
+# Status ids: new | running | waiting (at the plan or the material gate) | done (the reel of
+# the approved plan is there: the result gate, feedback possible) | error (the last run failed).
+# Stage ids: prep, plan, approval, material, cut, overlays, verify, done, revise, plan_revise,
+# error.
 
 
 def disk_stage(job: Path, data: dict) -> tuple[str, str]:
@@ -132,6 +133,10 @@ def disk_stage(job: Path, data: dict) -> tuple[str, str]:
     if _done(job, data):
         return "done", "done"
     if is_approved(job):
+        from . import material
+
+        if material.waiting(job):
+            return "waiting", "material"  # the human chooses the material (/material/choose)
         return "new", "cut"  # approved, cut not finished: /start continues with the cut
     if (job / "work" / "project.md").is_file():
         return "waiting", "approval"
@@ -150,7 +155,9 @@ def status(job: Path, data: dict, ch: Channel | None) -> tuple[str, str]:
 
 
 def gate(job: Path, data: dict) -> str | None:
-    st, _ = disk_stage(job, data)
+    st, stage = disk_stage(job, data)
+    if st == "waiting" and stage == "material":
+        return "material"
     return {"waiting": "plan", "done": "result"}.get(st)
 
 
@@ -350,6 +357,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "has_screen": bool(data.get("screen")),
         "assets": data.get("assets", []),
         "slides": slides_view(job, data),
+        "material": material_summary(job, data),
         "redaction": redaction_view(job),
         "outputs": outputs(job),
         "verify": verify if isinstance(verify, dict) else None,
@@ -357,6 +365,12 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "revisions": revs,
         "versions": versions,
     }
+
+
+def material_summary(job: Path, data: dict) -> dict:
+    from . import material
+
+    return material.summary(job, data)
 
 
 def with_slide_stills(job: Path, plan: dict) -> dict:

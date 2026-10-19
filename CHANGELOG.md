@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### Added — Material: stock B-roll and generated stills
+- job.json `material {mode, wish}` (none | stock | generated | both): `videocut tool job
+  material`, `videocut run --material-mode/--material-wish/--material-skip`, the new-job
+  form ("Material", default from settings `material_default_mode`). Like slides, a change
+  makes the plan stale (`plan_material`) and revokes an approval.
+- Plan skill: `material_wishes` in plan.json and a *Material* table in project.md (≤ 1 wish
+  per 8 s, inside a keep row, English stock query, generator prompt without text, names or
+  brands); `plan check` validates them; the plan view lists them.
+- `videocut tool material fetch|generate|choose|show` (host only, refused inside an agent
+  run): Pexels (videos, photos) and Coverr (videos) search with orientation and locale, up
+  to 4 candidates per wish (smallest rendition that covers the output, ≤ 30 s, thumbs ≤ 480
+  px, SHA-256); Gemini (`gemini-nano-banana-2.1`, SynthID) or OpenAI (`gpt-image-2.5-flare`,
+  C2PA) generate up to 2 stills per wish from the prompt, the style and the brand's colours,
+  stored byte for byte; cost limit `material_budget_usd` (default 1.00) per job from the
+  published prices; 429 back-off. Everything is logged in `work/material.json`.
+- verify: a b-roll image (slow Ken Burns push-in) is a still on purpose for the frozen
+  check, like a full slide; b-roll clips stay checked.
+- Generator prompts carry the brand palette as colour names ("deep navy blue and warm
+  orange"), never hex codes (a model drew "#F2A33A" as text into a picture), and end with
+  "no text, no letters, no logos"; the plan skill writes scene-only prompts (no signs,
+  screens, "copy space"). One provider registry for stock, cloud and local generators.
+- Integration: the AI label reads only the trusted material copy and the human's checked
+  choices; generated candidates record their incoming provenance (`_c2pa.inspect`) and the
+  exact prompt the model got; a local-generator failure is one error line, not a crash;
+  verify counts an overlay/caption overlap only when both are drawn together > 0.05 s.
+- Offline run for tests and demos: `VIDEOCUT_MATERIAL_FAKE=1` or `material fetch
+  --dry-run` uses local fake providers (FFmpeg gradients, no key, no network).
+- The human's choice (`material choose`, the app's Material screen) is trusted only from
+  `$VIDEOCUT_HOME/state/<job>/material_choice.json` with the file's SHA-256; `videocut run`
+  fetches after the approval and waits (exit code 5, gate `material`) until every wish has
+  a choice or "none"; a changed choice makes the cut stale.
+- Settings → Material: default mode, image generator, stock libraries, cost limit, and the
+  Pexels / Coverr / Gemini / OpenAI keys, kept only in the keychain
+  (`settings.set_secret/secret`; `PUT /api/settings/material`, write-only
+  `PUT /api/settings/secrets`). API: `GET /api/jobs/{id}/material`, `POST material/fetch`,
+  `POST material/choose`, `GET material/files/<n>/<file>`.
+- EDL layout `broll` with `material: <wish n>`: full-frame chosen material (centre crop,
+  5 % Ken Burns on images, clips muted and trimmed, looped when < 1 s short, colour managed);
+  `edl check` rules (chosen only, inside the wish span, not in the first 2 s, ≤ 40 %);
+  captions in the lower band over b-roll; verify `broll_black` / `broll_aspect`; render.json
+  `broll`; `sheet material`; the cut, overlays and revise skills know b-roll.
+
+### Added — local image generation (optional)
+- `videocut models pull --image` (or `setup --image`): FLUX.2 [klein] 4B (Apache-2.0) through
+  mflux 0.23.0 (extra `image`), pinned Hugging Face revision, 16 GB download saved as an
+  8-bit copy of 8 GB; provider `local`
+  (`_material_providers/local_flux.py`, registry `register_provider`/`get_provider`/`providers`)
+  generates stills on the Mac in a child process with timeout and memory guard, never inside
+  an agent run. `settings.json` `image_provider`; doctor check "image generation". The lock
+  moves huggingface-hub to 1.x (mflux pins `<2`).
+
+### Added — AI labelling and provenance (block "Material", compliance)
+- Visible AI label: renderer scene `ai_badge` (tokens only, "KI-generiert"/"AI-generated" by
+  job language, top safe-area corner opposite the logo, off the face, above everything).
+  `overlays` adds it from `work/material.json` + the EDL for every chosen AI-generated
+  candidate on screen (`broll` segments, `still_card` overlays); the EDL cannot add or
+  remove it. Illustrations follow the new setting `ai_label_illustrations` (default on);
+  realistic AI material is always labelled (EU AI Act Art. 50). verify flag
+  `ai_label_missing`, verify.json `ai_material`, a badge tile in the overlay sheet.
+- Provenance on export (full render): container `comment` "Contains AI-generated material:
+  <models>"; a C2PA manifest via the pinned `c2patool` 0.27.22 (manifest/tools.json,
+  optional install step, `videocut doctor` line), signed with a local certificate chain in
+  `$VIDEOCUT_HOME/state/c2pa/` and read back after writing (render.json `c2pa`:
+  signed/skipped/failed, `provenance`). `_c2pa.inspect(path)` for the provenance of
+  generated stills.
+- Disclosure: `work/disclosure.json` + `.md` at render (AI items with model, span and
+  prompt; stock attributions; YouTube/Meta/TikTok checklist; description snippet),
+  `GET /api/jobs/{id}/disclosure`, the "Veröffentlichen"/"Publish" panel on the finished
+  job page, and the settings switch "KI-Kennzeichnung" (`GET/PUT /api/settings/labels`).
+
 ### Added — default brand, the app's look follows it
 - `settings.json` `default_brand` and `theme_follows_brand`; `PUT /api/settings/brand`,
   `GET /api/theme`. Brands screen: "Als Standard" per brand, a "Standard" badge, "Kein

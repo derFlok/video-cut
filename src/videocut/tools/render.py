@@ -30,6 +30,11 @@
              (work/slides/<id>.mov from `videocut tool slides render`, run here when a clip
              is missing or stale) with the speaker as a round bubble / beside it
              (_layouts.slide_geometry); a slide on consecutive segments runs on
+    broll    segments with "layout" broll show the material the human chose for their wish
+             (tools/material.chosen, file hash checked; none chosen: refused) full frame:
+             cropped to fill, images with a slow push-in, clips muted and looped or ended
+             (_layouts.compose_broll, _broll.py); render.json "broll" lists what was shown
+             where (output seconds, candidate, ai_generated) for the AI label
     layouts  segments with "layout" screen/pip/split are drawn from the original screen
              recording (job.json "screen") at camera time + work/sync.json offset_s, with
              eased screen_zoom, redact blocks and brand background (_layouts.py); render.json
@@ -40,6 +45,13 @@
              screen segments it overlaps (render.json "redaction")
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
+    provenance (full render only) AI-generated material on screen (work/material.json,
+             _ai_label) puts "Contains AI-generated material: <models>" into the container
+             `comment`; the reel gets a C2PA manifest through c2patool (_c2pa: "Video Cut"
+             as generator, the AI models, no prompts, no personal data), verified after
+             writing; render.json "c2pa": "signed"|"skipped" (no c2patool)|"failed" plus
+             "provenance". work/disclosure.json + .md (_disclosure) say what to tick and
+             credit when publishing.
 
 Audio: work/audio.wav when ingest made it from this source (so `ingest --denoise` reaches
 the reel; it is sample-aligned with the source), else the source's audio stream chosen
@@ -59,8 +71,20 @@ import re
 from fractions import Fraction
 from pathlib import Path
 
-from ..edl import EdlError, is_screen, is_slide, load, read_sync, validate
-from . import _audio_env, _layouts, _plates, _redact_blur, _redact_style, _snap
+from .. import __version__
+from ..edl import EdlError, is_broll, is_screen, is_slide, load, read_sync, validate
+from . import (
+    _ai_label,
+    _audio_env,
+    _broll,
+    _c2pa,
+    _disclosure,
+    _layouts,
+    _plates,
+    _redact_blur,
+    _redact_style,
+    _snap,
+)
 from . import _render_plan as plan_mod
 from . import slides as slides_mod
 from ._color import is_hdr, output_tags, to_sdr
@@ -79,7 +103,7 @@ from .common import (
 )
 from .edl import snap_job
 from .ingest import audio_offset, probe
-from .job import PROJECT, is_approved, redaction_enforced
+from .job import PROJECT, is_approved, job_lang, redaction_enforced
 
 CRF, PRESET = "18", "medium"
 PREVIEW_PRESET = "veryfast"
@@ -224,17 +248,18 @@ def _style_doc(b: dict) -> dict:
 
 
 def _layout_video(job, plan, edl, info, face, video_in, inputs):
-    """Video lines of a render with screen or slide layouts, the _layouts.plan_all doc
-    (screen, clamped, speaker, warnings; empty without screen layouts) plus "slides" (the
-    slide summary of slides.ensure_clips), and the extra ffmpeg inputs (the screen
-    recording, then one slide clip per slide range) to append after `inputs`."""
+    """Video lines of a render with screen, slide or b-roll layouts, the _layouts.plan_all
+    doc (screen, clamped, speaker, warnings; empty without screen layouts) plus "slides"
+    (the slide summary of slides.ensure_clips) and "broll" (_broll.plan_broll), and the
+    extra ffmpeg inputs (the screen recording, one slide clip per slide range, one material
+    input per b-roll range) to append after `inputs`."""
     extra: list[str] = []
     screen_in = None
     if any(is_screen(s.layout) for s in edl.segments):
         drawn = _layouts.plan_all(job, edl, plan, tuple(info["size"]), face, edl.size)
         # a blur text recognition still reads is made stronger (or a solid block) first
         drawn["blur_raised"] = _redact_blur.calibrate(drawn, plan.fps)
-        screen_in = f"{len(inputs) // 2}:v:0"
+        screen_in = f"{inputs.count('-i')}:v:0"
         extra += ["-i", str(drawn["screen"])]
     else:
         drawn = {"segs": {}, "clamped": [], "speaker": [], "warnings": [], "redaction": [],
@@ -246,17 +271,25 @@ def _layout_video(job, plan, edl, info, face, video_in, inputs):
             edl, plan, tuple(info["size"]), face, edl.size, slides_mod.brand_tokens(job)
         )
         for i, seg in sorted(sl["segs"].items()):
-            slide_in[i] = f"{(len(inputs) + len(extra)) // 2}:v:0"
+            slide_in[i] = f"{(inputs + extra).count('-i')}:v:0"
             extra += ["-i", str(made["clips"][seg.slide])]
         slide_segs = sl["segs"]
         drawn["speaker"] = drawn["speaker"] + sl["speaker"]
         drawn["warnings"] = drawn["warnings"] + sl["warnings"]
         drawn["slides"] = made["slides"]
+    broll_segs, broll_in = {}, {}
+    if any(is_broll(s.layout) for s in edl.segments):
+        br = _broll.plan_broll(job, edl, plan)
+        for i, seg in sorted(br["segs"].items()):
+            broll_in[i] = f"{(inputs + extra).count('-i')}:v:0"
+            extra += _layouts.broll_inputs(seg, plan.fps)
+        broll_segs = br["segs"]
+        drawn["broll"] = br["doc"]
     video = _layouts.video_chain(
         plan, drawn["segs"], lambda r: plan_mod.range_filters(plan, r), video_in, screen_in,
         bg=_layouts.background(job), matrix=overlay_matrix(info), cam_sdr=to_sdr(info),
         screen_sdr=to_sdr(drawn["info"]) if drawn["info"] else "",
-        slides=slide_segs, slide_in=slide_in,
+        slides=slide_segs, slide_in=slide_in, broll=broll_segs, broll_in=broll_in,
     )  # fmt: skip
     return video, drawn, extra
 
@@ -362,7 +395,7 @@ def render(args) -> dict:
             f"{len(snapped['unresolved'])} cut point(s) stay in speech after snapping "
             "(`videocut tool edl snap` lists them)"
         )
-    slide_docs = None
+    slide_docs, broll_docs = None, None
     if use_layouts:
         video, drawn, extra = _layout_video(job, plan, edl, info, face, video_in, inputs)
         clamped, speaker = drawn["clamped"], drawn["speaker"]
@@ -373,6 +406,7 @@ def render(args) -> dict:
         ]
         screen_rel = str(drawn["screen"].relative_to(job)) if drawn["screen"] else None
         slide_docs = drawn.get("slides")
+        broll_docs = drawn.get("broll")
         warnings += [
             f"slide {d['id']}: the text does not fit even at 60 %"
             for d in slide_docs or []
@@ -386,7 +420,7 @@ def render(args) -> dict:
             )
     graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off)
     if use_overlay:
-        graph += composite_graph(len(inputs) // 2, plan.fps, (ow, oh), overlay_matrix(info))
+        graph += composite_graph(inputs.count("-i"), plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
         v_out = "[vo]"
     elif overlay.is_file():
@@ -404,6 +438,8 @@ def render(args) -> dict:
 
     dst = out / ("preview.mp4" if preview else "reel.mp4")
     print(f"rendering {dst.name}: {len(edl.segments)} segments, {len(plan.ranges)} ranges")
+    shown = _ai_label.on_screen(job, edl, data)  # chosen material on screen (provenance)
+    ai_comment = None if preview else _disclosure.comment(shown)
     ffmpeg_to(
         dst,
         *inputs,
@@ -432,9 +468,13 @@ def render(args) -> dict:
         "-ar",
         str(plan_mod.RATE),
         *output_tags(info),
+        *(["-metadata", f"comment={ai_comment}"] if ai_comment else []),
         "-movflags",
         "+faststart",
     )
+    provenance = None if preview else _provenance(dst, shown, ai_comment)
+    if provenance and provenance["c2pa"] == "failed":
+        warnings.append(f"no C2PA manifest: {provenance.get('c2pa_error')}")
 
     cover = None
     if not preview:
@@ -486,6 +526,8 @@ def render(args) -> dict:
         report["screen_zoom_clamped"] = clamped
     if slide_docs:
         report["slides"] = slide_docs
+    if broll_docs:
+        report["broll"] = broll_docs
     if red_source != "none" or styles:
         report["redaction"] = {
             "source": red_source, "candidates": [c["id"] for c in cands],
@@ -493,6 +535,12 @@ def render(args) -> dict:
         }  # fmt: skip
     if plan.tail:
         report["tail_s"] = round(float(plan.tail / plan.fps), 3)
+    if provenance:
+        report["c2pa"] = provenance.pop("c2pa")
+        report["provenance"] = provenance
+        report["disclosure"] = "work/disclosure.json"
+        _disclosure.write(job, edl, data, job_lang(read_job(job)),
+                          {"comment": ai_comment, "c2pa": report["c2pa"]})  # fmt: skip
     if loud["integrated_lufs"] is None:
         warnings.append("the reel is silent")
     elif abs(off := loud["integrated_lufs"] - plan_mod.TARGET_I) > 1:
@@ -525,11 +573,33 @@ def render(args) -> dict:
         "screen": screen_rel,
         "screen_zoom_clamped": clamped,
         "slides": slide_docs,
+        "broll": broll_docs,
         "speaker": speaker,
         "redaction": report.get("redaction"),
         "snap": report.get("snap"),
+        "c2pa": report.get("c2pa"),
         "warnings": warnings,
     }
+
+
+def _provenance(dst: Path, shown: list[dict], ai_comment: str | None) -> dict:
+    """Sign the finished reel with a C2PA manifest (_c2pa; replaced in place) and say what
+    the file carries: {"c2pa": "signed"|"skipped"|"failed", "comment", "ai_models",
+    "c2pa_valid"/"c2pa_verify" | "c2pa_reason" | "c2pa_error"}."""
+    ai = [{"model": m} for m in _ai_label.models(shown)]
+    signed = dst.with_name(f"{dst.stem}.c2pa{dst.suffix}")
+    result = _c2pa.sign(dst, signed, ai, __version__)
+    if result["c2pa"] == "signed":
+        signed.replace(dst)
+    signed.unlink(missing_ok=True)
+    doc = {"c2pa": result["c2pa"], "comment": ai_comment, "ai_models": [a["model"] for a in ai]}
+    if result["c2pa"] == "signed":
+        doc |= {"c2pa_valid": result["valid"], "c2pa_verify": result["verify"]}
+    elif "reason" in result:
+        doc["c2pa_reason"] = result["reason"]
+    else:
+        doc["c2pa_error"] = result.get("error")
+    return doc
 
 
 def register(subparsers) -> None:

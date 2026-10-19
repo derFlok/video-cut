@@ -17,6 +17,10 @@ also lies outside every word of work/words.json (when present) as a suggestion.
 Slides: a segment with a slide layout must name a slide of work/slides.json, its
 reveal times may not outnumber the slide's build steps, and an image slide's file must
 exist (tools/slides.py).
+B-roll (layout broll, `material`: a wish n): the wish must have a candidate the human
+chose (tools/material.chosen; `material show`), the segment's source span must overlap the
+wish's [src_from, src_to], no b-roll may start in the first BROLL_HOOK_S of the output (the
+hook), and b-roll covers at most BROLL_MAX_SHARE of the output.
 Readability warnings (never a failure): a screen window whose UI text would be lower than
 _layouts.TEXT_MIN_PX output px is reported as `screen_text_small` with the zoom it needs.
 
@@ -47,8 +51,11 @@ from pathlib import Path
 
 from .. import redaction
 from ..edl import (
+    BROLL_HOOK_S,
+    BROLL_MAX_SHARE,
     EdlError,
     blink_warnings,
+    is_broll,
     is_screen,
     is_slide,
     load,
@@ -113,6 +120,8 @@ def check(args) -> dict:
                 errs += slides_mod.edl_problems(doc, raw) + slides_mod.asset_errors(job, doc)
             except ToolError as e:
                 errs.append(f"$.segments: the EDL shows slides but {e}")
+        if any(is_broll(seg.layout) for seg in edl.segments):
+            errs += broll_errors(job, edl)
         if errs:
             for err in errs:
                 print(err)
@@ -135,6 +144,44 @@ def check(args) -> dict:
         "sync": None if sync is None else sync["method"],
         "warnings": warnings,
     }
+
+
+def broll_errors(job: Path, edl) -> list[str]:
+    """The job-aware b-roll rules (module doc)."""
+    from . import material as material_mod
+
+    chosen = material_mod.chosen(job)
+    errs, total, shown = [], edl.output_duration(), 0.0
+    for i, (seg, (a, b)) in enumerate(zip(edl.segments, output_spans(edl), strict=True)):
+        if not is_broll(seg.layout):
+            continue
+        p = f"$.segments[{i}]"
+        n = seg.material
+        c = chosen.get(n)
+        if c is None:
+            errs.append(
+                f"{p}.material: wish {n} is not chosen by the human: videocut tool material show"
+            )
+        elif not (c["src_from"] - SPAN_TOL_S <= seg.start and seg.end <= c["src_to"] + SPAN_TOL_S):
+            errs.append(
+                f"{p}: [{seg.start}, {seg.end}] is outside wish {n}'s span "
+                f"[{c['src_from']}, {c['src_to']}]"
+            )
+        if a < BROLL_HOOK_S - 1e-3:
+            errs.append(
+                f"{p}: b-roll at output {round(a, 2)} s covers the hook (the first "
+                f"{BROLL_HOOK_S:g} s show the speaker)"
+            )
+        shown += b - a
+    if total and shown > BROLL_MAX_SHARE * total + 1e-3:
+        errs.append(
+            f"$.segments: b-roll fills {round(shown, 2)} s of {round(total, 2)} s "
+            f"(at most {round(BROLL_MAX_SHARE * 100)} %)"
+        )
+    return errs
+
+
+SPAN_TOL_S = 0.25  # a b-roll segment may reach this far past its wish's span (word edges)
 
 
 def _num(v) -> bool:

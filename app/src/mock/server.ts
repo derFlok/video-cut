@@ -6,12 +6,19 @@ import type {
   Brand,
   BrandSettings,
   ClaudeDetection,
+  Disclosure,
+  LabelSettings,
   SetupStatus,
   ThemeView,
   JobDetail,
   JobEvent,
   JobSummary,
+  MaterialMode,
+  MaterialSettings,
+  MaterialView,
+  MaterialWish,
   PdCandidate,
+  SecretAccount,
   Plan,
   PlanJson,
   Stage,
@@ -34,6 +41,8 @@ export interface MockOptions {
   testOk?: boolean;
   /** Default brand and theme switch (default: none, following). */
   brandSettings?: Partial<BrandSettings>;
+  /** Material settings (default: none, no generator, both stock libraries, no keys). */
+  materialSettings?: Partial<MaterialSettings>;
 }
 
 interface MockJob {
@@ -53,6 +62,37 @@ interface MockJob {
   /** The transcript (made on first use) and the edits an undo can take back. */
   words?: TranscriptWord[];
   edits?: { i: number; before: TranscriptWord }[];
+  /** Material candidates and choices (after approval of a plan with wishes). */
+  material?: MaterialView;
+  /** work/disclosure.json of the last full render (absent: none yet). */
+  disclosure?: Disclosure;
+}
+
+const WISHES: MaterialWish[] = [
+  { n: 1, kind: "broll", src_from: 13.0, src_to: 19.5, query: "team meeting office calm", prompt: null, style: "photo", why: "Zeigt den Alltag, über den gesprochen wird." },
+  { n: 2, kind: "still", src_from: 33.0, src_to: 38.0, query: "laptop desk morning light", prompt: "A tidy desk with a laptop in soft morning light", style: "photo", why: "Ruhiges Bild zum zweiten Beispiel." },
+];
+
+/** Candidates the mock "finds" for a wish (pictures from mock/pictures). */
+function mockCandidates(id: string, w: MaterialWish, mode: MaterialMode, seed = 0): MaterialView["wishes"][number]["candidates"] {
+  const out: MaterialView["wishes"][number]["candidates"] = [];
+  const base = `/api/jobs/${id}/material/files/${w.n}`;
+  if (mode !== "generated" && w.kind !== "icon")
+    for (let k = 1; k <= 3; k++)
+      out.push({
+        id: `c${k}`, kind: w.kind === "broll" && k < 3 ? "video" : "image", thumb_url: `${base}/c${k + seed}_sm.jpg`, file_url: `${base}/c${k}.mp4`,
+        width: 1080, height: 1920, duration_s: w.kind === "broll" && k < 3 ? 8 + k : null, source: "pexels",
+        source_url: "https://www.pexels.com/", author: `Beispiel ${k}`, licence: "Pexels License", attribution: `Video by Beispiel ${k} on Pexels`,
+        ai_generated: false, model: null, watermark: "none",
+      });
+  if (mode !== "stock" && w.kind !== "broll")
+    for (let k = out.length + 1, i = 0; i < 2; i++, k++)
+      out.push({
+        id: `c${k}`, kind: "image", thumb_url: `${base}/c${k + seed}_sm.jpg`, file_url: `${base}/c${k}.png`, width: 1088, height: 1920,
+        duration_s: null, source: "gemini", source_url: null, author: null, licence: "generated", attribution: "AI-generated (gemini-nano-banana-2.1)",
+        ai_generated: true, model: "gemini-nano-banana-2.1", watermark: "synthid",
+      });
+  return out;
 }
 
 const SAMPLE = "Heute zeige ich euch, wie Zentrowia den Ablauf einfacher macht. Ähm, also, zuerst öffnet ihr die Übersicht. Dann wählt ihr den Bericht aus und klickt auf Senden. Das war's schon!";
@@ -83,6 +123,8 @@ export interface MockState {
   apiKey: string | null;
   stopped: boolean;
   brandSettings: BrandSettings;
+  materialSettings: MaterialSettings;
+  labels: LabelSettings;
   /** Every request the fake saw (method, path, body), newest last. */
   calls: { method: string; path: string; body: unknown }[];
 }
@@ -354,6 +396,19 @@ function seedJobs(): Map<string, MockJob> {
     { t: "log", text: "  redact text        30.2s  {'texts': 88, 'suggest': 2}" },
     { t: "log", text: "  face               18.9s  {'found_pct': 98.4, 'blinks': 51}" },
   );
+  // waiting at the material gate: the plan with two wishes is approved, candidates fetched
+  const matPlan = planFor("Ablauf mit Bildern");
+  matPlan.plan!.material_wishes = clone(WISHES);
+  add("job-material", "Ablauf mit Bildern", "2026-10-14T10:00:00", {
+    type: "thought", status: "waiting", stage: "material", gate: "material", approved: true, source_duration_s: 64.0,
+    material: { mode: "both", wish: "ruhige Büroszenen", stale: false, wishes: 2, pending: [1, 2], fetched: true },
+    runs: [{ phase: "plan", wall_s: 80, turns: 14, cost_usd: 0.3 }, { phase: "material", wall_s: 21, turns: null, cost_usd: 0.07 }],
+  }, matPlan);
+  const mj = jobs.get("job-material")!;
+  mj.material = {
+    mode: "both", image_provider: "gemini", budget_usd: 1, cost_usd: 0.07, fetched: true, pending: [1, 2],
+    wishes: WISHES.map((w) => ({ ...w, decided: false, chosen: null, candidates: mockCandidates("job-material", w, "both") })),
+  };
   jobs.get("job-overlays")!.events.push(
     { t: "log", text: "overlays: Claude is working" },
     { t: "tool", text: "Bash: videocut tool captions --job job-overlays" },
@@ -404,6 +459,20 @@ export function createMock(opts: MockOptions = {}) {
     apiKey: null,
     stopped: false,
     brandSettings: { default_brand: null, theme_follows_brand: true, ...opts.brandSettings },
+    materialSettings: {
+      material_default_mode: "none",
+      image_provider: "gemini",
+      stock_providers: ["pexels", "coverr"],
+      material_budget_usd: 1,
+      image_providers: [
+        { name: "gemini", available: false, reason: "no key stored (gemini-api-key)", registered: true },
+        { name: "openai", available: false, reason: "no key stored (openai-api-key)", registered: true },
+        { name: "local", available: false, reason: "the image model is not downloaded", registered: true },
+      ],
+      secrets: { "pexels-api-key": false, "coverr-api-key": false, "gemini-api-key": false, "openai-api-key": false },
+      ...opts.materialSettings,
+    },
+    labels: { ai_label_illustrations: true },
     calls: [],
   };
   const listeners = new Map<string, Set<(ev: JobEvent) => void>>();
@@ -424,7 +493,7 @@ export function createMock(opts: MockOptions = {}) {
   const later = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
   /** A simulated Claude run: stages with log lines, then a gate or done. */
-  async function simulate(id: string, stages: Stage[], end: "plan" | "result", after: () => void) {
+  async function simulate(id: string, stages: Stage[], end: "plan" | "material" | "result", after: () => void) {
     const job = state.jobs.get(id)!;
     state.active = id;
     job.detail.status = "running";
@@ -443,6 +512,11 @@ export function createMock(opts: MockOptions = {}) {
       job.detail.status = "waiting";
       emit(id, { t: "stage", stage: "approval" });
       emit(id, { t: "gate", gate: "plan" });
+    } else if (end === "material") {
+      job.detail.status = "waiting";
+      job.detail.gate = "material";
+      emit(id, { t: "stage", stage: "material" });
+      emit(id, { t: "gate", gate: "material" });
     } else {
       job.detail.status = "done";
       emit(id, { t: "stage", stage: "done" });
@@ -523,6 +597,37 @@ export function createMock(opts: MockOptions = {}) {
       return json(200, { stopping: true });
     }
 
+    if (a === "settings" && id === "material") {
+      const m = state.materialSettings;
+      if (method === "GET") return json(200, m);
+      if (method === "PUT") {
+        const b = body as Partial<MaterialSettings>;
+        if (b.material_default_mode !== undefined && !["none", "stock", "generated", "both"].includes(b.material_default_mode))
+          return json(400, { detail: { message: `unknown material mode '${b.material_default_mode}'` } });
+        if (b.image_provider !== undefined && !["none", "gemini", "openai", "local"].includes(b.image_provider))
+          return json(400, { detail: { message: `unknown image provider '${b.image_provider}'` } });
+        if (b.material_budget_usd !== undefined && !(b.material_budget_usd >= 0 && b.material_budget_usd <= 100))
+          return json(400, { detail: { message: "the cost limit must be between 0 and 100" } });
+        for (const k of ["material_default_mode", "image_provider", "stock_providers", "material_budget_usd"] as const)
+          if (b[k] !== undefined) (m as unknown as Record<string, unknown>)[k] = b[k];
+        return json(200, m);
+      }
+    }
+    if (a === "settings" && id === "secrets") {
+      const m = state.materialSettings;
+      if (method === "GET") return json(200, { secrets: m.secrets });
+      if (method === "PUT") {
+        const b = body as { account?: string; value?: string };
+        if (!b.account || !(b.account in m.secrets)) return json(400, { detail: { message: `unknown account '${b.account}'` } });
+        m.secrets = { ...m.secrets, [b.account as SecretAccount]: !!b.value };
+        const prov = b.account.replace("-api-key", "");
+        m.image_providers = m.image_providers.map((x) =>
+          x.name === prov ? { ...x, available: !!b.value, reason: b.value ? "" : `no key stored (${b.account})` } : x,
+        );
+        return json(200, { secrets: m.secrets });
+      }
+    }
+
     if (a === "theme" && method === "GET") return json(200, themeView());
     if (a === "settings" && id === "brand" && method === "PUT") {
       const b = body as Partial<BrandSettings>;
@@ -530,6 +635,10 @@ export function createMock(opts: MockOptions = {}) {
       if (b.default_brand !== undefined) state.brandSettings.default_brand = b.default_brand;
       if (typeof b.theme_follows_brand === "boolean") state.brandSettings.theme_follows_brand = b.theme_follows_brand;
       return json(200, themeView());
+    }
+    if (a === "settings" && id === "labels") {
+      if (method === "PUT") state.labels = { ai_label_illustrations: !!(body as LabelSettings).ai_label_illustrations };
+      return json(200, state.labels);
     }
     if (a === "brands") {
       if (!id && method === "GET")
@@ -603,6 +712,7 @@ export function createMock(opts: MockOptions = {}) {
         state.jobs.set(nid, copy);
         return json(200, summary(copy));
       }
+      if (b === "disclosure" && method === "GET") return json(200, job.disclosure ? { ...job.disclosure, ready: true } : { ready: false });
       if (b === "title" && method === "PUT") {
         const title = String((body as { title?: string })?.title ?? "").trim();
         if (!title) return json(422, { detail: "the title is empty" });
@@ -612,8 +722,18 @@ export function createMock(opts: MockOptions = {}) {
       }
       if (b === "start" && method === "POST") {
         if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        if (d.stage === "material" && job.material) {
+          if (job.material.pending.length) return json(409, { detail: { message: "choose material for every wish first", code: "state" } });
+          d.gate = null;
+          void simulate(id, ["cut", "overlays", "verify"], "result", () => {
+            d.outputs = { reel: "out/reel.mp4", preview: "out/preview.mp4", cover: "out/cover.jpg" };
+            d.verify = { ok: true, checks: { loudness: { ok: true } }, flagged: [], overlay_flagged: [], screen_flagged: [] };
+          });
+          return json(202, { ok: true });
+        }
         void simulate(id, ["prep", "plan"], "plan", () => {
           job.plan = planFor(job.title ?? "Neues Video");
+          if (d.material && d.material.mode !== "none" && job.plan.plan) job.plan.plan.material_wishes = clone(WISHES);
           d.plan_sha = job.plan.sha;
           d.redaction = { candidates: clone(CANDIDATES), decision: null };
           planned(job);
@@ -650,6 +770,20 @@ export function createMock(opts: MockOptions = {}) {
         if (d.plan_target_stale) return json(409, { detail: { message: "the plan was made for another target length: plan again", code: "state" } });
         d.approved = true;
         d.redaction.decision = req.redaction ? { ...req.redaction } : null;
+        const wishes = job.plan.plan?.material_wishes ?? [];
+        if (d.material && d.material.mode !== "none" && wishes.length) {
+          job.material = { mode: d.material.mode, image_provider: state.materialSettings.image_provider, budget_usd: state.materialSettings.material_budget_usd, cost_usd: 0,
+            wishes: wishes.map((w) => ({ ...w, decided: false, chosen: null, candidates: [] })), pending: wishes.map((w) => w.n), fetched: false };
+          d.material = { ...d.material, wishes: wishes.length, pending: job.material.pending, fetched: false };
+          void simulate(id, ["material"], "material", () => {
+            const mv = job.material!;
+            mv.wishes = mv.wishes.map((w) => ({ ...w, candidates: mockCandidates(id, w, mv.mode) }));
+            mv.fetched = true;
+            mv.cost_usd = mv.mode === "stock" ? 0 : 0.13;
+            d.material = { ...d.material!, fetched: true };
+          });
+          return json(202, { ok: true });
+        }
         void simulate(id, ["cut", "overlays", "verify"], "result", () => {
           job.cutWith = resolveStyle(d);
           d.cut_stale = false;
@@ -657,6 +791,42 @@ export function createMock(opts: MockOptions = {}) {
           d.verify = { ok: true, checks: { loudness: { ok: true } }, flagged: [], overlay_flagged: [], screen_flagged: [] };
         });
         return json(202, { ok: true });
+      }
+      if (b === "material") {
+        const mv = job.material;
+        if (!c && method === "GET")
+          return mv ? json(200, mv) : json(200, { mode: d.material?.mode ?? "none", image_provider: state.materialSettings.image_provider, budget_usd: state.materialSettings.material_budget_usd, cost_usd: 0, wishes: [], pending: [], fetched: false });
+        if (!mv) return json(409, { detail: { message: "the approved plan has no material wishes", code: "state" } });
+        if (c === "fetch" && method === "POST") {
+          if (state.active) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+          const req = (body ?? {}) as { wish?: number; query?: string; prompt?: string; generate?: boolean };
+          if (req.wish !== undefined && !mv.wishes.some((w) => w.n === req.wish)) return json(400, { detail: { message: `no material wish ${req.wish}` } });
+          void simulate(id, ["material"], "material", () => {
+            mv.wishes = mv.wishes.map((w) => {
+              if (req.wish !== undefined && w.n !== req.wish) return w;
+              const nw = { ...w, query: req.query ?? w.query, prompt: req.prompt ?? w.prompt };
+              const fresh = mockCandidates(id, nw, mv.mode, req.wish !== undefined ? 3 : 0);
+              const cands = req.generate ? [...w.candidates.filter((x) => !x.ai_generated), ...fresh.filter((x) => x.ai_generated)] : fresh;
+              return { ...nw, candidates: cands, decided: false, chosen: null };
+            });
+            mv.pending = mv.wishes.filter((w) => !w.decided).map((w) => w.n);
+            mv.fetched = true;
+            d.material = { ...d.material!, fetched: true, pending: mv.pending };
+          });
+          return json(202, { id, run: "material", state: "queued" });
+        }
+        if (c === "choose" && method === "POST") {
+          const req = body as { n: number; candidate: string | null };
+          const w = mv.wishes.find((x) => x.n === req.n);
+          if (!w) return json(400, { detail: { message: `no material wish ${req.n}` } });
+          if (req.candidate !== null && !w.candidates.some((x) => x.id === req.candidate))
+            return json(400, { detail: { message: `wish ${req.n} has no candidate '${req.candidate}'` } });
+          w.decided = true;
+          w.chosen = req.candidate;
+          mv.pending = mv.wishes.filter((x) => !x.decided).map((x) => x.n);
+          d.material = { ...d.material!, pending: mv.pending };
+          return json(200, mv);
+        }
       }
       if (b === "cut-style" && method === "PUT") {
         const v = String((body as { cut_style?: string })?.cut_style ?? "");
@@ -847,6 +1017,14 @@ export function createMock(opts: MockOptions = {}) {
           format_resolved: (fmt === "auto" ? (withScreen ? "16:9" : "9:16") : fmt) as JobDetail["format_resolved"],
           brief: (form.get("brief") as string) || null,
           title,
+          material: {
+            mode: (String(form.get("material_mode") ?? "none") as MaterialMode),
+            wish: String(form.get("material_wish") ?? ""),
+            stale: false,
+            wishes: 0,
+            pending: [],
+            fetched: false,
+          },
         }),
         created: new Date().toISOString(),
         title,
@@ -880,6 +1058,11 @@ export function createMock(opts: MockOptions = {}) {
         const fmt = state.jobs.get(p[2])?.detail.format_resolved ?? "16:9";
         if (name.includes("pd-") || name.includes("view-3")) return screenStill(n);
         return personStill(n, fmt);
+      }
+      if (p[1] === "jobs" && p[3] === "material" && p[4] === "files") {
+        const m = (p[6] ?? "").match(/c(\d+)/);
+        const n = m ? Number(m[1]) : 1;
+        return p[6]?.endsWith(".mp4") ? "data:video/mp4;base64," : personStill(n + 10 * Number(p[5] ?? 1), "9:16");
       }
       if (p[1] === "jobs" && p[3] === "media" && p[4] === "cover") return coverPicture(state.jobs.get(p[2])?.detail.format_resolved ?? "9:16");
       if (p[1] === "jobs" && (p[3] === "media" || p[3] === "download")) return "data:video/mp4;base64,";

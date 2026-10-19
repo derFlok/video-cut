@@ -19,6 +19,14 @@ stretches `face` is the speaker area (pip inset, the speaker's face in split), s
 land below the screen view, outside the speaker. `safe` are the
 organic safe zones (docs/BRIEF.md §8). captions/overlays are copied from the EDL.
 
+B-roll (layout broll, tools/material.py): overlays.json "views" lists each b-roll range
+with "band": "lower" and no screen or speaker: the material fills the frame, there is no
+face, and captions go to the lower band there.
+AI label: for every AI-generated material item the cut shows (work/material.json, the
+chosen candidates with "ai_generated"; _ai_label) an "ai_badge" item is added over its
+output span, after the slide trimming; an "ai_badge" in the EDL is dropped, so only this
+tool decides where the label is. overlays.json "ai_label" lists them.
+
 Slides (every job type): overlays.json "views" also lists per slide range the speaker
 (the bubble of `slide`, the face in the speaker part of `slide_split`); a `slide_split`
 view's `screen` is the slide's part (scenes keep off it; portrait/square captions sit on
@@ -51,10 +59,10 @@ import subprocess
 from pathlib import Path
 
 from .. import brand
-from ..edl import EdlError, is_screen, is_slide, load, read_sync
+from ..edl import EdlError, is_broll, is_screen, is_slide, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
 from ..redaction import asset_boxes, same_asset
-from . import _layouts, _plates, _redact_style
+from . import _ai_label, _layouts, _plates, _redact_style
 from . import _render_plan as plan_mod
 from ._geometry import face_track, framed, map_box, safe_zones, sized
 from .common import (
@@ -67,7 +75,7 @@ from .common import (
     write_json,
 )
 from .ingest import probe
-from .job import redaction_enforced
+from .job import job_lang, redaction_enforced
 
 DEFAULT_BRAND = brand.EXAMPLE_ID
 SPEAKER_STEP_S = 0.25
@@ -127,6 +135,8 @@ def build(job: Path) -> dict:
     if any(is_slide(lay) for lay in layouts):
         slides = _layouts.plan_slides(edl, plan, src_size, face, edl.size, tokens)["segs"]
         views = sorted(views + _slide_views(plan, slides, face, src_size), key=lambda v: v["t0"])
+    if any(is_broll(lay) for lay in layouts):  # b-roll: full-frame material, no face
+        views = sorted(views + broll_views(plan, edl), key=lambda v: v["t0"])
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
     cands, _ = redaction_enforced(job)
@@ -155,7 +165,36 @@ def build(job: Path) -> dict:
         doc["overlays"], hidden = off_slides(doc["overlays"], views)
         if hidden:
             doc["slide_hidden"] = hidden
+    # --- AI label (compliance): added from work/material.json, never from the EDL ---
+    badges = ai_badges(job, edl, json.loads(edl_path.read_text()))
+    mine = _ai_label.SCENE
+    doc["overlays"] = [
+        o for o in doc["overlays"] if not (isinstance(o, dict) and o.get("scene") == mine)
+    ] + badges
+    if badges:
+        doc["ai_label"] = [{k: b[k] for k in ("t0", "t1")} | b["props"] for b in badges]
+    # --- end AI label ---
     return doc
+
+
+def broll_views(plan, edl) -> list[dict]:
+    """Per b-roll range (output time): the chosen material fills the frame, so there is no
+    face (face_track skips non-face ranges) and captions go to the lower band ("band")."""
+    out, f0 = [], 0
+    for r in plan.ranges:
+        if is_broll(r.layout):
+            out.append({"t0": round(float(f0 / plan.fps), 6),
+                        "t1": round(float((f0 + r.frames) / plan.fps), 6),
+                        "layout": "broll", "material": edl.segments[r.seg].material,
+                        "screen": None, "speaker": None, "band": "lower"})  # fmt: skip
+        f0 += r.frames
+    return out
+
+
+def ai_badges(job: Path, edl, raw: dict) -> list[dict]:
+    """The "ai_badge" items for the AI-generated material the cut shows (_ai_label)."""
+    items = _ai_label.on_screen(job, edl, raw)
+    return _ai_label.badge_items(items, job_lang(read_job(job))) if items else []
 
 
 def off_slides(items: list, views: list[dict]) -> tuple[list, list[dict]]:
