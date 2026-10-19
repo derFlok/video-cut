@@ -415,7 +415,8 @@ Type: <type> · Format: <format> (<w>x<h>) · Cut style: <cut_style> · Target l
 | # | File | Sentence (source) | Focus | Personal data | Why |
 |---|---|---|---|---|---|
 
-## Material (only when job show → material.mode is not none)
+## Material
+<!-- only when job show → material.mode is not none; leave this comment out -->
 | # | Source (the words it illustrates) | Kind | Stock query | Generator prompt | Style | Why |
 |---|---|---|---|---|---|---|
 | 1 | 021.30–025.10 | broll | "hands typing laptop office" | — | photo | shows the daily routine |
