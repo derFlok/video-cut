@@ -1092,6 +1092,72 @@ own process; the app's decisions come through its authenticated requests; `agent
 removes it from agent runs). A helper such as the person's Claude Code, which runs commands
 without a terminal, therefore cannot approve a plan; the install skill also forbids cutting.
 
+## Local image generation (optional)
+
+`tools/_material_providers/local_flux.py`, provider name `local` (`settings.json`
+`image_provider: "local"`, `get_provider("local")` in `_material_providers/__init__.py`):
+generated stills for a person without any API key, made on the Mac and never sent anywhere.
+Model: FLUX.2 [klein] 4B (Black Forest Labs, Apache-2.0), the distilled 4-step variant, run
+by mflux (MIT, MLX), quantised to 8 bit when it loads.
+
+Install: `videocut models pull --image` (or `videocut setup --image`; `models pull
+flux2-klein-4b` leads to the same place). Refused inside an agent run and on a Mac with less
+than 16 GB memory. It prints the sizes first (16.0 GB download, the time at 100 Mbit/s, 8 GB
+on disk afterwards), checks free disk space (download + copy + 2 GB while it installs), then
+(1) adds the `image` extra from `uv.lock` (`pyproject.toml` `[project.optional-dependencies]
+image = ["mflux==<pin>"]`) with `uv sync --frozen --inexact --extra image` in start.sh's uv
+environment (`install.uv_env`: pinned Python only, `.tools/uv-cache`, `UV_NO_DEV` where no
+developer tools are installed), then `uv cache prune --ci`; (2) downloads
+`black-forest-labs/FLUX.2-klein-4B` at the revision pinned in `manifest/tools.json`
+(`models.flux2-klein-4b`: `allow_patterns` take only what mflux loads, transformer, Qwen3
+text encoder, tokenizer, VAE, plus the licence) into `$VIDEOCUT_HOME/models/.download/`
+(`snapshot_download` resumes; `.videocut-revision` marks it complete); (3) saves the 8-bit
+copy the app loads into `models/flux2-klein-4b/` (`local_flux.quantise`, mflux
+`save_model` in the child process below, about 15 s; written to `.part`, renamed when done,
+marker `<revision> 8-bit`) and deletes the download. A run that stopped after (2) only does
+(3). Why the copy: loading the full-precision weights and quantising at every start costs
+memory and 16 GB more disk for nothing. Hugging Face models now keep the marker next to the
+model; older installs are still recognised by `.tools/installed.json`. start.sh keeps the
+extra on every later sync while `models/flux2-klein-4b` or the download folder exists
+(`uv sync` is exact and would remove mflux otherwise). The mflux pin is the one that knows
+the model id `flux2-klein-4b` and pins the same repo revision itself (`ModelRevisions`);
+mflux pins `huggingface-hub<2`, so the lock moved from 2.x to 1.x for everyone (whisper,
+parakeet and the model downloads use only `snapshot_download`). `videocut doctor`: "image
+generation" (optional): ready with the mflux version, half installed, not installed, or not
+on this Mac.
+
+Generation (`LocalFlux.generate(prompt, width, height, seed, palette, style, dest)`):
+refused inside an agent run (`VIDEOCUT_AGENT`), and when `available()` says no (Apple
+Silicon, ≥ 16 GB memory, mflux importable, model complete at the pinned revision; the reason
+is a plain sentence). Size: the nearest of 1024×1024, 1024×1792 and 1792×1024 by aspect
+(< 0.8 portrait, > 1.25 landscape, else square; multiples of 16 as the model needs); the
+material step crops to the output format. Prompt: the sentence, then the brand palette as
+hex words and the style words, nothing else: `a tidy desk with a laptop; colour palette
+#0B1A3A, #F2A33A; clean editorial photo` (`illustration` → `flat illustration`; at most 5
+valid `#RRGGBB` colours). Seed: the given one or a random one, always recorded. Each image
+runs in a child process (`python -I -m videocut.tools._material_providers.local_flux`,
+request as JSON on stdin, one JSON line back) with `HF_HUB_OFFLINE=1`, a timeout (240 s) and
+a memory guard: the parent reads the child's physical footprint (`proc_pid_rusage`, which
+includes MLX's unified-memory buffers) four times a second and stops it above the Mac's
+memory minus 4 GB (at most 80 %); the child also sets `mx.set_memory_limit` to that value.
+The child caps MLX's buffer cache at 1 GB (without it MLX keeps freed buffers up to its
+limit: 27 GB footprint measured on a 36 GB Mac, no faster) and, on Macs under 20 GB, decodes
+the VAE in tiles (1024×1792 needs a 15.4 GB footprint untiled, about 10–11 GB tiled; tiling
+leaves a faint grid in fine detail, mean difference 7/255, invisible at video size, so only
+where needed). The PNG is written without metadata. `GenResult`: model `flux2-klein-4b`, revision (the
+pinned commit), seed, watermark `none` (the model adds none; the AI label and C2PA come from
+our render), elapsed_s, steps 4, quantisation `8-bit`, the exact prompt, and in `extra` the
+mflux version, load and generation seconds and the peak memory.
+
+Measured on an M3 Pro with 36 GB (2026-10-19, mflux 0.23.0, 4 steps, 8-bit): download
+16.0 GB in 25 min, quantise 15 s, 8.0 GB on disk. Per image (child start and model load
+about 1 s included): 1024×1024 40–45 s, 1024×1792 75–81 s. Peak physical footprint of the
+child: 12.6 GB square / 19.6 GB portrait untiled (36 GB Mac); with a 16 GB Mac's settings
+(12 GB guard, tiled decode) 9.7 GB square / 10.3 GB portrait at about the same speed. Not yet
+run on a real 16 GB Mac. Hex colours in the prompt are sometimes drawn as text into the
+image (FLUX renders strings it is given); a prompt asking for "room for text" gets garbled
+lettering.
+
 ## Decisions
 
 - **Local first.** Recordings and audio never leave the machine. Only transcript text,

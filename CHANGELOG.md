@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added — local image generation (optional)
+- `videocut models pull --image` (or `setup --image`): FLUX.2 [klein] 4B (Apache-2.0) through
+  mflux 0.23.0 (extra `image`), pinned Hugging Face revision, 16 GB download saved as an
+  8-bit copy of 8 GB; provider `local`
+  (`_material_providers/local_flux.py`, registry `register_provider`/`get_provider`/`providers`)
+  generates stills on the Mac in a child process with timeout and memory guard, never inside
+  an agent run. `settings.json` `image_provider`; doctor check "image generation". The lock
+  moves huggingface-hub to 1.x (mflux pins `<2`).
+
 ### Added — default brand, the app's look follows it
 - `settings.json` `default_brand` and `theme_follows_brand`; `PUT /api/settings/brand`,
   `GET /api/theme`. Brands screen: "Als Standard" per brand, a "Standard" badge, "Kein

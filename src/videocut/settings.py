@@ -16,8 +16,15 @@ def path() -> Path:
 KEYCHAIN_SERVICE = "videocut"
 KEYCHAIN_ACCOUNT = "anthropic-api-key"
 # default_brand: the brand id the new-job form preselects and the app's look follows
-# (theme_follows_brand); None is neutral.
-DEFAULTS = {"auth": "local", "model": None, "default_brand": None, "theme_follows_brand": True}
+# (theme_follows_brand); None is neutral. image_provider: a name from
+# tools/_material_providers (get_provider), "none" for no generated stills.
+DEFAULTS = {
+    "auth": "local",
+    "model": None,
+    "default_brand": None,
+    "theme_follows_brand": True,
+    "image_provider": "none",
+}
 
 
 def load() -> dict:

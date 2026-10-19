@@ -17,6 +17,10 @@ dependencies = [
   "uvicorn>=0.30",
 ]
 
+[project.optional-dependencies]
+# Local image generation (FLUX.2 [klein] 4B through mflux): `videocut models pull --image`.
+image = ["mflux==0.23.0"]
+
 [project.scripts]
 videocut = "videocut.cli:main"
 

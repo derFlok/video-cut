@@ -127,9 +127,16 @@ if ! compgen -G "$TOOLS/python/cpython-$py_ver-macos-aarch64-*" >/dev/null; then
   rm -rf "$mirror"
 fi
 export UV_PYTHON_DOWNLOADS=never   # never another Python than the pinned one
+# Optional package sets follow their model: once `videocut models pull --image` fetched the
+# local image model, every later sync keeps mflux.
+DATA="${VIDEOCUT_HOME:-$HOME/VideoCut}"
+extras=()
+if [[ -d "$DATA/models/flux2-klein-4b" || -d "$DATA/models/.download/flux2-klein-4b" ]]; then
+  extras+=(--extra image)
+fi
 sync_ok=0
 for attempt in 1 2 3; do
-  if "$BIN/uv" sync --frozen --quiet; then sync_ok=1; break; fi
+  if "$BIN/uv" sync --frozen --quiet ${extras[@]+"${extras[@]}"}; then sync_ok=1; break; fi
   note "Python packages: attempt $attempt failed; retrying (finished downloads are kept)."
   sleep 3
 done
@@ -147,7 +154,6 @@ doctor_ok=1
 
 # --- summary ------------------------------------------------------------------
 kb() { { du -sk "$@" 2>/dev/null || true; } | awk '{s += $1} END {print s + 0}'; }
-DATA="${VIDEOCUT_HOME:-$HOME/VideoCut}"
 tools_kb=$(kb "$TOOLS" "$ROOT/.venv" "$ROOT/renderer/node_modules" "$ROOT/app/node_modules")
 models_kb=$(kb "$DATA/models")
 echo

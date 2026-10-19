@@ -4,11 +4,13 @@ Idempotent and resumable: a finished step is recorded in .tools/installed.json a
 an interrupted download continues from its part file (download.py, .tools/downloads/).
 `./start.sh` prints steps 1-3 (this Mac, uv, Python); this module prints steps 4-7."""
 
+import importlib.util
 import json
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zipfile
@@ -223,18 +225,21 @@ def build_app() -> None:
         raise RuntimeError(f"the app build wrote no {built}")
 
 
-def install_model(name: str) -> None:
-    m = manifest.models()[name]
-    if m["kind"] == "huggingface":
-        dest = MODELS / name
-        if _done(f"model:{name}", m["revision"], dest):
-            return
-        _step(f"Downloading model {name} (~{m['approx_size_gb']} GB)")
-        os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-        from huggingface_hub import snapshot_download
+HF_MARKER = ".videocut-revision"  # in a Hugging Face model's folder once it is complete
+AGENT_ENV = "VIDEOCUT_AGENT"
 
-        snapshot_download(repo_id=m["repo"], revision=m["revision"], local_dir=dest)
-        _mark(f"model:{name}", m["revision"])
+
+def install_model(name: str) -> None:
+    if os.environ.get(AGENT_ENV):
+        raise RuntimeError("models are downloaded by the app, not inside an agent run")
+    m = manifest.models()[name]
+    if m.get("extra"):  # a model with its own packages and preparation
+        install_image()
+        return
+    if m["kind"] == "huggingface":
+        if _model_done(name):
+            return
+        _hf_download(name, m, MODELS / name)
     else:
         dest = MODELS / m["filename"]
         if _done(f"model:{name}", m["sha256"], dest):
@@ -242,6 +247,95 @@ def install_model(name: str) -> None:
         _step(f"Downloading model {name}")
         fetch(m["url"], m["sha256"], dest, name)
         _mark(f"model:{name}", m["sha256"])
+
+
+def _hf_download(name: str, m: dict, dest: Path) -> None:
+    _step(f"Downloading model {name} (~{m['approx_size_gb']} GB)")
+    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    from huggingface_hub import snapshot_download
+
+    # resumable: an interrupted run continues from the partial files in dest/.cache
+    snapshot_download(repo_id=m["repo"], revision=m["revision"], local_dir=dest,
+                      allow_patterns=m.get("allow_patterns"))  # fmt: skip
+    (dest / HF_MARKER).write_text(m["revision"] + "\n")
+
+
+def uv_env() -> dict[str, str]:
+    """The environment start.sh gives uv, for a sync started from Python (the app, `videocut
+    models pull`): the pinned Python only, our cache, this venv. Developer tools only where
+    they are installed already (UV_NO_DEV, like start.sh for end users)."""
+    env = dict(os.environ)
+    env.setdefault("UV_PYTHON_INSTALL_DIR", str(TOOLS / "python"))
+    env.setdefault("UV_PYTHON_PREFERENCE", "only-managed")
+    env.setdefault("UV_CACHE_DIR", str(TOOLS / "uv-cache"))
+    env.setdefault("UV_PROJECT_ENVIRONMENT", sys.prefix)
+    env["UV_PYTHON_DOWNLOADS"] = "never"
+    env["UV_NO_PROGRESS"] = "1"
+    if "UV_NO_DEV" not in env and importlib.util.find_spec("pytest") is None:
+        env["UV_NO_DEV"] = "1"
+    return env
+
+
+def install_extra(extra: str) -> None:
+    """Add an optional package set from uv.lock (pyproject `[project.optional-dependencies]`)
+    to the venv. --inexact keeps what is there; start.sh keeps the extra on later syncs."""
+    _step(f"Installing the Python packages for {extra}")
+    uv = str(BIN / "uv")
+    subprocess.run([uv, "sync", "--frozen", "--inexact", "--quiet", "--extra", extra],
+                   cwd=ROOT, env=uv_env(), check=True)  # fmt: skip
+    # like start.sh: the venv holds its own copies, drop what a re-sync can download again
+    subprocess.run([uv, "cache", "prune", "--ci", "--quiet"], cwd=ROOT,
+                   env={**uv_env(), "UV_LOCK_TIMEOUT": "5"}, capture_output=True)  # fmt: skip
+
+
+def install_image() -> None:
+    """`videocut models pull --image` / `videocut setup --image`: the local image generator
+    (FLUX.2 [klein] 4B through mflux). Says the size first, refuses a Mac it cannot run on.
+    Downloads the pinned revision into models/.download/, saves the 8-bit copy the app loads
+    into models/flux2-klein-4b/ and deletes the download; each step resumes."""
+    from .tools._material_providers import local_flux
+
+    if os.environ.get(AGENT_ENV):
+        raise RuntimeError("models are downloaded by the app, not inside an agent run")
+    name = local_flux.MODEL
+    m = manifest.models()[name]
+    mem = local_flux.memory_gb()
+    if mem < m["min_memory_gb"] - 0.5:
+        raise RuntimeError(
+            f"local image generation needs at least {m['min_memory_gb']} GB memory; this Mac "
+            f"has {mem:.0f} GB. Use an image service in the settings instead."
+        )
+    done = _model_done(name) and local_flux.mflux_version() is not None
+    mb = m["approx_size_gb"] * 1000
+    print(f"\033[1mLocal image generation: FLUX.2 [klein] 4B ({m['license']}), "
+          + (f"{_size(mb)} download ({_minutes(mb)} on 100 Mbit/s), "
+             f"{m['quantised_size_gb']:.0f} GB on disk in {MODELS / name}"
+             if not done else "already done") + "\033[0m", flush=True)  # fmt: skip
+    if done:
+        return
+    src = local_flux.source_dir()
+    MODELS.mkdir(parents=True, exist_ok=True)
+    free_gb = shutil.disk_usage(MODELS).free / 1e9
+    need_gb = m["approx_size_gb"] + m["quantised_size_gb"] + 2 - _folder_gb(src)
+    if not local_flux.model_ready() and free_gb < need_gb:  # else only the packages are missing
+        raise RuntimeError(f"needs {need_gb:.0f} GB free disk space while it installs "
+                           f"({m['quantised_size_gb']:.0f} GB afterwards), "
+                           f"{free_gb:.0f} GB are free")  # fmt: skip
+    install_extra(m["extra"])
+    if not local_flux.model_ready():
+        try:
+            downloaded = (src / HF_MARKER).read_text().strip() == m["revision"]
+        except OSError:
+            downloaded = False
+        if not downloaded:
+            _hf_download(name, m, src)
+        _step(f"Preparing the model for this Mac ({local_flux.QUANTIZE}-bit copy, about a minute)")
+        local_flux.quantise(src)
+    shutil.rmtree(src.parent, ignore_errors=True)  # the 16 GB download is not needed any more
+
+
+def _folder_gb(p: Path) -> float:
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1e9 if p.exists() else 0
 
 
 TOOL_NAMES = ("node", "ffmpeg", "ffprobe", "deep-filter")
@@ -292,6 +386,17 @@ def run(models: bool = True) -> None:
 
 def _model_done(name: str) -> bool:
     m = manifest.models()[name]
+    if m.get("extra"):
+        from .tools._material_providers import local_flux
+
+        return local_flux.model_ready()
     if m["kind"] == "huggingface":
+        # the marker next to the model (since the image model); older installs recorded it
+        # in .tools/installed.json only
+        try:
+            if (MODELS / name / HF_MARKER).read_text().strip() == m["revision"]:
+                return True
+        except OSError:
+            pass
         return _done(f"model:{name}", m["revision"], MODELS / name)
     return _done(f"model:{name}", m["sha256"], MODELS / m["filename"])
