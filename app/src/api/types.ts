@@ -69,6 +69,32 @@ export interface MaterialSettings {
   secrets: Record<SecretAccount, boolean>;
 }
 
+/** GET /api/models/image: the optional local image model (Settings → Material). */
+export type ImageModelState = "unsupported" | "not_installed" | "partial" | "installing" | "installed" | "failed" | "removing";
+export interface ImageModelStatus {
+  state: ImageModelState;
+  reason: string;
+  download_gb: number;
+  disk_gb: number;
+  need_gb: number;
+  free_gb: number;
+  disk_ok: boolean;
+  memory_gb: number;
+  min_memory_gb: number;
+  installed_gb: number;
+  partial_gb: number;
+  mflux_version: string | null;
+  progress: {
+    step: "packages" | "download" | "preparing";
+    pct: number | null;
+    downloaded_gb: number;
+    speed_mbps?: number;
+    eta_s?: number;
+  } | null;
+  error: string | null;
+  log_tail: string[];
+}
+
 export type MaterialKind = "broll" | "still" | "icon";
 export type MaterialStyle = "photo" | "illustration";
 

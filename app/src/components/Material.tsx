@@ -2,7 +2,7 @@
 // section (defaults, generator, keys), the plan's wishes and the screen between plan approval
 // and cut where the human picks a candidate per wish (or none).
 
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { api } from "../api/client";
 import {
   IMAGE_PROVIDERS,
@@ -10,6 +10,7 @@ import {
   MATERIAL_WISH_MAX,
   SECRET_ACCOUNTS,
   STOCK_PROVIDERS,
+  type ImageModelStatus,
   type ImageProviderName,
   type JobDetail,
   type MaterialCandidate,
@@ -22,6 +23,7 @@ import {
   type StockProviderName,
 } from "../api/types";
 import { clockFine, money, useI18n, type T, type TKey } from "../i18n";
+import { href } from "../router";
 import { ErrorBanner } from "./ErrorBanner";
 
 export const usesStock = (m: MaterialMode) => m === "stock" || m === "both";
@@ -123,7 +125,12 @@ export function MaterialSettingsPanel() {
   const [s, setS] = useState<MaterialSettings | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const [budget, setBudget] = useState("");
+  const [model, modelErr, modelAct] = useImageModel();
+  const [highlight, setHighlight] = useState(false);
+  const card = useRef<HTMLElement>(null);
+  const modelInstalled = model?.state === "installed";
   useEffect(() => {
+    // also after the model was installed or removed: the provider list says what is ready
     api
       .materialSettings()
       .then((v) => {
@@ -131,7 +138,7 @@ export function MaterialSettingsPanel() {
         setBudget(String(v.material_budget_usd));
       })
       .catch(setErr);
-  }, []);
+  }, [modelInstalled]);
   if (!s) return err ? <ErrorBanner error={err} /> : null;
 
   const save = (changes: Parameters<typeof api.saveMaterialSettings>[0]) => {
@@ -145,10 +152,19 @@ export function MaterialSettingsPanel() {
       .catch(setErr);
   };
   const providerInfo = (name: ImageProviderName) => s.image_providers.find((p) => p.name === name);
-  const shown = IMAGE_PROVIDERS.filter((p) => p === "none" || p !== "local" || providerInfo(p)?.registered);
   const current = providerInfo(s.image_provider);
+  // "local" is always offered: when its model is missing, the card below says how to get it
+  const localMissing = model !== null && !modelInstalled;
+  const pickProvider = (p: ImageProviderName) => {
+    save({ image_provider: p });
+    if (p === "local" && localMissing) {
+      setHighlight(true);
+      card.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }
+  };
 
   return (
+    <>
     <section className="panel stack" aria-labelledby="material-settings-title" data-testid="material-settings">
       <h2 id="material-settings-title">{t("material.settings.title")}</h2>
       <p className="hint">{t("material.settings.hint")}</p>
@@ -172,11 +188,17 @@ export function MaterialSettingsPanel() {
           <select
             id="material-provider"
             value={s.image_provider}
-            onChange={(e) => save({ image_provider: e.target.value as ImageProviderName })}
+            onChange={(e) => pickProvider(e.target.value as ImageProviderName)}
           >
-            {shown.map((p) => {
+            {IMAGE_PROVIDERS.map((p) => {
               const info = providerInfo(p);
-              const off = p !== "none" && info !== undefined && !info.available && p !== s.image_provider;
+              if (p === "local" && localMissing)
+                return (
+                  <option key={p} value={p}>
+                    {t("material.provider.local.missing")}
+                  </option>
+                );
+              const off = p !== "none" && p !== "local" && info !== undefined && !info.available && p !== s.image_provider;
               return (
                 <option key={p} value={p} disabled={off}>
                   {t(`material.provider.${p}` as TKey)}
@@ -185,7 +207,7 @@ export function MaterialSettingsPanel() {
               );
             })}
           </select>
-          {current && !current.available && (
+          {current && !current.available && !(current.name === "local" && localMissing) && (
             <p className="hint" data-testid="provider-reason">
               {t("material.provider.notready", { reason: current.reason || t("material.provider.unavailable") })}
             </p>
@@ -248,8 +270,180 @@ export function MaterialSettingsPanel() {
       </div>
       <ErrorBanner error={err} />
     </section>
+    <LocalImageModel ref={card} model={model} error={modelErr} act={modelAct} highlight={highlight} />
+    </>
   );
 }
+
+const MODEL_POLL_MS = 2000;
+type ModelAction = "install" | "cancel" | "remove";
+
+/** GET /api/models/image on mount and after every action, every 2 s while it installs or is
+ *  removed. */
+export function useImageModel(): [ImageModelStatus | null, unknown, (a: ModelAction) => void] {
+  const [m, setM] = useState<ImageModelStatus | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const [tick, setTick] = useState(0);
+  const busy = m?.state === "installing" || m?.state === "removing";
+  useEffect(() => {
+    let live = true;
+    api
+      .imageModel()
+      .then((v) => live && setM(v))
+      .catch((e) => live && setErr(e));
+    return () => {
+      live = false;
+    };
+  }, [tick]);
+  useEffect(() => {
+    if (!busy) return;
+    const timer = setTimeout(() => setTick((n) => n + 1), MODEL_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [busy, m]);
+  const act = useCallback((a: ModelAction) => {
+    setErr(null);
+    const call = a === "install" ? api.installImageModel : a === "cancel" ? api.cancelImageModel : api.removeImageModel;
+    call()
+      .then(setM)
+      .catch((e) => {
+        setErr(e);
+        setTick((n) => n + 1);
+      });
+  }, []);
+  return [m, err, act];
+}
+
+const gb = (v: number, lang: string) => v.toLocaleString(lang, { maximumFractionDigits: 1 });
+
+/** Settings → Material: the optional local image model (FLUX.2 [klein] 4B) — what it is and
+ *  costs, the live numbers, and download / cancel / remove by state. */
+export const LocalImageModel = forwardRef<
+  HTMLElement,
+  { model: ImageModelStatus | null; error: unknown; act: (a: ModelAction) => void; highlight?: boolean }
+>(function LocalImageModel({ model: m, error, act, highlight }, ref) {
+  const { t, lang } = useI18n();
+  if (!m) return error ? <ErrorBanner error={error} /> : null;
+  const n = (v: number) => gb(v, lang);
+  const blocked =
+    m.state === "unsupported"
+      ? m.memory_gb < m.min_memory_gb - 0.5
+        ? t("material.local.unsupported.memory", { mem: n(Math.round(m.memory_gb)), min: m.min_memory_gb })
+        : t("material.local.unsupported.mac")
+      : !m.disk_ok && (m.state === "not_installed" || m.state === "partial" || m.state === "failed")
+        ? t("material.local.disk", { need: Math.ceil(m.need_gb), free: Math.floor(m.free_gb) })
+        : null;
+  const p = m.progress;
+  return (
+    <section
+      ref={ref}
+      className={`panel stack${highlight && m.state !== "installed" ? " panel-highlight" : ""}`}
+      aria-labelledby="local-model-title"
+      data-testid="local-image-model"
+    >
+      <h2 id="local-model-title">{t("material.local.title")}</h2>
+      <p>{t("material.local.what")}</p>
+      <p className="hint">
+        {t("material.local.cost", { dl: n(m.download_gb), disk: n(m.disk_gb), mem: m.min_memory_gb })}{" "}
+        {t("material.local.speed")}
+      </p>
+      <p className="hint">{t("material.local.alt")}</p>
+      <dl className="facts" data-testid="local-model-facts">
+        <div>
+          <dt>{t("material.local.free")}</dt>
+          <dd>{n(m.free_gb)} GB</dd>
+        </div>
+        <div>
+          <dt>{t("material.local.memory")}</dt>
+          <dd>{n(Math.round(m.memory_gb))} GB</dd>
+        </div>
+        <div>
+          <dt>{t("material.local.status")}</dt>
+          <dd data-testid="local-model-state">{t(`material.local.state.${m.state}` as TKey)}</dd>
+        </div>
+      </dl>
+      {blocked && (
+        <p className="hint" data-testid="local-model-blocked">
+          {blocked}
+        </p>
+      )}
+      {m.state === "partial" && m.partial_gb > 0 && (
+        <p className="hint">{t("material.local.partial", { got: n(m.partial_gb), gb: n(m.download_gb) })}</p>
+      )}
+      {(m.state === "not_installed" || m.state === "partial" || m.state === "unsupported") && (
+        <div className="actions">
+          <button type="button" className="btn btn-primary" disabled={blocked !== null} onClick={() => act("install")}>
+            {m.state === "partial" ? t("material.local.resume") : t("material.local.download", { gb: n(m.download_gb) })}
+          </button>
+        </div>
+      )}
+      {m.state === "installing" && (
+        <div className="stack-sm" role="status" data-testid="local-model-progress">
+          <p>{t(`material.local.step.${p?.step ?? "packages"}` as TKey)}</p>
+          {p?.pct != null ? (
+            <progress max={100} value={p.pct} aria-label={t("material.local.title")} />
+          ) : (
+            <progress aria-label={t("material.local.title")} />
+          )}
+          {p && p.step === "download" && (
+            <p className="muted">
+              {t("material.local.progress", { got: n(p.downloaded_gb), gb: n(m.download_gb) })}
+              {p.speed_mbps != null && p.eta_s != null
+                ? ` · ${t("material.local.speed.now", { mbps: Math.round(p.speed_mbps), min: Math.max(1, Math.ceil(p.eta_s / 60)) })}`
+                : ""}
+            </p>
+          )}
+          <div className="actions">
+            <button type="button" className="btn" onClick={() => act("cancel")}>
+              {t("material.local.cancel")}
+            </button>
+          </div>
+        </div>
+      )}
+      {m.state === "installed" && (
+        <div className="actions">
+          <span className="chip chip-done" data-testid="local-model-installed">
+            {t("material.local.installed", { gb: n(m.installed_gb || m.disk_gb) })}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => {
+              if (window.confirm(t("material.local.remove.confirm", { gb: n(m.installed_gb || m.disk_gb) }))) act("remove");
+            }}
+          >
+            {t("material.local.remove")}
+          </button>
+        </div>
+      )}
+      {m.state === "removing" && (
+        <p role="status">
+          <progress aria-label={t("material.local.state.removing")} /> {t("material.local.state.removing")}
+        </p>
+      )}
+      {m.state === "failed" && (
+        <div className="stack-sm">
+          <p className="banner banner-error" role="alert">
+            {t("material.local.failed", { msg: m.error || "?" })}
+          </p>
+          <div className="actions">
+            <button type="button" className="btn btn-primary" disabled={blocked !== null} onClick={() => act("install")}>
+              {t("material.local.retry")}
+            </button>
+          </div>
+          {m.log_tail.length > 0 && (
+            <details className="details">
+              <summary>{t("material.local.log")}</summary>
+              <pre className="log" data-testid="local-model-log">
+                {m.log_tail.join("\n")}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+      <ErrorBanner error={error} />
+    </section>
+  );
+});
 
 function SecretField({
   account,
@@ -377,6 +571,16 @@ export function MaterialScreen({ live }: { live: Live }) {
     api.material(job.id).then(setView).catch(setErr);
   }, [job.id]);
   useEffect(load, [load, live.tick]);
+  // the local generator without its model: say where to get it instead of a failing run
+  const [localMissing, setLocalMissing] = useState(false);
+  const local = view?.image_provider === "local";
+  useEffect(() => {
+    if (!local) return setLocalMissing(false);
+    api
+      .imageModel()
+      .then((m) => setLocalMissing(m.state !== "installed"))
+      .catch(() => setLocalMissing(false));
+  }, [local]);
   useEffect(() => {
     if (!running) setBusyWish(null);
   }, [running]);
@@ -459,6 +663,7 @@ export function MaterialScreen({ live }: { live: Live }) {
           }}
           canSearch={usesStock(view.mode) && w.kind !== "icon"}
           canGenerate={usesGenerator(view.mode) && w.kind !== "broll" && view.image_provider !== "none"}
+          generateMissing={localMissing}
         />
       ))}
       <ErrorBanner error={err} />
@@ -485,6 +690,7 @@ function WishCard({
   onGenerate,
   canSearch,
   canGenerate,
+  generateMissing = false,
 }: {
   wish: MaterialView["wishes"][number];
   disabled: boolean;
@@ -493,6 +699,7 @@ function WishCard({
   onGenerate: (prompt: string) => void;
   canSearch: boolean;
   canGenerate: boolean;
+  generateMissing?: boolean;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState(wish.query ?? "");
@@ -547,7 +754,12 @@ function WishCard({
                 </button>
               </form>
             )}
-            {canGenerate && (
+            {canGenerate && generateMissing && (
+              <p className="hint" data-testid={`generate-missing-${wish.n}`}>
+                {t("material.generate.local.missing")} <a href={href({ name: "settings" })}>{t("material.generate.local.link")}</a>
+              </p>
+            )}
+            {canGenerate && !generateMissing && (
               <form
                 className="secret-row"
                 onSubmit={(e) => {

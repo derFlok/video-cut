@@ -14,6 +14,7 @@ import type {
   JobEvent,
   JobSummary,
   MaterialMode,
+  ImageModelStatus,
   MaterialSettings,
   MaterialView,
   MaterialWish,
@@ -43,6 +44,7 @@ export interface MockOptions {
   brandSettings?: Partial<BrandSettings>;
   /** Material settings (default: none, no generator, both stock libraries, no keys). */
   materialSettings?: Partial<MaterialSettings>;
+  imageModel?: Partial<ImageModelStatus>;
 }
 
 interface MockJob {
@@ -129,6 +131,7 @@ export interface MockState {
   stopped: boolean;
   brandSettings: BrandSettings;
   materialSettings: MaterialSettings;
+  imageModel: ImageModelStatus;
   labels: LabelSettings;
   /** Every request the fake saw (method, path, body), newest last. */
   calls: { method: string; path: string; body: unknown }[];
@@ -477,6 +480,24 @@ export function createMock(opts: MockOptions = {}) {
       secrets: { "pixabay-api-key": false, "pexels-api-key": false, "coverr-api-key": false, "gemini-api-key": false, "openai-api-key": false },
       ...opts.materialSettings,
     },
+    imageModel: {
+      state: "not_installed",
+      reason: "",
+      download_gb: 16,
+      disk_gb: 8,
+      need_gb: 26,
+      free_gb: 120.4,
+      disk_ok: true,
+      memory_gb: 36,
+      min_memory_gb: 16,
+      installed_gb: 0,
+      partial_gb: 0,
+      mflux_version: null,
+      progress: null,
+      error: null,
+      log_tail: [],
+      ...opts.imageModel,
+    },
     labels: { ai_label_illustrations: true },
     calls: [],
   };
@@ -602,6 +623,27 @@ export function createMock(opts: MockOptions = {}) {
       return json(200, { stopping: true });
     }
 
+    if (a === "models" && id === "image") {
+      const m = state.imageModel;
+      const busy = m.state === "installing" || m.state === "removing";
+      if (!b && method === "GET") return json(200, m);
+      if (b === "install" && method === "POST") {
+        if (busy) return json(409, { detail: "the image model is being installed or removed" });
+        if (m.state === "unsupported" || !m.disk_ok) return json(400, { detail: m.reason || "not possible on this Mac" });
+        state.imageModel = { ...m, state: "installing", error: null, progress: { step: "download", pct: 25, downloaded_gb: 4, speed_mbps: 400, eta_s: 240 } };
+        return json(200, state.imageModel);
+      }
+      if (b === "cancel" && method === "POST") {
+        if (m.state !== "installing") return json(409, { detail: "no install is running" });
+        state.imageModel = { ...m, state: "partial", partial_gb: m.progress?.downloaded_gb ?? 0, progress: null };
+        return json(200, state.imageModel);
+      }
+      if (!b && method === "DELETE") {
+        if (busy) return json(409, { detail: "the image model is being installed or removed" });
+        state.imageModel = { ...m, state: "not_installed", installed_gb: 0, partial_gb: 0, error: null, log_tail: [] };
+        return json(200, state.imageModel);
+      }
+    }
     if (a === "settings" && id === "material") {
       const m = state.materialSettings;
       if (method === "GET") return json(200, m);

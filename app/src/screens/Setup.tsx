@@ -240,6 +240,9 @@ export function FirstVideo({ onLater }: { onLater: () => void }) {
         <li>{t("first.tip.sound")}</li>
         <li>{t("first.tip.gate")}</li>
       </ul>
+      <p className="muted">
+        {t("first.image")} <a href={href({ name: "settings" })}>{t("nav.settings")}</a>
+      </p>
       <div className="actions">
         <a className="btn btn-primary" href={href({ name: "new" })} onClick={onLater}>
           {t("first.start")}

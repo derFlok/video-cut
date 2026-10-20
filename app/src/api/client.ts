@@ -16,6 +16,7 @@ import type {
   JobEvent,
   JobSummary,
   JobVocabulary,
+  ImageModelStatus,
   MaterialMode,
   MaterialSettings,
   MaterialView,
@@ -204,6 +205,11 @@ export const api = {
   saveMaterialSettings: (
     changes: Partial<Pick<MaterialSettings, "material_default_mode" | "image_provider" | "stock_providers" | "material_budget_usd">>,
   ) => call<MaterialSettings>("PUT", "/api/settings/material", changes),
+  /** The optional local image model: state, sizes, progress while it installs. */
+  imageModel: () => call<ImageModelStatus>("GET", "/api/models/image"),
+  installImageModel: () => call<ImageModelStatus>("POST", "/api/models/image/install"),
+  cancelImageModel: () => call<ImageModelStatus>("POST", "/api/models/image/cancel"),
+  removeImageModel: () => call<ImageModelStatus>("DELETE", "/api/models/image"),
   /** Which keys are stored (never their values). */
   secrets: () => call<{ secrets: Record<SecretAccount, boolean> }>("GET", "/api/settings/secrets"),
   /** Write-only: the key goes to the keychain; "" removes it. */

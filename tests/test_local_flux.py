@@ -381,6 +381,7 @@ def test_doctor_image_check(installed, monkeypatch):
     monkeypatch.setattr(lf, "mflux_version", lambda: None)
     c = doctor.check_image()
     assert not c.ok and "optional" in c.detail and "16 GB" in c.fix
+    assert "Settings → Material" in c.fix
     monkeypatch.setattr(lf, "memory_gb", lambda: 8.0)
     c = doctor.check_image()
     assert c.ok and "not on this Mac" in c.detail
