@@ -9,7 +9,7 @@ from test_server import BASE, ORIGIN, TOKEN, FakePipeline, cut_job, make_job
 from test_vocab import LUMO, ZEN, make_brand, texts, words
 
 from videocut.server import create_app
-from videocut.tools.common import jobs_root
+from videocut.tools.common import jobs_root, write_json
 from videocut.tools.job import approve_job
 
 
@@ -18,7 +18,7 @@ class Pipeline(FakePipeline):
         self.calls.append(("overlays", job.name))
         data = json.loads((job / "job.json").read_text())
         data["overlays"] = {**data["overlays"], "stale": None}
-        (job / "job.json").write_text(json.dumps(data))
+        write_json(job / "job.json", data)  # atomic: the test polls while this runs
         return 0
 
 

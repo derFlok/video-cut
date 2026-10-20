@@ -136,6 +136,21 @@ def _plain(line: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", line)[:400]
 
 
+def _cmdline(pid: int) -> str | None:
+    """The command line of a running process, or None when it is gone or cannot be read.
+    /proc first (Linux, CI), `ps -ww` (unlimited width) on macOS."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+        return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+    except OSError:
+        pass
+    try:
+        return subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=5).stdout  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 class Installer:
     """At most one install child at a time, its log, and the download speed it measured."""
 
@@ -297,12 +312,8 @@ class Installer:
         except (OSError, ValueError):
             return
         pid_path().unlink(missing_ok=True)
-        try:
-            now = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True,
-                                 text=True, timeout=5).stdout  # fmt: skip
-        except (OSError, subprocess.SubprocessError):
-            return
-        if not cmd or cmd not in now:
+        now = _cmdline(pid)
+        if not cmd or now is None or cmd not in now:
             return
         for sig, wait in ((signal.SIGTERM, KILL_AFTER_S), (signal.SIGKILL, 5)):
             try:
