@@ -62,7 +62,7 @@ Video Cut is free and open source. Claude is paid through your own access:
 - 16 GB memory recommended
 - About 4 GB of disk space for the installation (about 2.5 GB is downloaded), plus room for your videos (the installer needs at least 8 GB free and recommends 15 GB)
 - Claude Code, signed in with a Claude Pro or Max plan or an Anthropic API key
-- Optional, local image generation (`videocut models pull --image`): 16 GB memory and about 8 GB more disk space (16 GB download, 26 GB free while it installs)
+- Optional, local image generation (in the app under Settings → Material, or `videocut models pull --image`): 16 GB memory and about 8 GB more disk space (16 GB download, 26 GB free while it installs)
 
 ## Uninstall
 
@@ -283,6 +283,13 @@ generate again. Only what you picked goes into the video. Generated pictures are
 
 Set it up once under **Settings → Material**: your Pexels key (free), optionally Coverr, and
 a Gemini or OpenAI key for generated pictures. Keys are kept in your Mac's keychain only.
+
+**Without a key:** the card *Local image model (optional)* in the same place downloads FLUX.2
+[klein] 4B once (16 GB, 8 GB stay on the Mac; needs 16 GB memory and Apple Silicon) and then
+makes pictures on your Mac: no account, no cost, nothing leaves the machine, about 40–80 s
+per picture on an M3 Pro. The card shows free disk space and memory, the download's progress
+and speed, lets you cancel (finished parts are kept; "Resume" continues) and remove the model
+again. In Terminal the same is `.venv/bin/videocut models pull --image`.
 
 ```bash
 .venv/bin/videocut run ~/Movies/me.mov --material-mode both --material-wish "calm office scenes"

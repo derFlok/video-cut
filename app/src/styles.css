@@ -252,6 +252,34 @@ code {
   box-shadow: var(--shadow);
   min-width: 0;
 }
+.panel-highlight {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px var(--info-bg), var(--shadow);
+}
+/* label/value pairs in a row (Settings → local image model) */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 0;
+}
+.facts dt {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.facts dd {
+  margin: 0;
+  font-weight: 550;
+}
+pre.log {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 16em;
+  overflow: auto;
+  margin: 8px 0 0;
+}
 fieldset {
   border: 0;
   padding: 0;

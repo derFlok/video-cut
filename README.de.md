@@ -62,7 +62,7 @@ Video Cut ist kostenlos und Open Source. Claude bezahlst du über deinen eigenen
 - 16 GB Arbeitsspeicher empfohlen
 - Rund 4 GB Speicher für die Installation (rund 2,5 GB werden heruntergeladen), dazu Platz für deine Videos (der Installer braucht mindestens 8 GB frei und empfiehlt 15 GB)
 - Claude Code, angemeldet mit einem Claude-Pro- oder -Max-Abo oder einem Anthropic-API-Key
-- Optional, lokale Bilderzeugung (`videocut models pull --image`): 16 GB Arbeitsspeicher und rund 8 GB zusätzlicher Speicher (16 GB Download, 26 GB frei während der Installation)
+- Optional, lokale Bilderzeugung (in der App unter Einstellungen → Material, oder `videocut models pull --image`): 16 GB Arbeitsspeicher und rund 8 GB zusätzlicher Speicher (16 GB Download, 26 GB frei während der Installation)
 
 ## Deinstallieren
 
@@ -296,6 +296,14 @@ Kostenlimit pro Video (Standard 1 USD) stoppt die Erzeugung, bevor es teuer wird
 Einmal einrichten unter **Einstellungen → Material**: dein Pexels-Schlüssel (kostenlos),
 optional Coverr, und ein Gemini- oder OpenAI-Schlüssel für erzeugte Bilder. Die Schlüssel
 liegen nur im Schlüsselbund deines Macs.
+
+**Ohne Schlüssel:** Die Karte *Lokales Bildmodell (optional)* an derselben Stelle lädt FLUX.2
+[klein] 4B einmal herunter (16 GB, 8 GB bleiben auf dem Mac; braucht 16 GB Arbeitsspeicher und
+Apple Silicon) und erzeugt die Bilder dann auf deinem Mac: ohne Konto, ohne Kosten, nichts
+verlässt den Mac, rund 40–80 s pro Bild auf einem M3 Pro. Die Karte zeigt freien Speicher und
+Arbeitsspeicher, Fortschritt und Tempo des Downloads, lässt dich abbrechen (fertige Teile
+bleiben; „Fortsetzen" macht weiter) und das Modell wieder entfernen. Im Terminal geht dasselbe
+mit `.venv/bin/videocut models pull --image`.
 
 ```bash
 .venv/bin/videocut run ~/Movies/ich.mov --material-mode both --material-wish "ruhige Büroszenen"

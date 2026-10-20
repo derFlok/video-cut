@@ -1264,7 +1264,8 @@ generated stills for a person without any API key, made on the Mac and never sen
 Model: FLUX.2 [klein] 4B (Black Forest Labs, Apache-2.0), the distilled 4-step variant, run
 by mflux (MIT, MLX), quantised to 8 bit when it loads.
 
-Install: `videocut models pull --image` (or `videocut setup --image`; `models pull
+Install: in the app (Settings → Material, card "Local image model", below), or
+`videocut models pull --image` (or `videocut setup --image`; `models pull
 flux2-klein-4b` leads to the same place). Refused inside an agent run and on a Mac with less
 than 16 GB memory. It prints the sizes first (16.0 GB download, the time at 100 Mbit/s, 8 GB
 on disk afterwards), checks free disk space (download + copy + 2 GB while it installs), then
@@ -1289,6 +1290,43 @@ mflux pins `huggingface-hub<2`, so the lock moved from 2.x to 1.x for everyone (
 parakeet and the model downloads use only `snapshot_download`). `videocut doctor`: "image
 generation" (optional): ready with the mflux version, half installed, not installed, or not
 on this Mac.
+
+**In the app** (`server/models.py`, token-guarded like every route; Settings → Material,
+card `LocalImageModel` in `components/Material.tsx`):
+
+| Route | Does |
+|---|---|
+| `GET /api/models/image` | `{state, reason, download_gb, disk_gb, need_gb, free_gb, disk_ok, memory_gb, min_memory_gb, installed_gb, partial_gb, mflux_version, progress, error, log_tail}` |
+| `POST /api/models/image/install` | starts one install; 409 while one runs or a removal is under way, 400 when this Mac cannot run it or the disk is too small (install_image's message), 403 under `VIDEOCUT_AGENT` |
+| `POST /api/models/image/cancel` | SIGTERM to the child's process group, SIGKILL after 10 s; finished parts stay |
+| `DELETE /api/models/image` | removes `models/flux2-klein-4b/`, its `.part` and `models/.download/` (409 while busy); the `image` packages stay in the venv |
+
+States, in this order: `removing`; `installing` (the child runs); `installed` (`model_ready()`
+and mflux importable); `failed` (the last child exited non-zero and was not cancelled; the
+error is its last `✗`/error line, kept in memory until the next action); `unsupported`
+(not Apple Silicon, or memory below `min_memory_gb`, with the sentence); `partial` (a
+download folder or `.part` with data, resumable, or the model without its packages);
+`not_installed`. `need_gb` is install_image's formula (download + 8-bit copy + 2 GB, minus
+what is downloaded already); `free_gb` is `shutil.disk_usage` of the models folder.
+
+The install runs `[sys.executable, "-m", "videocut.cli", "models", "pull", "--image"]` as a
+child process with `start_new_session` (its own process group, so cancel also stops `uv` and
+the quantise worker), `tool_env()` without `VIDEOCUT_AGENT`, `PYTHONUNBUFFERED`,
+`HF_HUB_DISABLE_PROGRESS_BARS`; stdout and stderr go to `$VIDEOCUT_HOME/logs/model-image.log`.
+Never in the server process: the quantise step takes several GB of memory and must not take
+the UI down. Progress: the step is the last of install_image's own step lines in the log
+(`Installing the Python packages` → packages, `Downloading model` → download, `Preparing the
+model` → preparing); during the download `pct` and `downloaded_gb` come from the size of
+`models/.download/flux2-klein-4b/` (including huggingface_hub's `.incomplete` files) against
+`approx_size_gb`, capped at 99 %; speed and time left from the samples of the last 20 s
+(snapshot_download prints no line a program could parse, so install.py is unchanged). The
+card polls every 2 s while installing or removing. After a server restart nothing runs: the
+app's lifespan stops the child at shutdown (uvicorn re-raises SIGTERM, so `atexit` would not
+run), and a new server stops a child that a killed one left behind (`logs/model-image.pid`
+holds its pid and command line; a reused pid with another command is left alone). A
+half-done folder then reads as `partial`; the next install
+resumes through install_image (snapshot_download continues its part files, a finished
+download is only quantised).
 
 Generation (`LocalFlux.generate(prompt, width, height, seed, palette, style, dest)`):
 refused inside an agent run (`VIDEOCUT_AGENT`), and when `available()` says no (Apple

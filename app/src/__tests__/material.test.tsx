@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { I18nProvider, STRINGS } from "../i18n";
 import { installMock } from "../mock/server";
 import { JobPage } from "../screens/JobPage";
@@ -81,13 +81,12 @@ describe("material settings", () => {
     await user.selectOptions(within(panel).getByLabelText(t("material.settings.default")), "both");
     await waitFor(() => expect(calls(mock, "PUT", "/api/settings/material").at(-1)?.body).toEqual({ material_default_mode: "both" }));
     const provider = within(panel).getByLabelText(t("material.settings.provider")) as HTMLSelectElement;
-    const local = within(provider).getByRole("option", { name: /Lokal/ }) as HTMLOptionElement;
-    expect(local.disabled).toBe(true);
-    expect(local.textContent).toContain("the image model is not downloaded");
+    const gemini = within(provider).getByRole("option", { name: /Gemini/ }) as HTMLOptionElement;
+    expect(gemini.textContent).toContain("no key stored");
   });
 
-  it("hides the local generator while it is not registered", async () => {
-    installMock({
+  it("always offers the local generator; picking it while not installed highlights the card", async () => {
+    const mock = installMock({
       step: 0,
       materialSettings: {
         image_providers: [
@@ -97,10 +96,94 @@ describe("material settings", () => {
         ],
       },
     });
+    const user = userEvent.setup();
     wrap(<Settings />);
     const panel = await screen.findByTestId("material-settings");
     const provider = within(panel).getByLabelText(t("material.settings.provider"));
-    expect(within(provider).queryByRole("option", { name: /Lokal/ })).toBeNull();
+    const local = (await within(provider).findByRole("option", { name: t("material.provider.local.missing") })) as HTMLOptionElement;
+    expect(local.disabled).toBe(false);
+    await user.selectOptions(provider, "local");
+    await waitFor(() => expect(calls(mock, "PUT", "/api/settings/material").at(-1)?.body).toEqual({ image_provider: "local" }));
+    expect(screen.getByTestId("local-image-model")).toHaveClass("panel-highlight");
+  });
+});
+
+describe("the local image model card", () => {
+  const card = async () => screen.findByTestId("local-image-model");
+
+  it("says what it is and costs, shows the numbers, downloads, shows progress and cancels", async () => {
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<Settings />);
+    const c = await card();
+    expect(c).toHaveTextContent(t("material.local.title"));
+    expect(c).toHaveTextContent("40–80 Sekunden");
+    expect(c).toHaveTextContent("Einmal 16 GB herunterladen, danach bleiben 8 GB");
+    expect(within(c).getByTestId("local-model-facts")).toHaveTextContent("120,4 GB");
+    expect(within(c).getByTestId("local-model-state")).toHaveTextContent(t("material.local.state.not_installed"));
+    await user.click(within(c).getByRole("button", { name: "Herunterladen (16 GB)" }));
+    await waitFor(() => expect(calls(mock, "POST", "/api/models/image/install").length).toBe(1));
+    const prog = await within(c).findByTestId("local-model-progress");
+    expect(prog).toHaveTextContent(t("material.local.step.download"));
+    expect(prog).toHaveTextContent("4 von 16 GB · 400 Mbit/s, noch etwa 4 Min.");
+    expect(within(prog).getByRole("progressbar")).toHaveAttribute("value", "25");
+    await user.click(within(prog).getByRole("button", { name: t("material.local.cancel") }));
+    await waitFor(() => expect(within(c).getByTestId("local-model-state")).toHaveTextContent(t("material.local.state.partial")));
+    expect(within(c).getByRole("button", { name: t("material.local.resume") })).toBeEnabled();
+  });
+
+  it("polls every 2 s while it installs", async () => {
+    const mock = installMock({ step: 0, imageModel: { state: "installing", progress: { step: "preparing", pct: 100, downloaded_gb: 16 } } });
+    wrap(<Settings />);
+    const c = await card();
+    expect(await within(c).findByTestId("local-model-progress")).toHaveTextContent(t("material.local.step.preparing"));
+    const before = calls(mock, "GET", "/api/models/image").length;
+    mock.state.imageModel = { ...mock.state.imageModel, state: "installed", installed_gb: 8.1, mflux_version: "0.23.0", progress: null };
+    await waitFor(() => expect(within(c).getByTestId("local-model-installed")).toHaveTextContent("Installiert, 8,1 GB"), { timeout: 4000 });
+    expect(calls(mock, "GET", "/api/models/image").length).toBeGreaterThan(before);
+  });
+
+  it("is disabled with the reason on a Mac with too little memory or disk", async () => {
+    installMock({ step: 0, imageModel: { state: "unsupported", memory_gb: 8 } });
+    const { unmount } = wrap(<Settings />, "en");
+    let c = await card();
+    expect(within(c).getByTestId("local-model-blocked")).toHaveTextContent("This Mac has 8 GB memory; the image model needs at least 16 GB.");
+    expect(within(c).getByRole("button", { name: "Download (16 GB)" })).toBeDisabled();
+    unmount();
+    installMock({ step: 0, imageModel: { disk_ok: false, free_gb: 10.2, need_gb: 26 } });
+    wrap(<Settings />);
+    c = await card();
+    expect(within(c).getByTestId("local-model-blocked")).toHaveTextContent("26 GB frei sein, frei sind 10 GB");
+    expect(within(c).getByRole("button", { name: "Herunterladen (16 GB)" })).toBeDisabled();
+  });
+
+  it("removes after a confirmation", async () => {
+    const mock = installMock({ step: 0, imageModel: { state: "installed", installed_gb: 8, mflux_version: "0.23.0" } });
+    const user = userEvent.setup();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    wrap(<Settings />);
+    const c = await card();
+    await user.click(await within(c).findByRole("button", { name: t("material.local.remove") }));
+    expect(confirm.mock.calls[0][0]).toContain("8 GB frei");
+    expect(calls(mock, "DELETE", "/api/models/image").length).toBe(0);
+    await user.click(within(c).getByRole("button", { name: t("material.local.remove") }));
+    await waitFor(() => expect(within(c).getByTestId("local-model-state")).toHaveTextContent(t("material.local.state.not_installed")));
+    expect(calls(mock, "DELETE", "/api/models/image").length).toBe(1);
+    confirm.mockRestore();
+  });
+
+  it("shows a failure with the log lines and retries", async () => {
+    const mock = installMock({
+      step: 0,
+      imageModel: { state: "failed", error: "Not installed: network down", log_tail: ["▸ Downloading model flux2-klein-4b", "✗ Not installed: network down"] },
+    });
+    const user = userEvent.setup();
+    wrap(<Settings />);
+    const c = await card();
+    expect(within(c).getByRole("alert")).toHaveTextContent("network down");
+    expect(within(c).getByTestId("local-model-log")).toHaveTextContent("Downloading model");
+    await user.click(within(c).getByRole("button", { name: t("material.local.retry") }));
+    await waitFor(() => expect(calls(mock, "POST", "/api/models/image/install").length).toBe(1));
   });
 });
 
@@ -134,6 +217,19 @@ describe("the material screen", () => {
     await waitFor(() =>
       expect(calls(mock, "POST", "/api/jobs/job-material/material/fetch").at(-1)?.body).toEqual({ wish: 1, query: "city street evening" }),
     );
+  });
+
+  it("with the local generator but no model, says where to get it instead of a generate button", async () => {
+    const mock = installMock({ step: 0 });
+    mock.state.jobs.get("job-material")!.material!.image_provider = "local";
+    const user = userEvent.setup();
+    wrap(<JobPage id="job-material" />);
+    const w2 = await screen.findByTestId("wish-2");
+    await user.click(within(w2).getByText(t("material.redo")));
+    const hint = await within(w2).findByTestId("generate-missing-2");
+    expect(hint).toHaveTextContent(t("material.generate.local.missing"));
+    expect(within(hint).getByRole("link", { name: t("material.generate.local.link") })).toHaveAttribute("href", "#/settings");
+    expect(within(w2).queryByRole("button", { name: t("material.generate") })).toBeNull();
   });
 
   it("regenerates with an edited prompt and continues to the cut when everything is decided", async () => {

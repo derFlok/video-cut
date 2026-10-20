@@ -44,6 +44,18 @@
   captions in the lower band over b-roll; verify `broll_black` / `broll_aspect`; render.json
   `broll`; `sheet material`; the cut, overlays and revise skills know b-roll.
 
+### Added — install the local image model from the app
+- Settings → Material, card "Lokales Bildmodell (optional) / Local image model (optional)":
+  what it is and costs, free disk and memory, download / resume / cancel / remove, progress
+  with step, GB, speed and time left, the failure with the last log lines. The provider
+  select always offers "local" ("not installed – download below" highlights the card); the
+  Material screen says where to get the model instead of a failing generate button.
+- `server/models.py`: `GET /api/models/image`, `POST …/install`, `POST …/cancel`,
+  `DELETE /api/models/image`. The install is `videocut models pull --image` as a child
+  process in its own process group (log `$VIDEOCUT_HOME/logs/model-image.log`), never in the
+  server; progress from the download folder's size; refused under `VIDEOCUT_AGENT`.
+- doctor "image generation" and the provider's reason name Settings → Material first.
+
 ### Added — local image generation (optional)
 - `videocut models pull --image` (or `setup --image`): FLUX.2 [klein] 4B (Apache-2.0) through
   mflux 0.23.0 (extra `image`), pinned Hugging Face revision, 16 GB download saved as an

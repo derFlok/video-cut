@@ -3,6 +3,7 @@ media, delete) and the UI's static files. Routes follow the shared API contract 
 local app (docs/BRIEF.md, Phase 3)."""
 
 import asyncio
+import contextlib
 import functools
 import json
 import re
@@ -49,7 +50,7 @@ from ..tools.job import (
     set_target,
     set_title,
 )
-from . import brands, disclosure, setup, state, theme
+from . import brands, disclosure, models, setup, state, theme
 from . import material as material_api
 from .runs import Busy, Runs
 from .security import Guard
@@ -307,9 +308,15 @@ def create_app(
     runner: Pipeline | None = None,
     on_shutdown=None,
     setup_router=None,
+    models_router=None,
 ) -> FastAPI:
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        app.state.models.installer.stop()  # an install child never outlives its server
+
     app = FastAPI(title="Video Cut", version=__version__, docs_url=None, redoc_url=None,
-                  openapi_url=None)  # fmt: skip
+                  openapi_url=None, lifespan=lifespan)  # fmt: skip
     runs = Runs()
     run_with = runner or Pipeline()
     app.state.runs = runs
@@ -884,6 +891,8 @@ def create_app(
     app.include_router(disclosure.router)
     app.state.setup = setup_router or setup.router()
     app.include_router(app.state.setup)
+    app.state.models = models_router or models.router()
+    app.include_router(app.state.models)
 
     @app.post("/api/shutdown")
     def shutdown(body: ShutdownBody | None = None) -> dict:

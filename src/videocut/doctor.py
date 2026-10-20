@@ -136,7 +136,10 @@ def check_image() -> Check:
     from .tools._material_providers import local_flux as lf
 
     name = "image generation"
-    pull = "optional: `videocut models pull --image` (about 16 GB download)"
+    pull = (
+        "optional: Settings → Material in the app, or `videocut models pull --image` "
+        "(about 16 GB download)"
+    )
     mem = lf.memory_gb()
     if mem < lf.MIN_MEMORY_GB - 0.5:
         detail = f"local: not on this Mac ({mem:.0f} GB memory, needs {lf.MIN_MEMORY_GB} GB)"
@@ -149,7 +152,8 @@ def check_image() -> Check:
         return Check(name, False, "local: optional, not installed", required=False, fix=pull)
     missing = "model not downloaded completely" if version else "mflux package missing"
     return Check(name, False, f"local: {missing}", required=False,
-                 fix="`videocut models pull --image` finishes it")  # fmt: skip
+                 fix="Settings → Material in the app (Resume), or "
+                     "`videocut models pull --image` finishes it")  # fmt: skip
 
 
 SIGN_IN = (
