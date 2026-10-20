@@ -1,0 +1,70 @@
+{
+"total": 4,
+"totalHits": 4,
+"hits": [
+    {
+        "id": 201,
+        "pageURL": "https://pixabay.com/videos/id-201/",
+        "type": "film",
+        "tags": "city, rain, street",
+        "duration": 14,
+        "videos": {
+            "large": {"url": "https://cdn.pixabay.com/video/2026/01/02/201-1_large.mp4", "width": 2160, "height": 3840, "size": 21544210, "thumbnail": "https://cdn.pixabay.com/video/2026/01/02/201-1_large.jpg"},
+            "medium": {"url": "https://cdn.pixabay.com/video/2026/01/02/201-1_medium.mp4", "width": 1080, "height": 1920, "size": 7562083, "thumbnail": "https://cdn.pixabay.com/video/2026/01/02/201-1_medium.jpg"},
+            "small": {"url": "https://cdn.pixabay.com/video/2026/01/02/201-1_small.mp4", "width": 720, "height": 1280, "size": 2030736, "thumbnail": "https://cdn.pixabay.com/video/2026/01/02/201-1_small.jpg"},
+            "tiny": {"url": "https://cdn.pixabay.com/video/2026/01/02/201-1_tiny.mp4", "width": 360, "height": 640, "size": 426799, "thumbnail": "https://cdn.pixabay.com/video/2026/01/02/201-1_tiny.jpg"}
+        },
+        "views": 4462, "downloads": 1464, "likes": 18, "comments": 0,
+        "user_id": 1001, "user": "Zentra Lumen",
+        "userImageURL": "https://cdn.pixabay.com/user/2026/01/01/1001_250x250.png"
+    },
+    {
+        "id": 202,
+        "pageURL": "https://pixabay.com/videos/id-202/",
+        "type": "film",
+        "tags": "street, night",
+        "duration": 9,
+        "videos": {
+            "large": {"url": "https://cdn.pixabay.com/video/2026/01/03/202-1_large.mp4", "width": 1920, "height": 1080, "size": 6615235, "thumbnail": "https://cdn.pixabay.com/video/2026/01/03/202-1_large.jpg"},
+            "medium": {"url": "https://cdn.pixabay.com/video/2026/01/03/202-1_medium.mp4", "width": 1280, "height": 720, "size": 3562083, "thumbnail": "https://cdn.pixabay.com/video/2026/01/03/202-1_medium.jpg"},
+            "small": {"url": "https://cdn.pixabay.com/video/2026/01/03/202-1_small.mp4", "width": 640, "height": 360, "size": 1030736, "thumbnail": "https://cdn.pixabay.com/video/2026/01/03/202-1_small.jpg"},
+            "tiny": {"url": "https://cdn.pixabay.com/video/2026/01/03/202-1_tiny.mp4", "width": 480, "height": 270, "size": 426799, "thumbnail": "https://cdn.pixabay.com/video/2026/01/03/202-1_tiny.jpg"}
+        },
+        "views": 900, "downloads": 120, "likes": 3, "comments": 0,
+        "user_id": 1002, "user": "Mira Quell",
+        "userImageURL": ""
+    },
+    {
+        "id": 203,
+        "pageURL": "https://pixabay.com/videos/id-203/",
+        "type": "film",
+        "tags": "rain, window",
+        "duration": 7,
+        "videos": {
+            "large": {"url": "", "width": 0, "height": 0, "size": 0, "thumbnail": ""},
+            "medium": {"url": "https://cdn.pixabay.com/video/2026/01/04/203-1_medium.mp4", "width": 1080, "height": 1920, "size": 5562083, "thumbnail": "https://cdn.pixabay.com/video/2026/01/04/203-1_medium.jpg"},
+            "small": {"url": "https://cdn.pixabay.com/video/2026/01/04/203-1_small.mp4", "width": 540, "height": 960, "size": 1530736, "thumbnail": "https://cdn.pixabay.com/video/2026/01/04/203-1_small.jpg"},
+            "tiny": {"url": "https://cdn.pixabay.com/video/2026/01/04/203-1_tiny.mp4", "width": 360, "height": 640, "size": 426799, "thumbnail": "https://cdn.pixabay.com/video/2026/01/04/203-1_tiny.jpg"}
+        },
+        "views": 300, "downloads": 40, "likes": 1, "comments": 0,
+        "user_id": 1003, "user": "Oren Vast",
+        "userImageURL": ""
+    },
+    {
+        "id": 204,
+        "pageURL": "https://pixabay.com/videos/id-204/",
+        "type": "animation",
+        "tags": "pattern",
+        "duration": 6,
+        "videos": {
+            "large": {"url": "https://cdn.pixabay.com/video/2026/01/05/204-1_large.mp4", "width": 1920, "height": 1920, "size": 4615235, "thumbnail": "https://cdn.pixabay.com/video/2026/01/05/204-1_large.jpg"},
+            "medium": {"url": "https://cdn.pixabay.com/video/2026/01/05/204-1_medium.mp4", "width": 1280, "height": 1280, "size": 2562083, "thumbnail": "https://cdn.pixabay.com/video/2026/01/05/204-1_medium.jpg"},
+            "small": {"url": "https://cdn.pixabay.com/video/2026/01/05/204-1_small.mp4", "width": 640, "height": 640, "size": 830736, "thumbnail": "https://cdn.pixabay.com/video/2026/01/05/204-1_small.jpg"},
+            "tiny": {"url": "https://cdn.pixabay.com/video/2026/01/05/204-1_tiny.mp4", "width": 480, "height": 480, "size": 326799, "thumbnail": "https://cdn.pixabay.com/video/2026/01/05/204-1_tiny.jpg"}
+        },
+        "views": 100, "downloads": 10, "likes": 0, "comments": 0,
+        "user_id": 1004, "user": "Ilka Moor",
+        "userImageURL": ""
+    }
+]
+}

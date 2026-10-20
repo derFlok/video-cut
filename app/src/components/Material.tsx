@@ -100,6 +100,7 @@ export function MaterialPicker({
 // ---------------------------------------------------------------- settings
 
 const ACCOUNT_LABEL: Record<SecretAccount, string> = {
+  "pixabay-api-key": "Pixabay",
   "pexels-api-key": "Pexels",
   "coverr-api-key": "Coverr",
   "gemini-api-key": "Gemini",

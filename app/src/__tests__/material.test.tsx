@@ -60,6 +60,9 @@ describe("material settings", () => {
     const panel = await screen.findByTestId("material-settings");
     const input = within(panel).getByLabelText(t("material.key.label").replace("{name}", "Pexels"));
     expect(input).toHaveAttribute("type", "password");
+    // Pixabay is listed first: its key field and its stock checkbox (on by default)
+    expect(within(panel).getByLabelText(t("material.key.label").replace("{name}", "Pixabay"))).toHaveAttribute("type", "password");
+    expect(within(panel).getByRole("checkbox", { name: "Pixabay" })).toBeChecked();
     await user.type(input, "pexelsKey123456789");
     await user.click(within(panel).getByRole("button", { name: t("material.key.save").replace("{name}", "Pexels") }));
     await waitFor(() => expect(calls(mock, "PUT", "/api/settings/secrets").length).toBe(1));

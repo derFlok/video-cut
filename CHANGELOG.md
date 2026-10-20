@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — Material: Pixabay as stock source
+- `pixabay` stock provider (videos and photos, Pixabay Content License, key in the keychain
+  account `pixabay-api-key`), first in the default `stock_providers` (pixabay, pexels,
+  coverr): Pexels has paused new API key issuance (existing keys keep working). Sent:
+  query, language, orientation/minimum size, safesearch. Videos are filtered by their
+  renditions' aspect (the endpoint has no orientation parameter); photos use
+  `largeImageURL` (≤ 1280 px) unless the key has full API access. Search answers are
+  cached 24 h under `$VIDEOCUT_HOME/cache/pixabay/` as Pixabay requires; a persistent 429
+  says "rate limit (100 requests per minute)". Credits "Video/Photo by … on Pixabay" with
+  the page link in the app and `disclosure.md`. Settings → Material lists the key and the
+  source.
+
 ### Added — Material: stock B-roll and generated stills
 - job.json `material {mode, wish}` (none | stock | generated | both): `videocut tool job
   material`, `videocut run --material-mode/--material-wish/--material-skip`, the new-job

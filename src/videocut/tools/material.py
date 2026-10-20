@@ -5,8 +5,8 @@ The plan run (agent side, no network) writes `material_wishes` into work/plan.js
 [{n, kind: broll|still|icon, src_from, src_to, query, prompt, style: photo|illustration,
 why}]. After the human approved the plan, on the host:
 
-    fetch     searches the stock libraries (settings "stock_providers": Pexels videos and
-              photos, Coverr videos) with each broll/still wish's query, the job's
+    fetch     searches the stock libraries (settings "stock_providers": Pixabay and Pexels
+              videos and photos, Coverr videos) with each broll/still wish's query, the job's
               orientation and locale, and downloads up to MAX_STOCK candidates per wish
               (the smallest rendition that covers the output size, clips cut to
               MAX_CLIP_S); with mode generated/both the image generator (settings
@@ -84,6 +84,7 @@ WISH_EVERY_S = 8.0  # at most one wish per this many seconds of target length
 QUERY_WORDS = (2, 8)  # a stock query has this many words (the skill asks for 3-6)
 PROMPT_MAX = 600
 LOCALES = {"de": "de-DE", "en": "en-US"}
+STOCK_PROVIDERS = ("pixabay", "pexels", "coverr")  # settings "stock_providers" may name these
 CHOICE_FILE = "material_choice.json"
 INDEX_FILE = "material.json"  # the trusted copy of work/material.json, in state/<job>/
 
@@ -670,7 +671,7 @@ def fetch(job: Path, only: int | None = None, query: str | None = None,
         raise MaterialError(f"no material wish {only} in the approved plan")
     t0 = time.monotonic()
     conf = settings.load()
-    stock_names = [n for n in conf.get("stock_providers") or [] if n in ("pexels", "coverr")]
+    stock_names = [n for n in conf.get("stock_providers") or [] if n in STOCK_PROVIDERS]
     if fake():
         _load_fake()
         stock_names = ["fake-stock"]

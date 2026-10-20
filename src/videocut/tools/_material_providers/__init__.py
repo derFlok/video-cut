@@ -5,9 +5,9 @@ are searched (StockProvider) and image generators (ImageProvider), in one regist
     get_provider(name)             an instance of it (ProviderError when unknown)
     providers(kind=None)           {name: cls}, all or only "stock" / "image" ones
 
-Built in: `pexels`, `coverr` (stock), `gemini`, `openai` (image), and `local` (local_flux:
-FLUX.2 [klein] through mflux; its module is imported on first use and registers itself
-with its `register()`, so `import mflux` only happens when it is asked for).
+Built in: `pixabay`, `pexels`, `coverr` (stock), `gemini`, `openai` (image), and `local`
+(local_flux: FLUX.2 [klein] through mflux; its module is imported on first use and registers
+itself with its `register()`, so `import mflux` only happens when it is asked for).
 
 Everything here runs on the host only: the HTTP helpers refuse inside an agent run
 (VIDEOCUT_AGENT=1), and only what the contract allows leaves the machine (a stock query,
@@ -36,6 +36,10 @@ USER_AGENT = "VideoCut/1 (local video editor)"
 
 class ProviderError(RuntimeError):
     """A provider failed; the message is safe to show (never contains a key)."""
+
+
+class RateLimited(ProviderError):
+    """Still HTTP 429 after the retries (a provider may say more about its limit)."""
 
 
 class UnknownProvider(ProviderError, KeyError):
@@ -138,7 +142,7 @@ def providers(kind: str | None = None) -> dict[str, type]:
     return {n: c for n, c in _REGISTRY.items() if kind is None or c.kind == kind}
 
 
-BUILTIN = ("pexels", "coverr", "gemini", "openai_image", "local_flux")
+BUILTIN = ("pixabay", "pexels", "coverr", "gemini", "openai_image", "local_flux")
 
 
 def _load_builtin() -> None:
@@ -226,7 +230,7 @@ def request(method: str, url: str, headers: dict | None = None, body: bytes | No
                 detail = e.read(400).decode("utf-8", "replace")
             except OSError:
                 pass
-            raise ProviderError(
+            raise (RateLimited if e.code == 429 else ProviderError)(
                 f"{_safe_url(url)}: HTTP {e.code}" + (f" ({_scrub(detail)})" if detail else "")
             ) from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:

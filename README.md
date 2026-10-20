@@ -41,7 +41,7 @@ Only this, only to Anthropic, and only through your own Claude access:
 - **screen text read on your Mac** (OCR) when you add a screen recording, screenshots or slides.
 
 Only when you switch on **material** for a video (off by default): the English search words
-of each wish go to the stock libraries you enabled (Pexels, Coverr) with the orientation and
+of each wish go to the stock libraries you enabled (Pixabay, Pexels, Coverr) with the orientation and
 language, and the one-sentence picture description plus your brand's colour codes go to the
 image generator you chose (Google Gemini or OpenAI), with your own keys. Never a recording,
 a frame, a logo or a name.
@@ -274,15 +274,29 @@ they sit on the line between the slide and you, clear of the slide's text and yo
 
 With **material** on, the plan proposes a few moments where a picture helps (at most one
 per 8 seconds): a short stock clip shown full screen while you keep talking (B-roll), a
-stock photo, or a generated picture. After you approve the plan, Video Cut searches Pexels
-and Coverr and/or asks the image generator, and shows the candidates per moment with their
+stock photo, or a generated picture. After you approve the plan, Video Cut searches Pixabay,
+Pexels and Coverr and/or asks the image generator, and shows the candidates per moment with their
 licence and credit; you pick one or "no material", search again with other words, or
 generate again. Only what you picked goes into the video. Generated pictures are marked
 "AI" in the app, their original files keep the generator's watermark (SynthID / C2PA), and a cost limit per video
 (default USD 1) stops generation before it gets expensive.
 
-Set it up once under **Settings → Material**: your Pexels key (free), optionally Coverr, and
-a Gemini or OpenAI key for generated pictures. Keys are kept in your Mac's keychain only.
+Set it up once under **Settings → Material**: your Pixabay key (free), optionally Pexels and
+Coverr, and a Gemini or OpenAI key for generated pictures. Keys are kept in your Mac's
+keychain only. To get the Pixabay key, log in at [pixabay.com](https://pixabay.com), open
+[pixabay.com/api/docs](https://pixabay.com/api/docs/): your key is shown on that page. Paste
+it in the settings, or store it in the terminal (it asks for the key):
+
+```bash
+security add-generic-password -U -s videocut -a pixabay-api-key -w
+```
+
+Pexels has paused issuing new API keys; an existing Pexels key keeps working. Pixabay
+allows 100 searches per minute, and Video Cut keeps each search answer for 24 hours, as
+Pixabay asks. Pixabay photos come at most 1280 px on the long side (videos are preferred
+for B-roll anyway), so a photo may be slightly upscaled in a 1080p video. Every Pixabay
+item is credited "Video/Photo by … on Pixabay" with a link, in the app and in
+`disclosure.md`.
 
 ```bash
 .venv/bin/videocut run ~/Movies/me.mov --material-mode both --material-wish "calm office scenes"

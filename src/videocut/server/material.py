@@ -27,7 +27,7 @@ from ..tools.common import ToolError, read_job
 
 ACCOUNTS = tuple(a for a in settings.SECRET_ACCOUNTS if a != settings.KEYCHAIN_ACCOUNT)
 IMAGE_PROVIDERS = ("none", "gemini", "openai", "local")
-STOCK = ("pexels", "coverr")
+STOCK = mat.STOCK_PROVIDERS
 BUDGET_MAX = 50.0
 FILE_RE = re.compile(r"c\d{1,3}(_sm)?\.(mp4|jpg|jpeg|png|webp)")
 MEDIA = {".mp4": "video/mp4", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",

@@ -935,8 +935,9 @@ material`, `run --material-mode/--material-wish`, the new-job form, whose defaul
 settings `material_default_mode`); refused in an agent run. Like slides it changes the
 plan: a plan run records `plan_material`, a change makes the plan stale and revokes an
 approval. Settings also hold `image_provider` (none | gemini (default) | openai | local),
-`stock_providers` (pexels, coverr) and `material_budget_usd` (default 1.00 per job). Keys
-live only in the keychain, service `videocut`, accounts `pexels-api-key`, `coverr-api-key`,
+`stock_providers` (pixabay, pexels, coverr; default all three in that order) and
+`material_budget_usd` (default 1.00 per job). Keys live only in the keychain, service
+`videocut`, accounts `pixabay-api-key`, `pexels-api-key`, `coverr-api-key`,
 `gemini-api-key`, `openai-api-key` (`settings.set_secret/secret/has_secret`; `api_key()` /
 `set_api_key()` are the wrappers for `anthropic-api-key`); the API takes them write-only
 (`PUT /api/settings/secrets`, GET says only which are stored).
@@ -951,9 +952,17 @@ where one is generated. The human approves the wishes with the plan.
 
 **Fetch (host).** After the approval, `videocut run` (or `POST /api/jobs/{id}/material/fetch`,
 a queued run of kind `material`) calls `material fetch`: for broll/still wishes the stock
-providers in settings order (Pexels videos then photos with `orientation` from the job
-format, `locale` de-DE/en-US from the job language, `size=medium`; Coverr videos filtered by
-`is_vertical`), up to 4 candidates, each downloaded in the smallest rendition whose short
+providers in settings order (Pixabay videos then photos: `lang` from the job language,
+`safesearch`, `min_width`/`min_height` 1280 on the long side; the video endpoint has no
+orientation filter, so hits are kept by their renditions' aspect (portrait h > w, landscape
+w > h, square within 10 %), photos use `orientation` vertical/horizontal and download as
+`largeImageURL`, long side at most 1280 px, unless the key has full API access
+(`fullHDURL`/`imageURL`), so a Pixabay still may be upscaled on 1080p output and the
+broll_aspect/verify rules decide; search answers are cached 24 h in
+`$VIDEOCUT_HOME/cache/pixabay/<sha256 of the parameters>.json`, as Pixabay requires, and a
+429 after the retries reads "rate limit (100 requests per minute)"; Pexels videos then
+photos with `orientation` from the job format, `locale` de-DE/en-US from the job language,
+`size=medium`; Coverr videos filtered by `is_vertical`), up to 4 candidates, each downloaded in the smallest rendition whose short
 side reaches the output's, cut to 30 s without re-encoding, probed, thumbed (≤ 480 px) and
 hashed; for still/icon wishes with mode generated/both the image provider makes up to 2
 (prompt + style words + the brand's colours as names, never hex codes, which models draw
