@@ -41,8 +41,8 @@ Only this, only to Anthropic, and only through your own Claude access:
 - **screen text read on your Mac** (OCR) when you add a screen recording, screenshots or slides.
 
 Only when you switch on **material** for a video (off by default): the English search words
-of each wish go to the stock libraries you enabled (Pixabay, Pexels, Coverr) with the orientation and
-language, and the one-sentence picture description plus your brand's colour codes go to the
+of each wish go to the stock libraries you enabled (Pixabay, Pexels, Coverr, Openverse) with
+the orientation and language, and the one-sentence picture description plus your brand's colour codes go to the
 image generator you chose (Google Gemini or OpenAI), with your own keys. Never a recording,
 a frame, a logo or a name.
 
@@ -275,7 +275,7 @@ they sit on the line between the slide and you, clear of the slide's text and yo
 With **material** on, the plan proposes a few moments where a picture helps (at most one
 per 8 seconds): a short stock clip shown full screen while you keep talking (B-roll), a
 stock photo, or a generated picture. After you approve the plan, Video Cut searches Pixabay,
-Pexels and Coverr and/or asks the image generator, and shows the candidates per moment with their
+Pexels, Coverr and Openverse and/or asks the image generator, and shows the candidates per moment with their
 licence and credit; you pick one or "no material", search again with other words, or
 generate again. Only what you picked goes into the video. Generated pictures are marked
 "AI" in the app, their original files keep the generator's watermark (SynthID / C2PA), and a cost limit per video
@@ -297,6 +297,13 @@ Pixabay asks. Pixabay photos come at most 1280 px on the long side (videos are p
 for B-roll anyway), so a photo may be slightly upscaled in a 1080p video. Every Pixabay
 item is credited "Video/Photo by … on Pixabay" with a link, in the app and in
 `disclosure.md`.
+
+Material works without any key: **Openverse** finds openly licensed photos (only CC0, the
+public domain mark and CC BY, which allow cropping and commercial use) and is on by default,
+last in line; videos need a Pixabay or Pexels key. Expect encyclopaedic rather than glossy
+pictures (Wikimedia Commons, Flickr, museum collections), and at most 20 searches per minute
+and 200 per day. CC BY asks for a full credit: title, creator, licence with its link and the
+source link are written into `disclosure.md` and the description text.
 
 ```bash
 .venv/bin/videocut run ~/Movies/me.mov --material-mode both --material-wish "calm office scenes"

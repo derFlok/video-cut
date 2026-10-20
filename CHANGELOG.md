@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added — Material: Openverse as key-less stock image source
+- `openverse` stock provider (images only, no key): `api.openverse.org/v1/images/` with
+  `license=cc0,pdm,by` (never SA/ND/NC: the picture is cropped and recoloured, the video
+  may be commercial), `aspect_ratio` from the orientation, `size=large`, `mature=false` and
+  a `videocut/<version>` User-Agent (also on the download from the source site). Skips
+  non-jpg/png/webp files, images under 800 px on the long side and non-HTTPS URLs; one retry
+  on a 5xx; a persistent 429 says "rate limit (20 searches per minute, 200 per day without
+  a key)". Last in the default `stock_providers` (pixabay, pexels, coverr, openverse): the
+  material chain now finds stills with no key at all, at mixed (encyclopaedic) quality.
+- Candidates record `attribution_full` (the licence's full credit sentence) and
+  `licence_url`; `disclosure.md` and the description snippet print the full CC BY credit
+  (title, creator, licence with its link) with the source link. The Material screen links
+  the licence; Settings → Material shows Openverse as a checkbox without a key field.
+- Stock fetch checks the downloaded file, not the reported size: a photo under 800 px on its
+  long side (as probed) is dropped and the next hit tried, so a wish still gets up to 4
+  candidates; candidates under 1280 px get `"small": true`, shown on the Material screen
+  as "will be upscaled". Openverse lists hits reported at ≥ 1280 px first (its reported
+  size is the original's; StockSnap/rawpixel URLs point to ~1000 px copies).
+- `ProviderError.status` carries the HTTP status of a failed request.
+
 ### Added — Material: Pixabay as stock source
 - `pixabay` stock provider (videos and photos, Pixabay Content License, key in the keychain
   account `pixabay-api-key`), first in the default `stock_providers` (pixabay, pexels,

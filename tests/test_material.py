@@ -358,6 +358,106 @@ def test_pixabay_rate_limit_is_a_plain_message(monkeypatch, keychain):
     assert "pixabay-secret" not in str(e.value)
 
 
+def _openverse(monkeypatch, answer=None):
+    calls = []
+
+    def fake_get(url, params=None, headers=None):
+        calls.append((url, params, headers))
+        return answer or _fixture("openverse_images.json")
+
+    monkeypatch.setattr("videocut.tools._material_providers.openverse.get_json", fake_get)
+    return mp.get_provider("openverse"), calls
+
+
+def test_openverse_maps_results_and_asks_only_for_open_licences(monkeypatch, keychain):
+    prov, calls = _openverse(monkeypatch)
+    assert prov.available() == (True, "") and prov.secret_account is None and keychain == {}
+    hits = prov.search("mountain lake", "image", "landscape", "de-DE", 4)
+    url, params, headers = calls[0]
+    assert url == "https://api.openverse.org/v1/images/"
+    assert params == {"q": "mountain lake", "license": "cc0,pdm,by", "size": "large",
+                      "page_size": 20, "mature": "false", "aspect_ratio": "wide"}  # fmt: skip
+    assert headers["User-Agent"].startswith("videocut/")
+    assert len(hits) == 3  # the third has no filetype: its file name says jpg
+    h = hits[0]
+    assert h.id == "openverse-2173901d-1566-41be-9603-341bc9b4c63f"
+    assert (h.kind, h.width, h.height, h.duration_s) == ("image", 1616, 1096, None)
+    assert h.file_url.startswith("https://upload.wikimedia.org/") and h.renditions == []
+    assert h.preview_url.endswith("/thumb/") and h.author == "Stefan Karpiniec"
+    assert h.source_url == "https://commons.wikimedia.org/w/index.php?curid=32459174"
+    assert h.licence == "CC BY 2.0" and h.source == "openverse"
+    assert h.attribution == ("Blue Lake, Snowy Mountains - Lake - 3 by Stefan Karpiniec, "
+                             "CC BY 2.0, via Openverse/wikimedia")  # fmt: skip
+    assert h.attribution_full.startswith('"Blue Lake, Snowy Mountains - Lake - 3" by Stefan')
+    assert h.licence_url == "https://creativecommons.org/licenses/by/2.0/"
+    assert hits[2].attribution.startswith("Blue Mountain Lake, Arkansas 001 by Adam")
+    assert prov.search("mountain lake", "video", "landscape", "de-DE", 4) == []
+    assert len(calls) == 1  # no video on Openverse: not even asked
+    prov.search("mountain lake", "image", "portrait", "de-DE", 4)
+    assert calls[1][1]["aspect_ratio"] == "tall"
+
+
+def test_openverse_public_domain_credit_and_skips(monkeypatch):
+    base = _fixture("openverse_images.json")["results"][0]
+
+    def item(**kw):
+        return {**base, "id": kw.pop("id"), **kw}
+
+    answer = {"results": [
+        item(id="cc0", license="cc0", license_version="1.0", title=""),
+        item(id="html", license="cc0", title="<div class='fn'> Night &amp; Day</div>",
+             creator="<span>Ana B</span>"),
+        item(id="long", license="cc0", title="A scenic view " * 10),
+        item(id="pdm", license="pdm", license_version="1.0"),
+        item(id="gif", filetype="gif"),
+        item(id="small", width=799, height=600),
+        item(id="nosize", width=None),
+        item(id="http", url="http://example.org/a.jpg"),
+        item(id="sa", license="by-sa"),
+        item(id="webp", filetype="webp"),
+    ]}  # fmt: skip
+    prov, _ = _openverse(monkeypatch, answer)
+    hits = {h.id.removeprefix("openverse-"): h for h in
+            prov.search("lake", "image", "square", "en-US", 10)}  # fmt: skip
+    assert list(hits) == ["cc0", "html", "long", "pdm", "webp"]
+    assert hits["html"].attribution == "Night & Day by Ana B (CC0) via Openverse/wikimedia"
+    assert hits["html"].author == "Ana B"
+    assert hits["long"].attribution.startswith("A scenic view A scenic")
+    assert len(hits["long"].attribution.split(" by ")[0]) <= 80
+    assert hits["cc0"].licence == "CC0 1.0"
+    assert hits["cc0"].attribution == "Photo by Stefan Karpiniec (CC0) via Openverse/wikimedia"
+    assert hits["pdm"].licence == "Public Domain Mark 1.0"
+    assert hits["pdm"].attribution.endswith("(Public Domain) via Openverse/wikimedia")
+
+
+def test_openverse_puts_large_hits_first(monkeypatch):
+    base = _fixture("openverse_images.json")["results"][0]
+    sizes = {"a": (1000, 900), "b": (2000, 1500), "c": (1279, 800), "d": (1280, 720)}
+    answer = {"results": [{**base, "id": k, "width": w, "height": h}
+                          for k, (w, h) in sizes.items()]}  # fmt: skip
+    prov, _ = _openverse(monkeypatch, answer)
+    hits = prov.search("lake", "image", "landscape", "en-US", 10)
+    assert [h.id.removeprefix("openverse-") for h in hits] == ["b", "d", "a", "c"]
+
+
+def test_openverse_rate_limit_and_one_retry_on_a_server_error(monkeypatch):
+    seen = []
+
+    def boom(req, timeout=None):
+        seen.append(req.full_url)
+        code = 502 if len(seen) == 1 else 429
+        raise urllib.error.HTTPError(req.full_url, code, "no", {"Retry-After": "0"},
+                                     io.BytesIO(b""))  # fmt: skip
+
+    monkeypatch.setattr(mp.urllib.request, "urlopen", boom)
+    with pytest.raises(mp.ProviderError) as e:
+        mp.get_provider("openverse").search("rain", "image", "portrait", "de-DE", 4)
+    assert str(e.value) == ("openverse: rate limit (20 searches per minute, 200 per day "
+                            "without a key), try again later")  # fmt: skip
+    assert len(seen) == 1 + 1 + mp.RETRIES_429  # the 502 once, then 429 with its retries
+    assert "license=cc0%2Cpdm%2Cby" in seen[0]
+
+
 def test_gemini_request_and_response(monkeypatch, keychain, tmp_path):
     keychain["gemini-api-key"] = "g-test"
     png = base64.b64encode(b"\x89PNG fake").decode()
@@ -432,7 +532,7 @@ def test_no_network_inside_an_agent_run(monkeypatch):
 
 def test_registry_lists_builtin_providers():
     names = mp.providers()
-    assert {"pixabay", "pexels", "coverr", "gemini", "openai"} <= set(names)
+    assert {"pixabay", "pexels", "coverr", "openverse", "gemini", "openai"} <= set(names)
     assert set(mp.providers("image")) >= {"gemini", "openai"}
     with pytest.raises(mp.ProviderError):
         mp.get_provider("nope")
@@ -480,6 +580,50 @@ def test_fetch_choose_round_trip(fakes, capsys, monkeypatch):
     # a replaced file loses its choice
     (job / "work/material/1/c2.mp4").write_bytes(b"other")
     assert mat.chosen(job) == {} and mat.pending(job) == [1]
+
+
+class SizedStock(FakeStock):
+    """Photos whose downloaded file has the size in SIZES (the reported one is larger)."""
+
+    SIZES = [(520, 760), (1080, 1920), (600, 400), (960, 1440), (1200, 1800), (1365, 2048)]
+
+    def search(self, query, kind, orientation, locale, limit):
+        if kind != "image":
+            return []
+        return [
+            mp.StockHit(id=f"sized-{i}", kind="image", width=2000, height=3000, duration_s=None,
+                        preview_url="", file_url="https://example.invalid/f", author="Zentra",
+                        source_url="", licence="CC0 1.0", attribution="Photo", source="pexels")
+            for i in range(len(self.SIZES))
+        ]  # fmt: skip
+
+    def download(self, hit, dest, min_size=None):
+        w, h = self.SIZES[int(hit.id.split("-")[1])]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _ffmpeg("-f", "lavfi", "-i", f"testsrc=s={w}x{h}:d=1", "-frames:v", "1", str(dest))
+        return dest
+
+
+@media
+def test_fetch_drops_photos_too_small_on_disk_and_marks_small_ones(fakes, monkeypatch):
+    monkeypatch.setitem(mp._REGISTRY, "pexels", SizedStock)
+    still = [{**WISHES[1], "n": 1, "src_from": 2.0, "src_to": 6.0}]
+    job = make_job(mode="stock", wishes=still)
+    said = []
+    mat.fetch(job, say=said.append)
+    cands = json.loads((job / mat.FILE).read_text())["wishes"][0]["candidates"]
+    # the probed size counts: 520x760 and 600x400 are dropped, the next hits fill up to 4
+    assert [(c["id"], c["width"], c["height"], c["small"]) for c in cands] == [
+        ("c1", 1080, 1920, False), ("c2", 960, 1440, False), ("c3", 1200, 1800, False),
+        ("c4", 1365, 2048, False),
+    ]  # fmt: skip
+    assert any("sized-0: 520x760 px, too small" in m for m in said)
+    assert not list((job / mat.DIR / "1").glob("c5*"))
+    monkeypatch.setattr(SizedStock, "SIZES", [(1080, 1920), (900, 1200), (1200, 800)])
+    mat.fetch(job, only=1, say=lambda _: None)
+    cands = json.loads((job / mat.FILE).read_text())["wishes"][0]["candidates"]
+    assert [(c["width"], c["small"]) for c in cands[-3:]] == [(1080, False), (900, True),
+                                                               (1200, True)]  # fmt: skip
 
 
 @media
@@ -629,7 +773,7 @@ def client():
 def test_api_settings_and_write_only_secrets(client, keychain):
     v = client.get("/api/settings/material").json()
     assert v["material_default_mode"] == "none"
-    assert v["stock_providers"] == ["pixabay", "pexels", "coverr"]
+    assert v["stock_providers"] == ["pixabay", "pexels", "coverr", "openverse"]
     names = {p["name"]: p for p in v["image_providers"]}
     assert names["gemini"]["registered"] and not names["gemini"]["available"]
     v = client.put("/api/settings/material", json={"material_default_mode": "stock",

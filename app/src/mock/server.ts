@@ -84,6 +84,11 @@ function mockCandidates(id: string, w: MaterialWish, mode: MaterialMode, seed = 
         width: 1080, height: 1920, duration_s: w.kind === "broll" && k < 3 ? 8 + k : null, source: "pexels",
         source_url: "https://www.pexels.com/", author: `Beispiel ${k}`, licence: "Pexels License", attribution: `Video by Beispiel ${k} on Pexels`,
         ai_generated: false, model: null, watermark: "none",
+        // the third one comes from Openverse: a CC BY photo with its licence link
+        ...(k === 3 && {
+          source: "openverse", source_url: "https://commons.wikimedia.org/", licence: "CC BY 2.0", width: 960, height: 1280, small: true,
+          licence_url: "https://creativecommons.org/licenses/by/2.0/", attribution: "Lake by Beispiel 3, CC BY 2.0, via Openverse/wikimedia",
+        }),
       });
   if (mode !== "stock" && w.kind !== "broll")
     for (let k = out.length + 1, i = 0; i < 2; i++, k++)
@@ -462,7 +467,7 @@ export function createMock(opts: MockOptions = {}) {
     materialSettings: {
       material_default_mode: "none",
       image_provider: "gemini",
-      stock_providers: ["pixabay", "pexels", "coverr"],
+      stock_providers: ["pixabay", "pexels", "coverr", "openverse"],
       material_budget_usd: 1,
       image_providers: [
         { name: "gemini", available: false, reason: "no key stored (gemini-api-key)", registered: true },

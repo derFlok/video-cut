@@ -53,8 +53,8 @@ export const MATERIAL_MODES: MaterialMode[] = ["none", "stock", "generated", "bo
 export const MATERIAL_WISH_MAX = 2000;
 export type ImageProviderName = "none" | "gemini" | "openai" | "local";
 export const IMAGE_PROVIDERS: ImageProviderName[] = ["none", "gemini", "openai", "local"];
-export type StockProviderName = "pixabay" | "pexels" | "coverr";
-export const STOCK_PROVIDERS: StockProviderName[] = ["pixabay", "pexels", "coverr"];
+export type StockProviderName = "pixabay" | "pexels" | "coverr" | "openverse";
+export const STOCK_PROVIDERS: StockProviderName[] = ["pixabay", "pexels", "coverr", "openverse"];
 /** Keychain accounts of the material providers' API keys (write-only from the app). */
 export type SecretAccount = "pixabay-api-key" | "pexels-api-key" | "coverr-api-key" | "gemini-api-key" | "openai-api-key";
 export const SECRET_ACCOUNTS: SecretAccount[] = ["pixabay-api-key", "pexels-api-key", "coverr-api-key", "gemini-api-key", "openai-api-key"];
@@ -91,11 +91,15 @@ export interface MaterialCandidate {
   file_url: string;
   width: number;
   height: number;
+  /** Under 1280 px on the long side: it will be upscaled. */
+  small?: boolean;
   duration_s?: number | null;
   source: string;
   source_url?: string | null;
   author?: string | null;
   licence: string;
+  /** Link to the licence text (CC licences from Openverse). */
+  licence_url?: string | null;
   attribution?: string | null;
   ai_generated: boolean;
   model?: string | null;

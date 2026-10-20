@@ -137,8 +137,9 @@ def _url(job: Path, rel: str | None) -> str | None:
     return f"/api/jobs/{job.name}/material/files/{parts[2]}/{parts[3]}"
 
 
-CAND_KEYS = ("id", "kind", "width", "height", "duration_s", "source", "source_url", "author",
-             "licence", "attribution", "ai_generated", "model", "watermark")  # fmt: skip
+CAND_KEYS = ("id", "kind", "width", "height", "small", "duration_s", "source", "source_url",
+             "author", "licence", "licence_url", "attribution", "ai_generated", "model",
+             "watermark")  # fmt: skip
 WISH_KEYS = ("n", "kind", "src_from", "src_to", "query", "prompt", "style", "why", "decided",
              "chosen")  # fmt: skip
 

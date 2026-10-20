@@ -63,6 +63,10 @@ describe("material settings", () => {
     // Pixabay is listed first: its key field and its stock checkbox (on by default)
     expect(within(panel).getByLabelText(t("material.key.label").replace("{name}", "Pixabay"))).toHaveAttribute("type", "password");
     expect(within(panel).getByRole("checkbox", { name: "Pixabay" })).toBeChecked();
+    // Openverse needs no key: only its checkbox (on by default, last) and a hint
+    expect(within(panel).getByRole("checkbox", { name: "Openverse" })).toBeChecked();
+    expect(within(panel).queryByLabelText(t("material.key.label").replace("{name}", "Openverse"))).toBeNull();
+    expect(panel).toHaveTextContent(t("material.stock.openverse.hint"));
     await user.type(input, "pexelsKey123456789");
     await user.click(within(panel).getByRole("button", { name: t("material.key.save").replace("{name}", "Pexels") }));
     await waitFor(() => expect(calls(mock, "PUT", "/api/settings/secrets").length).toBe(1));
@@ -116,6 +120,14 @@ describe("the material screen", () => {
     const w1 = await within(scr).findByTestId("wish-1");
     const w2 = within(scr).getByTestId("wish-2");
     expect(within(w1).getAllByText(/Pexels License/).length).toBeGreaterThan(0);
+    // an Openverse candidate: licence with its link, the credit, the source link
+    const ov = within(w1).getByTestId("cand-c3");
+    expect(within(ov).getByRole("link", { name: "CC BY 2.0" })).toHaveAttribute("href", "https://creativecommons.org/licenses/by/2.0/");
+    expect(ov).toHaveTextContent("Lake by Beispiel 3, CC BY 2.0, via Openverse/wikimedia");
+    expect(within(ov).getByRole("link", { name: t("material.source") })).toHaveAttribute("href", "https://commons.wikimedia.org/");
+    // under 1280 px: marked as upscaled; the large ones are not
+    expect(within(ov).getByTestId("cand-small")).toHaveTextContent(t("material.small"));
+    expect(within(within(w1).getByTestId("cand-c1")).queryByTestId("cand-small")).toBeNull();
     expect(within(w1).queryByText(t("material.ai"))).toBeNull(); // broll: stock only
     expect(within(w2).getAllByText(t("material.ai")).length).toBe(2); // two generated stills
     expect(within(scr).getByTestId("material-open")).toHaveTextContent("2");
