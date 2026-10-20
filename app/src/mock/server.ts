@@ -86,7 +86,7 @@ function mockCandidates(id: string, w: MaterialWish, mode: MaterialMode, seed = 
         ai_generated: false, model: null, watermark: "none",
         // the third one comes from Openverse: a CC BY photo with its licence link
         ...(k === 3 && {
-          source: "openverse", source_url: "https://commons.wikimedia.org/", licence: "CC BY 2.0",
+          source: "openverse", source_url: "https://commons.wikimedia.org/", licence: "CC BY 2.0", width: 960, height: 1280, small: true,
           licence_url: "https://creativecommons.org/licenses/by/2.0/", attribution: "Lake by Beispiel 3, CC BY 2.0, via Openverse/wikimedia",
         }),
       });

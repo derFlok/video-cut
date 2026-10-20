@@ -972,10 +972,11 @@ tall/wide/square, `size=large`, `mature=false`, User-Agent `videocut/<version> (
 also on the download from the source site; hits that are not jpg/png/webp, under 800 px on
 the long side or not HTTPS are skipped; the licence becomes "CC0 1.0" / "Public Domain Mark
 1.0" / "CC BY <version>", the API's full credit sentence is kept as `attribution_full` and
-the licence link as `licence_url`; one retry on a 5xx, and a 429 after the retries reads
+the licence link as `licence_url`; hits reported at ≥ 1280 px come first; one retry on a 5xx, and a 429 after the retries reads
 "rate limit (20 searches per minute, 200 per day without a key)"), up to 4 candidates, each downloaded in the smallest rendition whose short
-side reaches the output's, cut to 30 s without re-encoding, probed, thumbed (≤ 480 px) and
-hashed; for still/icon wishes with mode generated/both the image provider makes up to 2
+side reaches the output's, cut to 30 s without re-encoding, probed (a photo under 800 px on
+its long side as probed is dropped and the next hit tried; under 1280 px the candidate gets
+`small: true`, shown as "will be upscaled"), thumbed (≤ 480 px) and hashed; for still/icon wishes with mode generated/both the image provider makes up to 2
 (prompt + style words + the brand's colours as names, never hex codes, which models draw
 as text + "no text, no letters, no logos" last; Gemini: Interactions API,
 model `gemini-nano-banana-2.1`, `response_format` aspect ratio and 1K/2K; OpenAI: Image API,

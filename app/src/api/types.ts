@@ -91,6 +91,8 @@ export interface MaterialCandidate {
   file_url: string;
   width: number;
   height: number;
+  /** Under 1280 px on the long side: it will be upscaled. */
+  small?: boolean;
   duration_s?: number | null;
   source: string;
   source_url?: string | null;

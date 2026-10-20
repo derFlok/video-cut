@@ -15,6 +15,11 @@
   `licence_url`; `disclosure.md` and the description snippet print the full CC BY credit
   (title, creator, licence with its link) with the source link. The Material screen links
   the licence; Settings → Material shows Openverse as a checkbox without a key field.
+- Stock fetch checks the downloaded file, not the reported size: a photo under 800 px on its
+  long side (as probed) is dropped and the next hit tried, so a wish still gets up to 4
+  candidates; candidates under 1280 px get `"small": true`, shown on the Material screen
+  as "will be upscaled". Openverse lists hits reported at ≥ 1280 px first (its reported
+  size is the original's; StockSnap/rawpixel URLs point to ~1000 px copies).
 - `ProviderError.status` carries the HTTP status of a failed request.
 
 ### Added — Material: Pixabay as stock source

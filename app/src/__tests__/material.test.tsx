@@ -125,6 +125,9 @@ describe("the material screen", () => {
     expect(within(ov).getByRole("link", { name: "CC BY 2.0" })).toHaveAttribute("href", "https://creativecommons.org/licenses/by/2.0/");
     expect(ov).toHaveTextContent("Lake by Beispiel 3, CC BY 2.0, via Openverse/wikimedia");
     expect(within(ov).getByRole("link", { name: t("material.source") })).toHaveAttribute("href", "https://commons.wikimedia.org/");
+    // under 1280 px: marked as upscaled; the large ones are not
+    expect(within(ov).getByTestId("cand-small")).toHaveTextContent(t("material.small"));
+    expect(within(within(w1).getByTestId("cand-c1")).queryByTestId("cand-small")).toBeNull();
     expect(within(w1).queryByText(t("material.ai"))).toBeNull(); // broll: stock only
     expect(within(w2).getAllByText(t("material.ai")).length).toBe(2); // two generated stills
     expect(within(scr).getByTestId("material-open")).toHaveTextContent("2");

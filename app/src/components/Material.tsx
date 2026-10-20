@@ -621,6 +621,11 @@ function Candidate({
           )}
           {cand.attribution ? ` · ${cand.attribution}` : ""}
         </span>
+        {cand.small && (
+          <span className="hint small" data-testid="cand-small" title={`${cand.width} × ${cand.height}`}>
+            {t("material.small")}
+          </span>
+        )}
         {cand.source_url && (
           <a className="small" href={cand.source_url} target="_blank" rel="noreferrer noopener">
             {t("material.source")}

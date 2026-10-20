@@ -21,8 +21,9 @@ why}]. After the human approved the plan, on the host:
 Everything is logged in work/material.json (version 1):
 {"version": 1, "wishes": [{n, kind, src_from, src_to, query, prompt, style, why,
   "chosen": id|null, "decided": bool, "candidates": [{id, kind: video|image, file, thumb,
-  width, height, duration_s, source, source_url, author, licence, attribution,
-  attribution_full and licence_url (the licence's full credit line and link, CC BY),
+  width, height (as probed), small (long side under SMALL_PX: upscaled), duration_s,
+  source, source_url, author, licence, attribution, attribution_full and licence_url (the
+  licence's full credit line and link, CC BY),
   ai_generated, model, prompt, seed, watermark, sha256, source_sha256, provenance,
   fetched; generated ones also prompt_sent (the exact text the model got), steps,
   quantisation, generator (provider specifics)}]}],
@@ -78,6 +79,8 @@ VERSION = 1
 KINDS = ("broll", "still", "icon")
 STYLES = ("photo", "illustration")
 MAX_STOCK = 4
+MIN_STILL_PX = 800  # a stock photo smaller than this on its long side (as probed) is dropped
+SMALL_PX = 1280  # below this on the long side a candidate is marked "small" (upscaled)
 MAX_GEN = 2
 MAX_CLIP_S = 30.0
 THUMB = 480
@@ -492,7 +495,10 @@ def _clean(folder: Path, keep: set[str]) -> None:
 
 def _stock(job: Path, w: dict, prov_names: list[str], first: int,
            say) -> tuple[list[dict], list[str]]:  # fmt: skip
-    """Up to MAX_STOCK candidates for one broll/still wish, numbered from c<first>."""
+    """Up to MAX_STOCK candidates for one broll/still wish, numbered from c<first>. The
+    downloaded file's probed size counts, not the size the provider reported: a photo under
+    MIN_STILL_PX on its long side is dropped and the next hit tried; a candidate under
+    SMALL_PX is kept with "small": true (it will be upscaled)."""
     kinds = ["video", "image"] if w["kind"] == "broll" else ["image"]
     orient, loc = orientation(job), LOCALES.get(read_job(job).get("lang") or "de", "de-DE")
     size = output_size(job)
@@ -524,13 +530,20 @@ def _stock(job: Path, w: dict, prov_names: list[str], first: int,
             picked.append((name, h))
     out = []
     folder = job / DIR / str(w["n"])
-    for k, (name, h) in enumerate(picked[:MAX_STOCK], first):
-        cid = f"c{k}"
+    for name, h in picked:
+        if len(out) >= MAX_STOCK:
+            break
+        cid = f"c{first + len(out)}"
         ext = ".mp4" if h.kind == "video" else ".jpg"
         dest = folder / f"{cid}{ext}"
         try:
             get_provider(name).download(h, dest, size)
             meta = _probe(dest)
+            long_side = max(meta["width"], meta["height"])
+            if h.kind == "image" and long_side < MIN_STILL_PX:
+                say(f"  {name} {h.id}: {meta['width']}x{meta['height']} px, too small, skipped")
+                dest.unlink(missing_ok=True)
+                continue
             dur = meta["duration"] if h.kind == "video" else None
             if dur and dur > MAX_CLIP_S:
                 _trim(dest, MAX_CLIP_S)
@@ -544,12 +557,12 @@ def _stock(job: Path, w: dict, prov_names: list[str], first: int,
         out.append({
             "id": cid, "kind": h.kind, "file": f"{DIR}/{w['n']}/{dest.name}",
             "thumb": f"{DIR}/{w['n']}/{thumb.name}", "width": meta["width"],
-            "height": meta["height"], "duration_s": round(dur, 2) if dur else None,
-            "source": name, "source_url": h.source_url, "stock_id": h.id, "author": h.author,
+            "height": meta["height"], "small": long_side < SMALL_PX,
+            "duration_s": round(dur, 2) if dur else None, "source": name,
+            "source_url": h.source_url, "stock_id": h.id, "author": h.author,
             "licence": h.licence, "attribution": h.attribution,
             "attribution_full": h.attribution_full or None, "licence_url": h.licence_url or None,
-            "ai_generated": False,
-            "model": None, "prompt": None, "seed": None, "watermark": "none",
+            "ai_generated": False, "model": None, "prompt": None, "seed": None, "watermark": "none",
             "sha256": _sha(dest), "fetched": now(), "hdr": _hdr(meta["info"]),
         })  # fmt: skip
     say(f'  wish {w["n"]}: {len(out)} stock candidate(s) for "{w["query"]}"')

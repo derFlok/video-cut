@@ -430,6 +430,16 @@ def test_openverse_public_domain_credit_and_skips(monkeypatch):
     assert hits["pdm"].attribution.endswith("(Public Domain) via Openverse/wikimedia")
 
 
+def test_openverse_puts_large_hits_first(monkeypatch):
+    base = _fixture("openverse_images.json")["results"][0]
+    sizes = {"a": (1000, 900), "b": (2000, 1500), "c": (1279, 800), "d": (1280, 720)}
+    answer = {"results": [{**base, "id": k, "width": w, "height": h}
+                          for k, (w, h) in sizes.items()]}  # fmt: skip
+    prov, _ = _openverse(monkeypatch, answer)
+    hits = prov.search("lake", "image", "landscape", "en-US", 10)
+    assert [h.id.removeprefix("openverse-") for h in hits] == ["b", "d", "a", "c"]
+
+
 def test_openverse_rate_limit_and_one_retry_on_a_server_error(monkeypatch):
     seen = []
 
@@ -570,6 +580,50 @@ def test_fetch_choose_round_trip(fakes, capsys, monkeypatch):
     # a replaced file loses its choice
     (job / "work/material/1/c2.mp4").write_bytes(b"other")
     assert mat.chosen(job) == {} and mat.pending(job) == [1]
+
+
+class SizedStock(FakeStock):
+    """Photos whose downloaded file has the size in SIZES (the reported one is larger)."""
+
+    SIZES = [(520, 760), (1080, 1920), (600, 400), (960, 1440), (1200, 1800), (1365, 2048)]
+
+    def search(self, query, kind, orientation, locale, limit):
+        if kind != "image":
+            return []
+        return [
+            mp.StockHit(id=f"sized-{i}", kind="image", width=2000, height=3000, duration_s=None,
+                        preview_url="", file_url="https://example.invalid/f", author="Zentra",
+                        source_url="", licence="CC0 1.0", attribution="Photo", source="pexels")
+            for i in range(len(self.SIZES))
+        ]  # fmt: skip
+
+    def download(self, hit, dest, min_size=None):
+        w, h = self.SIZES[int(hit.id.split("-")[1])]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _ffmpeg("-f", "lavfi", "-i", f"testsrc=s={w}x{h}:d=1", "-frames:v", "1", str(dest))
+        return dest
+
+
+@media
+def test_fetch_drops_photos_too_small_on_disk_and_marks_small_ones(fakes, monkeypatch):
+    monkeypatch.setitem(mp._REGISTRY, "pexels", SizedStock)
+    still = [{**WISHES[1], "n": 1, "src_from": 2.0, "src_to": 6.0}]
+    job = make_job(mode="stock", wishes=still)
+    said = []
+    mat.fetch(job, say=said.append)
+    cands = json.loads((job / mat.FILE).read_text())["wishes"][0]["candidates"]
+    # the probed size counts: 520x760 and 600x400 are dropped, the next hits fill up to 4
+    assert [(c["id"], c["width"], c["height"], c["small"]) for c in cands] == [
+        ("c1", 1080, 1920, False), ("c2", 960, 1440, False), ("c3", 1200, 1800, False),
+        ("c4", 1365, 2048, False),
+    ]  # fmt: skip
+    assert any("sized-0: 520x760 px, too small" in m for m in said)
+    assert not list((job / mat.DIR / "1").glob("c5*"))
+    monkeypatch.setattr(SizedStock, "SIZES", [(1080, 1920), (900, 1200), (1200, 800)])
+    mat.fetch(job, only=1, say=lambda _: None)
+    cands = json.loads((job / mat.FILE).read_text())["wishes"][0]["candidates"]
+    assert [(c["width"], c["small"]) for c in cands[-3:]] == [(1080, False), (900, True),
+                                                               (1200, True)]  # fmt: skip
 
 
 @media

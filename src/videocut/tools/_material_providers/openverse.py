@@ -36,6 +36,7 @@ LICENCES = "cc0,pdm,by"  # never sa/nd/nc (see above)
 ASPECT = {"portrait": "tall", "landscape": "wide", "square": "square"}
 FILETYPES = {"jpg", "jpeg", "png", "webp"}
 MIN_LONG_SIDE = 800
+GOOD_LONG_SIDE = 1280
 PAGE_SIZE = 20
 TITLE_MAX = 80  # in the short credit; the full one keeps the whole title
 HEADERS = {"User-Agent": f"videocut/{__version__} (https://github.com/derFlok/video-cut)"}
@@ -58,7 +59,11 @@ class Openverse(StockProvider):
         if orientation in ASPECT:
             params["aspect_ratio"] = ASPECT[orientation]
         data = _search(params)
-        return [h for r in data.get("results") or [] if (h := _image(r))][:limit]
+        hits = [h for r in data.get("results") or [] if (h := _image(r))]
+        # large ones first (stable); the reported size is not always the file's, so the
+        # fetch probes the download again
+        hits.sort(key=lambda h: max(h.width, h.height) < GOOD_LONG_SIDE)
+        return hits[:limit]
 
     def download(self, hit: StockHit, dest: Path, min_size: tuple[int, int] | None = None) -> Path:
         download(pick_rendition(hit, min_size), dest, HEADERS)
