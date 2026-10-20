@@ -222,6 +222,7 @@ def test_disclosure_lists_ai_items_attributions_and_platforms(tmp_path):
     assert doc["stock"] == [{"n": 2, "source": "pexels", "author": "Mira Holm",
                              "licence": "Pexels License",
                              "attribution": "Video by Mira Holm on Pexels",
+                             "attribution_full": None, "licence_url": None,
                              "source_url": "https://example.com/v/1"}]  # fmt: skip
     assert [(p["id"], p["status"]) for p in doc["platforms"]] == [
         ("youtube", "required"), ("meta", "required"), ("tiktok", "required"),
@@ -234,6 +235,28 @@ def test_disclosure_lists_ai_items_attributions_and_platforms(tmp_path):
     assert json.loads((job / "work" / "disclosure.json").read_text()) == doc
     md = (job / "work" / "disclosure.md").read_text()
     assert "- [x] YouTube" in md and "Video by Mira Holm on Pexels" in md and "Prompt:" in md
+
+
+def test_disclosure_prints_the_full_cc_by_credit_with_the_source_link(tmp_path):
+    full = (
+        '"Blue Lake" by Jo Rivet is licensed under CC BY 2.0. To view a copy of this '
+        "license, visit https://creativecommons.org/licenses/by/2.0/."
+    )
+    ov = candidate(
+        "s1", kind="image", source="openverse", licence="CC BY 2.0", ai_generated=False,
+        model=None, prompt=None, author="Jo Rivet",
+        attribution="Blue Lake by Jo Rivet, CC BY 2.0, via Openverse/wikimedia",
+        attribution_full=full, licence_url="https://creativecommons.org/licenses/by/2.0/",
+        source_url="https://commons.example.org/w/index.php?curid=1",
+    )  # fmt: skip
+    edl = edl_doc()
+    job = make_job(tmp_path, material(wish(1, "s1", [ov])), edl, lang="en")
+    doc = _disclosure.write(job, from_dict(edl), edl, "en")
+    assert doc["ai"] == [] and doc["stock"][0]["attribution_full"] == full
+    line = f"{full.rstrip('.')}. Source: https://commons.example.org/w/index.php?curid=1"
+    assert doc["snippet"] == f"Credits: {line}."
+    md = (job / "work" / "disclosure.md").read_text()
+    assert f"- {line}\n" in md  # title, creator, licence with its link, source link
 
 
 def test_disclosure_without_material_says_so(tmp_path):

@@ -6,13 +6,13 @@ The plan run (agent side, no network) writes `material_wishes` into work/plan.js
 why}]. After the human approved the plan, on the host:
 
     fetch     searches the stock libraries (settings "stock_providers": Pixabay and Pexels
-              videos and photos, Coverr videos) with each broll/still wish's query, the job's
-              orientation and locale, and downloads up to MAX_STOCK candidates per wish
-              (the smallest rendition that covers the output size, clips cut to
-              MAX_CLIP_S); with mode generated/both the image generator (settings
-              "image_provider") makes up to MAX_GEN candidates per still/icon wish from its
-              prompt, the brand palette and the style. `--wish N` redoes one wish, with
-              `--query` / `--prompt` the human's edited text
+              videos and photos, Coverr videos, Openverse photos without a key) with each
+              broll/still wish's query, the job's orientation and locale, and downloads up
+              to MAX_STOCK candidates per wish (the smallest rendition that covers the
+              output size, clips cut to MAX_CLIP_S); with mode generated/both the image
+              generator (settings "image_provider") makes up to MAX_GEN candidates per
+              still/icon wish from its prompt, the brand palette and the style. `--wish N`
+              redoes one wish, with `--query` / `--prompt` the human's edited text
     generate  only the generator part (`--wish N [--prompt]`)
     choose    `choose <job> <n> <candidate id|none>`: the human's pick (human only, like
               `job approve`); the cut may use only chosen material
@@ -22,6 +22,7 @@ Everything is logged in work/material.json (version 1):
 {"version": 1, "wishes": [{n, kind, src_from, src_to, query, prompt, style, why,
   "chosen": id|null, "decided": bool, "candidates": [{id, kind: video|image, file, thumb,
   width, height, duration_s, source, source_url, author, licence, attribution,
+  attribution_full and licence_url (the licence's full credit line and link, CC BY),
   ai_generated, model, prompt, seed, watermark, sha256, source_sha256, provenance,
   fetched; generated ones also prompt_sent (the exact text the model got), steps,
   quantisation, generator (provider specifics)}]}],
@@ -84,7 +85,8 @@ WISH_EVERY_S = 8.0  # at most one wish per this many seconds of target length
 QUERY_WORDS = (2, 8)  # a stock query has this many words (the skill asks for 3-6)
 PROMPT_MAX = 600
 LOCALES = {"de": "de-DE", "en": "en-US"}
-STOCK_PROVIDERS = ("pixabay", "pexels", "coverr")  # settings "stock_providers" may name these
+# settings "stock_providers" may name these
+STOCK_PROVIDERS = ("pixabay", "pexels", "coverr", "openverse")
 CHOICE_FILE = "material_choice.json"
 INDEX_FILE = "material.json"  # the trusted copy of work/material.json, in state/<job>/
 
@@ -544,7 +546,9 @@ def _stock(job: Path, w: dict, prov_names: list[str], first: int,
             "thumb": f"{DIR}/{w['n']}/{thumb.name}", "width": meta["width"],
             "height": meta["height"], "duration_s": round(dur, 2) if dur else None,
             "source": name, "source_url": h.source_url, "stock_id": h.id, "author": h.author,
-            "licence": h.licence, "attribution": h.attribution, "ai_generated": False,
+            "licence": h.licence, "attribution": h.attribution,
+            "attribution_full": h.attribution_full or None, "licence_url": h.licence_url or None,
+            "ai_generated": False,
             "model": None, "prompt": None, "seed": None, "watermark": "none",
             "sha256": _sha(dest), "fetched": now(), "hdr": _hdr(meta["info"]),
         })  # fmt: skip

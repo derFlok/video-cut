@@ -19,6 +19,7 @@ import {
   type MaterialWish,
   type SecretAccount,
   type Stage,
+  type StockProviderName,
 } from "../api/types";
 import { clockFine, money, useI18n, type T, type TKey } from "../i18n";
 import { ErrorBanner } from "./ErrorBanner";
@@ -105,6 +106,14 @@ const ACCOUNT_LABEL: Record<SecretAccount, string> = {
   "coverr-api-key": "Coverr",
   "gemini-api-key": "Gemini",
   "openai-api-key": "OpenAI",
+};
+
+/** Stock libraries by name (Openverse needs no key, so it has no key field). */
+const STOCK_LABEL: Record<StockProviderName, string> = {
+  pixabay: "Pixabay",
+  pexels: "Pexels",
+  coverr: "Coverr",
+  openverse: "Openverse",
 };
 
 /** Settings → Material: the default mode, the image generator, the stock libraries, the cost
@@ -199,10 +208,11 @@ export function MaterialSettingsPanel() {
                   })
                 }
               />
-              <span>{ACCOUNT_LABEL[`${p}-api-key` as SecretAccount]}</span>
+              <span>{STOCK_LABEL[p]}</span>
             </label>
           ))}
         </div>
+        <p className="hint">{t("material.stock.openverse.hint")}</p>
       </fieldset>
       <div className="field">
         <label htmlFor="material-budget">{t("material.settings.budget")}</label>
@@ -602,7 +612,13 @@ function Candidate({
       </div>
       <div className="candcard-meta">
         <span className="muted small">
-          {cand.licence}
+          {cand.licence_url ? (
+            <a href={cand.licence_url} target="_blank" rel="noreferrer noopener">
+              {cand.licence}
+            </a>
+          ) : (
+            cand.licence
+          )}
           {cand.attribution ? ` · ${cand.attribution}` : ""}
         </span>
         {cand.source_url && (

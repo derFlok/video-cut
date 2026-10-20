@@ -5,15 +5,16 @@ are searched (StockProvider) and image generators (ImageProvider), in one regist
     get_provider(name)             an instance of it (ProviderError when unknown)
     providers(kind=None)           {name: cls}, all or only "stock" / "image" ones
 
-Built in: `pixabay`, `pexels`, `coverr` (stock), `gemini`, `openai` (image), and `local`
-(local_flux: FLUX.2 [klein] through mflux; its module is imported on first use and registers
-itself with its `register()`, so `import mflux` only happens when it is asked for).
+Built in: `pixabay`, `pexels`, `coverr`, `openverse` (stock), `gemini`, `openai` (image),
+and `local` (local_flux: FLUX.2 [klein] through mflux; its module is imported on first use
+and registers itself with its `register()`, so `import mflux` only happens when it is asked
+for).
 
 Everything here runs on the host only: the HTTP helpers refuse inside an agent run
 (VIDEOCUT_AGENT=1), and only what the contract allows leaves the machine (a stock query,
-locale and orientation; a generator prompt, size, seed, palette hex values and style
-words). API keys come from the macOS keychain (settings.secret) and never appear in an
-error message, a log or a file.
+locale, orientation and size or licence filters; a generator prompt, size, seed, palette hex
+values and style words). API keys come from the macOS keychain (settings.secret) and never
+appear in an error message, a log or a file.
 """
 
 import importlib
@@ -35,7 +36,10 @@ USER_AGENT = "VideoCut/1 (local video editor)"
 
 
 class ProviderError(RuntimeError):
-    """A provider failed; the message is safe to show (never contains a key)."""
+    """A provider failed; the message is safe to show (never contains a key). `status` is
+    the HTTP status when the server answered with an error."""
+
+    status: int | None = None
 
 
 class RateLimited(ProviderError):
@@ -64,6 +68,8 @@ class StockHit:
     attribution: str
     renditions: list[tuple[int, int, str]] = field(default_factory=list)  # (w, h, url)
     source: str = ""
+    attribution_full: str = ""  # the licence's full credit line, where it asks for one (CC BY)
+    licence_url: str = ""
 
 
 @dataclass
@@ -142,7 +148,7 @@ def providers(kind: str | None = None) -> dict[str, type]:
     return {n: c for n, c in _REGISTRY.items() if kind is None or c.kind == kind}
 
 
-BUILTIN = ("pixabay", "pexels", "coverr", "gemini", "openai_image", "local_flux")
+BUILTIN = ("pixabay", "pexels", "coverr", "openverse", "gemini", "openai_image", "local_flux")
 
 
 def _load_builtin() -> None:
@@ -230,9 +236,11 @@ def request(method: str, url: str, headers: dict | None = None, body: bytes | No
                 detail = e.read(400).decode("utf-8", "replace")
             except OSError:
                 pass
-            raise (RateLimited if e.code == 429 else ProviderError)(
+            err = (RateLimited if e.code == 429 else ProviderError)(
                 f"{_safe_url(url)}: HTTP {e.code}" + (f" ({_scrub(detail)})" if detail else "")
-            ) from None
+            )
+            err.status = e.code
+            raise err from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise ProviderError(f"{_safe_url(url)}: {getattr(e, 'reason', e)}") from None
     raise ProviderError(f"{_safe_url(url)}: rate limited (HTTP 429) {RETRIES_429 + 1} times")

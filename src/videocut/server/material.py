@@ -138,7 +138,8 @@ def _url(job: Path, rel: str | None) -> str | None:
 
 
 CAND_KEYS = ("id", "kind", "width", "height", "duration_s", "source", "source_url", "author",
-             "licence", "attribution", "ai_generated", "model", "watermark")  # fmt: skip
+             "licence", "licence_url", "attribution", "ai_generated", "model",
+             "watermark")  # fmt: skip
 WISH_KEYS = ("n", "kind", "src_from", "src_to", "query", "prompt", "style", "why", "decided",
              "chosen")  # fmt: skip
 

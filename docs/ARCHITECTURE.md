@@ -518,7 +518,8 @@ the work/material.json mirror) and the EDL; the agent cannot add, move or remove
   provider.
 - **Disclosure** (`_disclosure.py`, full render): `work/disclosure.json` + `disclosure.md`:
   the AI items (model, output span, prompt, style, labelled), one attribution line per
-  stock candidate shown, the platform checklist (YouTube "Altered or synthetic content",
+  stock candidate shown (for CC BY the full credit `attribution_full` — title, creator,
+  licence and its link — plus the source link, in disclosure.md and the snippet), the platform checklist (YouTube "Altered or synthetic content",
   Meta "AI info", TikTok "AI-generated content": `required` for realistic AI material, else
   `not needed`), and a description snippet in the job language with the attributions.
   `GET /api/jobs/{id}/disclosure` (`{"ready": false}` before a full render); the job page
@@ -935,7 +936,9 @@ material`, `run --material-mode/--material-wish`, the new-job form, whose defaul
 settings `material_default_mode`); refused in an agent run. Like slides it changes the
 plan: a plan run records `plan_material`, a change makes the plan stale and revokes an
 approval. Settings also hold `image_provider` (none | gemini (default) | openai | local),
-`stock_providers` (pixabay, pexels, coverr; default all three in that order) and
+`stock_providers` (pixabay, pexels, coverr, openverse; default all four in that order:
+Openverse needs no key, so the chain finds stills without any key, but its quality is mixed
+and it comes last) and
 `material_budget_usd` (default 1.00 per job). Keys live only in the keychain, service
 `videocut`, accounts `pixabay-api-key`, `pexels-api-key`, `coverr-api-key`,
 `gemini-api-key`, `openai-api-key` (`settings.set_secret/secret/has_secret`; `api_key()` /
@@ -962,7 +965,15 @@ broll_aspect/verify rules decide; search answers are cached 24 h in
 `$VIDEOCUT_HOME/cache/pixabay/<sha256 of the parameters>.json`, as Pixabay requires, and a
 429 after the retries reads "rate limit (100 requests per minute)"; Pexels videos then
 photos with `orientation` from the job format, `locale` de-DE/en-US from the job language,
-`size=medium`; Coverr videos filtered by `is_vertical`), up to 4 candidates, each downloaded in the smallest rendition whose short
+`size=medium`; Coverr videos filtered by `is_vertical`; Openverse photos only, no key:
+`GET api.openverse.org/v1/images/` with `q`, `license=cc0,pdm,by` (never SA/ND/NC: the
+picture is cropped and recoloured and the video may be commercial), `aspect_ratio`
+tall/wide/square, `size=large`, `mature=false`, User-Agent `videocut/<version> (repo URL)`
+also on the download from the source site; hits that are not jpg/png/webp, under 800 px on
+the long side or not HTTPS are skipped; the licence becomes "CC0 1.0" / "Public Domain Mark
+1.0" / "CC BY <version>", the API's full credit sentence is kept as `attribution_full` and
+the licence link as `licence_url`; one retry on a 5xx, and a 429 after the retries reads
+"rate limit (20 searches per minute, 200 per day without a key)"), up to 4 candidates, each downloaded in the smallest rendition whose short
 side reaches the output's, cut to 30 s without re-encoding, probed, thumbed (≤ 480 px) and
 hashed; for still/icon wishes with mode generated/both the image provider makes up to 2
 (prompt + style words + the brand's colours as names, never hex codes, which models draw
@@ -1000,7 +1011,8 @@ makes the cut stale). A Coverr pick is reported to Coverr's download counter (it
 section Material (default mode, generator — "local" only when registered, disabled with its
 reason when not available —, stock libraries, cost limit, the four keys write-only). Plan
 view: the wishes. Material screen (between approval and cut): per wish the why, candidates
-as thumbs (videos play muted on hover/click), licence and attribution, a "KI" marker on
+as thumbs (videos play muted on hover/click), licence (linked to `licence_url` when there is
+one), attribution and source link, a "KI" marker on
 generated ones, choose / "Kein Material" / "Neu suchen" (edited query) / "Neu erzeugen"
 (edited prompt), progress while fetching, cost against the budget, then "Weiter zum
 Schnitt" (`/start`). Candidate files are served only from `work/material/<n>/c<k>[_sm].<ext>`.

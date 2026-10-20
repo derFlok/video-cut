@@ -5,8 +5,10 @@ EDL (_ai_label.on_screen), never by the agent:
 
     {"version": 1, "lang", "ai": [{"n", "kind", "t0", "t1" (output s), "model", "prompt",
        "style", "source", "watermark", "labelled"}],
-     "stock": [{"n", "source", "author", "licence", "attribution", "source_url"}] (one per
-       chosen stock candidate shown),
+     "stock": [{"n", "source", "author", "licence", "attribution", "attribution_full",
+       "licence_url", "source_url"}] (one per chosen stock candidate shown; attribution_full
+       is the licence's full credit line where it asks for one, CC BY: title, creator,
+       licence and its link; it is printed with the source link instead of the short one),
      "platforms": [{"id": "youtube"|"meta"|"tiktok", "label", "status": "required"|"not needed",
        "why"}],
      "snippet": description text in the job language (AI note + attributions; "" when there
@@ -50,10 +52,22 @@ SNIPPET = {
     "stock": {"de": "Bildnachweise: {items}.", "en": "Credits: {items}."},
 }  # fmt: skip
 COMMENT = "Contains AI-generated material: {models}"
+STOCK_KEYS = ("source", "author", "licence", "attribution", "attribution_full", "licence_url",
+              "source_url")  # fmt: skip
+SOURCE = {"de": "Quelle", "en": "Source"}
 
 
 def _t(table: dict, lang: str) -> str:
     return table.get(lang, table["en"])
+
+
+def _full_credit(s: dict, lang: str) -> str:
+    """The licence's full credit line with the source link (CC BY), "" when there is none."""
+    full = str(s.get("attribution_full") or "").strip()
+    if not full:
+        return ""
+    url = s.get("source_url")
+    return f"{full.rstrip('.')}. {_t(SOURCE, lang)}: {url}" if url else full
 
 
 def comment(items: list[dict]) -> str | None:
@@ -77,8 +91,7 @@ def build(items: list[dict], lang: str, provenance: dict | None = None) -> dict:
             })  # fmt: skip
         elif (i["n"], c.get("id")) not in seen:
             seen.add((i["n"], c.get("id")))
-            stock.append({k: c.get(k) for k in ("source", "author", "licence", "attribution",
-                                                 "source_url")} | {"n": i["n"]})  # fmt: skip
+            stock.append({k: c.get(k) for k in STOCK_KEYS} | {"n": i["n"]})
     kind = "photo" if any(a["style"] == "photo" for a in ai) else (
         "illustration" if ai else "none")  # fmt: skip
     platforms = [
@@ -89,7 +102,8 @@ def build(items: list[dict], lang: str, provenance: dict | None = None) -> dict:
     parts = []
     if ai:
         parts.append(_t(SNIPPET["ai"], lang).format(models=", ".join(_ai_label.models(items))))
-    credits = [s["attribution"] or s["author"] or s["source"] for s in stock]
+    credits = [_full_credit(s, lang) or s["attribution"] or s["author"] or s["source"]
+               for s in stock]  # fmt: skip
     credits = [str(c) for c in credits if c]
     if credits:
         parts.append(_t(SNIPPET["stock"], lang).format(items="; ".join(credits)))
@@ -142,6 +156,9 @@ def markdown(doc: dict) -> str:
     if doc["stock"]:
         out += ["", f"## {_t(MD['stock'], lang)}", ""]
         for s in doc["stock"]:
+            if full := _full_credit(s, lang):
+                out.append(f"- {full}")
+                continue
             line = s["attribution"] or s["author"] or s["source"]
             out.append(f"- {line}" + (f" ({s['licence']})" if s["licence"] else "")
                        + (f" {s['source_url']}" if s["source_url"] else ""))  # fmt: skip

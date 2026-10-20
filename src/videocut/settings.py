@@ -29,7 +29,7 @@ DEFAULTS = {
     "theme_follows_brand": True,
     "material_default_mode": "none",
     "image_provider": "gemini",
-    "stock_providers": ["pixabay", "pexels", "coverr"],
+    "stock_providers": ["pixabay", "pexels", "coverr", "openverse"],
     "material_budget_usd": 1.0,
     "ai_label_illustrations": True,
 }

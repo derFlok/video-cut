@@ -41,8 +41,8 @@ Nur das, nur an Anthropic, und nur über deinen eigenen Claude-Zugang:
 - **auf deinem Mac per Texterkennung gelesener Bildschirmtext**, wenn du eine Bildschirmaufnahme, Screenshots oder Folien dazugibst.
 
 Nur wenn du für ein Video **Material** einschaltest (standardmäßig aus): die englischen
-Suchwörter jedes Wunschs gehen an die Bildarchive, die du aktiviert hast (Pixabay, Pexels, Coverr),
-mit Ausrichtung und Sprache, und die Bildbeschreibung in einem Satz plus die Farbcodes deiner
+Suchwörter jedes Wunschs gehen an die Bildarchive, die du aktiviert hast (Pixabay, Pexels,
+Coverr, Openverse), mit Ausrichtung und Sprache, und die Bildbeschreibung in einem Satz plus die Farbcodes deiner
 Marke an den gewählten Bildgenerator (Google Gemini oder OpenAI), mit deinen eigenen
 Schlüsseln. Nie eine Aufnahme, ein Standbild, ein Logo oder ein Name.
 
@@ -287,7 +287,7 @@ deinem Gesicht.
 Mit **Material** schlägt der Plan ein paar Stellen vor, an denen ein Bild hilft (höchstens
 eine pro 8 Sekunden): einen kurzen Archiv-Clip im Vollbild, während du weitersprichst
 (B-Roll), ein Archivfoto oder ein erzeugtes Bild. Nach deiner Freigabe sucht Video Cut bei
-Pixabay, Pexels und Coverr und/oder fragt den Bildgenerator und zeigt pro Stelle die Kandidaten mit
+Pixabay, Pexels, Coverr und Openverse und/oder fragt den Bildgenerator und zeigt pro Stelle die Kandidaten mit
 Lizenz und Urheberangabe; du wählst einen oder „Kein Material", suchst mit anderen Wörtern
 neu oder lässt neu erzeugen. Nur was du gewählt hast, kommt ins Video. Erzeugte Bilder sind
 in der App als „KI" markiert, ihre Originaldateien behalten das Wasserzeichen des Generators (SynthID / C2PA), und ein
@@ -310,6 +310,14 @@ Suchantwort 24 Stunden auf, wie Pixabay es verlangt. Pixabay-Fotos kommen mit h�
 1280 px an der langen Seite (für B-Roll werden ohnehin Videos bevorzugt), ein Foto kann in
 einem 1080p-Video also leicht hochskaliert werden. Jedes Pixabay-Material wird mit „Video/Photo
 by … on Pixabay" und Link genannt, in der App und in `disclosure.md`.
+
+Material funktioniert auch ganz ohne Schlüssel: **Openverse** findet frei lizenzierte Fotos
+(nur CC0, Public-Domain-Kennzeichnung und CC BY, die Zuschneiden und kommerzielle Nutzung
+erlauben) und ist standardmäßig an, als letzte Quelle; Videos brauchen einen Pixabay- oder
+Pexels-Schlüssel. Erwarte eher Lexikon- als Hochglanzbilder (Wikimedia Commons, Flickr,
+Museumssammlungen) und höchstens 20 Suchen pro Minute und 200 pro Tag. CC BY verlangt eine
+vollständige Quellenangabe: Titel, Urheber, Lizenz mit Link und Quellenlink stehen in
+`disclosure.md` und im Text für die Beschreibung.
 
 ```bash
 .venv/bin/videocut run ~/Movies/ich.mov --material-mode both --material-wish "ruhige Büroszenen"
