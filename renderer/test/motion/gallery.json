@@ -1,0 +1,22 @@
+{
+  "mode": "motion",
+  "size": [1080, 1920],
+  "fps": 30,
+  "duration": 3,
+  "unit": 1080,
+  "region": [60, 120, 1020, 1880],
+  "scene": "gallery.js",
+  "seed": 7,
+  "words": [
+    {"w": "one", "t0": 0.1, "t1": 0.3}, {"w": "small", "t0": 0.3, "t1": 0.5}, {"w": "step", "t0": 0.5, "t1": 0.8},
+    {"w": "every", "t0": 0.8, "t1": 1.0}, {"w": "word,", "t0": 1.0, "t1": 1.3}, {"w": "first", "t0": 1.4, "t1": 1.6},
+    {"w": "second", "t0": 1.7, "t1": 1.9}, {"w": "old", "t0": 2.0, "t1": 2.2}, {"w": "count", "t0": 2.2, "t1": 2.5}
+  ],
+  "beats": {"mark": {"word": "step", "offset": 0.05}, "count": {"word": "count"}},
+  "tokens": {
+    "colors": {"bg": "#F4F4F4", "surface": "#FFFFFF", "text": "#141414", "muted": "#6B6B6B", "accent": "#141414"},
+    "fonts": {"weights": [400, 600, 800], "files": {}},
+    "motion": {"spring": {"w": 13, "z": 0.9}},
+    "caption_colors": {"box": "#FFFFFF", "text": "#141414", "highlight": "#141414"}
+  }
+}

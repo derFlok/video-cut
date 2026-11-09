@@ -3,8 +3,11 @@
   "private": true,
   "description": "Deterministic frame-by-frame overlay renderer (canvas in headless Chromium, piped to ffmpeg).",
   "license": "Apache-2.0",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "dependencies": {
+    "animejs": "4.5.0",
     "playwright-core": "1.63.0"
   },
   "scripts": {

@@ -5,8 +5,8 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const DIRS = ["scenes", "slides"].map((d) => path.join(__dirname, "..", d));
-const HELPERS = ["textblock.js", "style.js", "layout.js", "card.js", "assets.js", "slide.js"].map((f) => path.join(__dirname, "..", "lib", f));
+const DIRS = ["scenes", "slides", "motion"].map((d) => path.join(__dirname, "..", d));
+const HELPERS = ["textblock.js", "style.js", "layout.js", "card.js", "assets.js", "slide.js", "literals.js"].map((f) => path.join(__dirname, "..", "lib", f));
 const files = [...DIRS.flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith(".js")).map((f) => path.join(d, f))), ...HELPERS];
 
 const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");

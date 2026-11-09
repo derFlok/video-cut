@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added — Spike: Claude-authored motion scenes (branch only, see docs/spikes/motion.md)
+- `renderer/motion.js`: renders a scene module written per span (HTML/SVG/CSS on an
+  anime.js 4.5.0 timeline, MIT) in a sandboxed page (own origin, request filter, CSP
+  without connections, network APIs that throw, DNS mapped to nothing, time limits per
+  frame); any blocked request fails the render. Virtual clock, seeded randomness, one
+  sequential frame pass (stills are bit-identical to clip frames); `--region-only`
+  captures only the stage band.
+- `renderer/motion/`: runtime (brand tokens as CSS variables, `at(word)`, beat sheet,
+  `seek(t)`) and five components: counter, terminal, strike-through card, checklist,
+  kinetic headline. Covered by the token lint; scene modules are checked for colour and
+  font literals before they load.
+- `renderer/lib/ffmpeg.js` (encoder shared by render.js and motion.js),
+  `scripts/motion_spike.py` (motion.json for a span of a finished job).
+
 ### Added — Material: Openverse as key-less stock image source
 - `openverse` stock provider (images only, no key): `api.openverse.org/v1/images/` with
   `license=cc0,pdm,by` (never SA/ND/NC: the picture is cropped and recoloured, the video
