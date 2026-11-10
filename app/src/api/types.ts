@@ -14,6 +14,29 @@ export const CUT_STYLES: CutStyleChoice[] = ["auto", "calm", "standard", "tight"
  * bottom of the screen, blur the rest), blur, crop (cut off bands along an edge) or block. */
 export type RedactStyle = "auto" | "blur" | "crop" | "block";
 export const REDACT_STYLES: RedactStyle[] = ["auto", "blur", "crop", "block"];
+/** Sound effects of the motion scenes (job.json "sfx"; null: the settings default). */
+export type SfxLevel = "off" | "subtle" | "normal";
+export const SFX_LEVELS: SfxLevel[] = ["off", "subtle", "normal"];
+export type SfxKind = "pop" | "whoosh" | "tick" | "check" | "strike" | "type" | "count" | "impact" | "swoosh_out";
+export type SfxOrigin = "upload" | "openverse" | "procedural";
+export interface SfxSound {
+  id: string;
+  kind: SfxKind;
+  origin: SfxOrigin;
+  title: string;
+  duration_s: number;
+  author: string;
+  licence: string;
+  licence_url: string;
+  source_url: string;
+  attribution: string;
+}
+/** GET/PUT /api/settings/sfx. */
+export interface SfxSettings {
+  sfx_default: SfxLevel;
+  levels: SfxLevel[];
+  kinds: Record<SfxKind, { uses: SfxOrigin; sounds: SfxSound[] }>;
+}
 
 /** Target length of the video in seconds; null (or "auto" in requests) lets the server
  * decide: by type for talking heads, as long as needed for demos. */
@@ -47,6 +70,39 @@ export interface JobSlides {
   /** Where the reel shows each slide (output seconds). */
   marks: { id: string; t0: number; t1: number; layout?: string | null }[];
 }
+/** Motion scenes of a job (job.json "motion"): animated scenes in a band above the speaker. */
+export type MotionMode = "off" | "auto" | "wish";
+export const MOTION_MODES: MotionMode[] = ["off", "auto", "wish"];
+export const MOTION_WISH_MAX = 2000;
+
+/** A beat of a motion moment: an event of the scene on a spoken word. */
+export interface MotionBeat {
+  word: string;
+  n?: number;
+  edge?: "start" | "end";
+  offset?: number;
+}
+
+/** A motion moment of the plan (plan.json "motion"; source seconds). */
+export interface PlanMotion {
+  id: string;
+  src: [number, number];
+  components: string[];
+  /** What the band shows (never the spoken words again). */
+  shows: string;
+  beats: Record<string, MotionBeat>;
+  why?: string;
+  still?: string | null;
+}
+
+/** Job detail "motion": the setting and the motion check of the last verify. */
+export interface JobMotion {
+  mode: MotionMode;
+  wish: string;
+  stale: boolean;
+  spans?: { id: string; t0: number; t1: number; flags?: string[] }[];
+}
+
 /** Material of a job (job.json "material"): stock footage, AI-generated stills, both. */
 export type MaterialMode = "none" | "stock" | "generated" | "both";
 export const MATERIAL_MODES: MaterialMode[] = ["none", "stock", "generated", "both"];
@@ -263,6 +319,15 @@ export interface Brand {
   logo: { light?: string | null; dark?: string | null; placement?: string; [k: string]: unknown };
   captions: { pace?: string; style?: string; [k: string]: unknown };
   voice: { address?: string; [k: string]: unknown };
+  /** Motion-scene style (all optional: depth and energy follow the theme and character). */
+  motion?: {
+    theme?: "dark" | "light" | "auto";
+    depth?: "flat" | "soft" | "glow";
+    radius?: number;
+    energy?: "calm" | "normal" | "punchy";
+    type_scale?: number;
+    [k: string]: unknown;
+  };
   /** Transcript vocabulary: canonical spellings and their known misspellings. */
   vocabulary?: VocabEntry[];
   files?: string[];
@@ -382,6 +447,7 @@ export interface VerifySummary {
   flagged?: { cut: number; t: number; flags: string[] }[];
   overlay_flagged?: { scene: string | null; t0: number; t1: number; flags: string[] }[];
   screen_flagged?: { flags: string[]; [k: string]: unknown }[];
+  motion_flagged?: { id: string; t0?: number; t1?: number; flags: string[]; invented?: string[] }[];
   warnings?: string[];
   [k: string]: unknown;
 }
@@ -412,6 +478,11 @@ export interface JobDetail {
   /** How personal data is hidden (resolved: the job's choice or the brand's default). */
   redact_style?: RedactStyle | null;
   redact_style_default?: boolean;
+  /** Sound-effect level: the job's choice (null: settings default), what it resolves to,
+   * and whether the job has motion events to put sounds on at all. */
+  sfx?: SfxLevel | null;
+  sfx_resolved?: SfxLevel | null;
+  sfx_events?: boolean;
   /** The current reel was cut with another style or format than the resolved one. */
   cut_stale?: boolean;
   /** A vocabulary changed the captions of the finished reel: set them again (/overlays). */
@@ -429,6 +500,7 @@ export interface JobDetail {
   plan_target_s?: number | null;
   slides?: JobSlides;
   material?: JobMaterial;
+  motion?: JobMotion;
   /** Where the job waits for the human (status "waiting"). */
   gate?: "plan" | "material" | "result" | null;
   /** Length of the camera recording (work/probe.json), for the duration hints. */
@@ -466,6 +538,7 @@ export interface PlanJson {
   personal_data?: PdCandidate[];
   slides?: PlanSlide[];
   material_wishes?: MaterialWish[];
+  motion?: PlanMotion[];
   risks?: (string | { text?: string; [k: string]: unknown })[];
   change_note?: string;
   /** The target the plan was made for and its estimate of the output length (seconds). */
@@ -542,11 +615,25 @@ export type DisclosureStock = {
   source_url: string | null;
 };
 export type DisclosurePlatform = { id: string; label: string; status: "required" | "not needed"; why: string };
+export type DisclosureSound = {
+  kind: SfxKind;
+  id: string;
+  origin: SfxOrigin;
+  title?: string | null;
+  author?: string | null;
+  licence?: string | null;
+  licence_url?: string | null;
+  source_url?: string | null;
+  attribution?: string | null;
+};
+
 export type Disclosure = {
   ready: boolean;
   lang?: string;
   ai?: DisclosureAi[];
   stock?: DisclosureStock[];
+  /** The sound effects mixed in (tools/_disclosure.py "sounds"). */
+  sounds?: DisclosureSound[];
   platforms?: DisclosurePlatform[];
   snippet?: string;
   comment?: string | null;

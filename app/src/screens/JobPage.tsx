@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { JobDetail, JobEvent, Stage } from "../api/types";
+import { SfxPanel } from "../components/Sfx";
 import { CutStylePanel } from "../components/CutStyle";
 import { MaterialScreen, showMaterial } from "../components/Material";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -238,6 +239,7 @@ export function JobPage({ id }: { id: string }) {
       </section>
 
       {atGateOrLater && <CutStylePanel live={live} />}
+      {atGateOrLater && (job.sfx_events || (job.motion && job.motion.mode !== "off")) && <SfxPanel live={live} />}
       <OverlaysStaleBanner live={live} />
       <CaptionsRefreshBanner live={live} />
       <JobVocabularyPanel live={live} />

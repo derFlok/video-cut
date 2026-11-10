@@ -219,3 +219,41 @@ def test_brand_sheet_spec_follows_the_format(capsys):
     assert brand_tool.sheet_name("16:9") == "preview-16x9.jpg"
     code, s, _ = run_tool(capsys, "brand", "sheet", "_example", "--format", "wide")
     assert code == 1 and "16:9" in s["error"]
+
+
+def test_motion_style_defaults_derive_from_the_other_tokens(videocut_home):
+    make_brand(videocut_home)  # dark background, character "knackig", no style fields
+    m = brand.load("t1")["motion"]
+    assert m["theme"] == "auto" and m["theme_resolved"] == "dark"
+    assert m["depth"] == "glow" and m["energy"] == "punchy"
+    assert m["radius"] == brand.MOTION_RADIUS[2] and m["type_scale"] == 1.0
+    light = {"bg": "#F4F4F4", "surface": "#FFFFFF", "text": "#141414", "accent": "#141414"}
+    make_brand(videocut_home, "t2", colors=light, motion={"character": "ruhig"})
+    m = brand.load("t2")["motion"]
+    assert (m["theme_resolved"], m["depth"], m["energy"]) == ("light", "soft", "calm")
+    ex = brand.load("_example")["motion"]
+    assert (ex["theme"], ex["depth"], ex["energy"]) == ("auto", "soft", "normal")
+
+
+def test_motion_style_fields_are_validated(videocut_home):
+    make_brand(videocut_home, motion={"theme": "dark", "depth": "glow", "radius": 0.05,
+                                      "energy": "calm", "type_scale": 1.2})  # fmt: skip
+    m = brand.load("t1")["motion"]
+    assert (m["theme"], m["theme_resolved"], m["depth"], m["energy"]) == (
+        "dark",
+        "dark",
+        "glow",
+        "calm",
+    )
+    assert m["radius"] == 0.05 and m["type_scale"] == 1.2
+    make_brand(videocut_home, "t2", motion={"theme": "neon", "depth": "deep", "radius": 0.5,
+                                            "energy": "wild", "type_scale": "big"})  # fmt: skip
+    errs = " ".join(errors_of("t2"))
+    for key in (
+        "motion.theme",
+        "motion.depth",
+        "motion.radius",
+        "motion.energy",
+        "motion.type_scale",
+    ):
+        assert key in errs, key

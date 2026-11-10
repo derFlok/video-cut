@@ -24,6 +24,14 @@ export function verifyLines(v: VerifySummary, t: T): string[] {
   for (const o of v.overlay_flagged ?? [])
     out.push(t("result.verify.overlay", { scene: o.scene ?? "", t: clock(o.t0), flags: words(t, o.flags) }));
   for (const s of v.screen_flagged ?? []) out.push(t("result.verify.screen", { flags: words(t, s.flags ?? []) }));
+  for (const m of v.motion_flagged ?? [])
+    out.push(
+      t("result.verify.motion", {
+        id: m.id,
+        t: typeof m.t0 === "number" ? clock(m.t0) : "–",
+        flags: words(t, m.flags) + (m.invented?.length ? ` („${m.invented.join("“, „")}“)` : ""),
+      }),
+    );
   for (const [name, c] of Object.entries(v.checks ?? {}))
     if (!c.ok) out.push(t("result.verify.check", { name: known(t, "check", name) }));
   return out;

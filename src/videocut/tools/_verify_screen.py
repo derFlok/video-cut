@@ -766,7 +766,7 @@ def load_views(job: Path) -> list[dict]:
     views = doc.get("views") if isinstance(doc, dict) else None
     out = []
     for v in views if isinstance(views, list) else []:
-        if not isinstance(v, dict):
+        if not isinstance(v, dict) or v.get("layout") == "motion":  # _verify_motion checks bands
             continue
         focus = v.get("focus") if isinstance(v.get("focus"), list) else []
         for b in [v, *(f for f in focus if isinstance(f, dict))]:

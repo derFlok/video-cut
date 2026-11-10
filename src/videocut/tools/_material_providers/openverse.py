@@ -143,3 +143,68 @@ def _image(r: dict) -> StockHit | None:
 
 
 register_provider("openverse", Openverse)
+
+
+# --------------------------------------------------------------------------- audio (SFX)
+# Sound effects for `videocut tool sfx` (_sfx_library.fetch): CC0 and the Public Domain
+# Mark only (no credit is owed, so nothing can be missed in a reel; the sidecar keeps the
+# credit line anyway). Sent: the search words, the licence filter and the page size.
+
+AUDIO_API = "https://api.openverse.org/v1/audio/"
+AUDIO_LICENCES = "cc0,pdm"
+AUDIO_FILETYPES = {"mp3", "wav", "flac", "ogg", "oga", "m4a", "aif", "aiff"}
+MAX_AUDIO_BYTES = 10 * 1024**2
+
+
+def _audio(r: dict, max_s: float) -> StockHit | None:
+    url = str(r.get("url") or "")
+    lic = _licence(r)
+    dur_ms = r.get("duration")
+    dur = float(dur_ms) / 1000 if isinstance(dur_ms, int | float) and dur_ms > 0 else None
+    if (not url.startswith("https://") or _filetype(r, url) not in AUDIO_FILETYPES
+            or lic is None or str(r.get("license") or "").lower() not in ("cc0", "pdm")
+            or dur is None or dur > max_s):  # fmt: skip
+        return None
+    licence, tag = lic
+    creator = _text(r.get("creator")) or "unknown"
+    title = _title(r) or "Sound"
+    source = str(r.get("source") or r.get("provider") or "").strip()
+    via = f"via Openverse/{source}" if source else "via Openverse"
+    return StockHit(
+        id=f"openverse-{r.get('id')}", kind="audio", width=0, height=0, duration_s=dur,
+        preview_url=url, file_url=url, author=creator,
+        source_url=str(r.get("foreign_landing_url") or ""), licence=licence,
+        attribution=f"{title} by {creator} ({tag}) {via}", source="openverse",
+        attribution_full=_text(r.get("attribution")),
+        licence_url=str(r.get("license_url") or ""),
+    )  # fmt: skip
+
+
+def search_audio(query: str, limit: int = 20, max_s: float = 2.0) -> list[StockHit]:
+    """CC0/PDM sounds for `query` no longer than `max_s` (shortest first, stable)."""
+    params = {"q": query[:200], "license": AUDIO_LICENCES, "page_size": PAGE_SIZE,
+              "mature": "false"}  # fmt: skip
+    for attempt in range(2):
+        try:
+            data = get_json(AUDIO_API, params, HEADERS)
+            break
+        except RateLimited:
+            raise ProviderError(RATE_MSG) from None
+        except ProviderError as e:
+            if attempt or (e.status or 0) < 500:
+                raise
+    hits = [h for r in data.get("results") or [] if (h := _audio(r, max_s))]
+    return hits[:limit]
+
+
+def download_audio(hit: StockHit, dest: Path) -> Path:
+    from . import request
+
+    raw, _ = request("GET", hit.file_url, HEADERS)
+    if len(raw) > MAX_AUDIO_BYTES:
+        raise ProviderError(f"openverse: {hit.id} is larger than 10 MB")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.write_bytes(raw)
+    tmp.replace(dest)
+    return dest

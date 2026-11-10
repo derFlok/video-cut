@@ -10,6 +10,9 @@ import type {
   CutStyleChoice,
   Disclosure,
   RedactStyle,
+  SfxKind,
+  SfxLevel,
+  SfxSettings,
   Format,
   FormatChoice,
   JobDetail,
@@ -18,6 +21,7 @@ import type {
   JobVocabulary,
   ImageModelStatus,
   MaterialMode,
+  MotionMode,
   MaterialSettings,
   MaterialView,
   LabelSettings,
@@ -218,6 +222,17 @@ export const api = {
   labelSettings: () => call<LabelSettings>("GET", "/api/settings/labels"),
   saveLabelSettings: (s: LabelSettings) => call<LabelSettings>("PUT", "/api/settings/labels", s),
   disclosure: (id: string) => call<Disclosure>("GET", `${J(id)}/disclosure`),
+  sfxSettings: () => call<SfxSettings>("GET", "/api/settings/sfx"),
+  saveSfxDefault: (sfx_default: SfxLevel) => call<SfxSettings>("PUT", "/api/settings/sfx", { sfx_default }),
+  fetchSfx: (kind?: SfxKind) => call<SfxSettings>("POST", "/api/settings/sfx/fetch", kind ? { kind } : {}),
+  uploadSfx: (kind: SfxKind, file: File, title?: string) => {
+    const form = new FormData();
+    form.append("sound", file);
+    if (title) form.append("title", title);
+    return call<SfxSettings>("POST", `/api/settings/sfx/${kind}`, form);
+  },
+  deleteSfx: (kind: SfxKind, id: string) => call<SfxSettings>("DELETE", `/api/settings/sfx/${kind}/${id}`),
+  sfxAudioUrl: (kind: SfxKind, id: string) => `/api/settings/sfx/${kind}/${id}/audio`,
 
   jobs: () => call<JobSummary[]>("GET", "/api/jobs"),
   job: (id: string) => call<JobDetail>("GET", J(id)),
@@ -243,6 +258,9 @@ export const api = {
       /** Material: stock footage and/or AI-generated stills, with a free-text wish. */
       material_mode?: MaterialMode;
       material_wish?: string;
+      /** Motion scenes: off, auto, or following a free-text wish. */
+      motion_mode?: MotionMode;
+      motion_wish?: string;
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -261,6 +279,8 @@ export const api = {
     for (const f of fields.slides ?? []) form.append("slides", f);
     if (fields.material_mode && fields.material_mode !== "none") form.append("material_mode", fields.material_mode);
     if (fields.material_wish) form.append("material_wish", fields.material_wish);
+    if (fields.motion_mode && fields.motion_mode !== "off") form.append("motion_mode", fields.motion_mode);
+    if (fields.motion_wish) form.append("motion_wish", fields.motion_wish);
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);
@@ -292,6 +312,8 @@ export const api = {
     call<unknown>("POST", `${J(id)}/approve`, redaction ? { plan_sha, redaction } : { plan_sha }),
   setCutStyle: (id: string, cut_style: CutStyleChoice) => call<JobDetail>("PUT", `${J(id)}/cut-style`, { cut_style }),
   /** How personal data is hidden; a reel that hid it otherwise goes stale (recut). */
+  setJobSfx: (id: string, sfx: SfxLevel | "default") =>
+    call<{ sfx: SfxLevel | null; sfx_resolved: SfxLevel; cut_stale: boolean }>("PUT", `${J(id)}/sfx`, { sfx }),
   setRedactStyle: (id: string, redact_style: RedactStyle) =>
     call<{ redact_style: RedactStyle; cut_stale: boolean }>("PUT", `${J(id)}/redact-style`, { redact_style }),
   recut: (id: string) => call<unknown>("POST", `${J(id)}/recut`),

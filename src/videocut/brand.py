@@ -37,6 +37,9 @@ ENUMS = {
     "captions.pace": ("calm", "normal", "fast"),
     "motion.character": ("ruhig", "federnd", "knackig"),
     "motion.transitions": ("blur", "slide", "cut"),
+    "motion.theme": ("dark", "light", "auto"),
+    "motion.depth": ("flat", "soft", "glow"),
+    "motion.energy": ("calm", "normal", "punchy"),
     "voice.address": ("du", "sie"),
     "redaction.style": ("auto", "blur", "crop", "block"),
 }
@@ -52,6 +55,7 @@ DEFAULTS = {
     "captions.pace": "calm",
     "motion.character": "ruhig",
     "motion.transitions": "blur",
+    "motion.theme": "auto",
     "voice.address": "du",
     "redaction.style": "auto",
 }
@@ -59,6 +63,13 @@ REQUIRED_COLORS = ("bg", "text", "accent")
 OPTIONAL_COLORS = ("surface", "muted")
 LOGO_KEYS = ("light", "dark", "icon_light", "icon_dark")
 DEFAULT_SPRING = {"w": 13, "z": 0.8}  # BRIEF §8, also renderer/lib/spring.js
+# Motion style of the motion scenes (renderer/motion/runtime.js resolves the same way when
+# a job's tokens predate these fields). depth and energy default from other tokens: depth
+# is "glow" on a dark theme and "soft" on a light one; energy follows motion.character.
+DARK_BG_LUMINANCE = 0.18
+MOTION_RADIUS = (0.0, 0.12, 0.028)  # min, max, default (share of the frame's short side)
+MOTION_TYPE_SCALE = (0.6, 1.6, 1.0)
+ENERGY_BY_CHARACTER = {"ruhig": "calm", "federnd": "normal", "knackig": "punchy"}
 WEIGHT_RE = re.compile(r"[1-9][0-9]{0,3}")
 SECTIONS = (
     "colors", "fonts", "logo", "captions", "motion", "voice", "music", "legal", "redaction",
@@ -228,7 +239,8 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
         sec, key = dotted.split(".")
         raw = (data.get(sec) or {}).get(key) if isinstance(data.get(sec), dict) else None
         if raw is None:
-            resolved_enums[dotted] = DEFAULTS[dotted]
+            if dotted in DEFAULTS:  # depth/energy: derived later by motion_style()
+                resolved_enums[dotted] = DEFAULTS[dotted]
             continue
         hits = _enum_words(raw, allowed)
         if not hits:
@@ -309,6 +321,11 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
             errors.append('$.motion.spring: expected {"w": number > 0, "z": number > 0}')
     else:
         tokens.setdefault("motion", {})["spring"] = dict(DEFAULT_SPRING)
+    motion = _section(data, "motion")
+    for key, (lo, hi, _) in (("radius", MOTION_RADIUS), ("type_scale", MOTION_TYPE_SCALE)):
+        v = motion.get(key)
+        if v is not None and not (type(v) in (int, float) and lo <= v <= hi):
+            errors.append(f"$.motion.{key}: expected a number {lo}..{hi}, got {v!r}")
     voice = _section(data, "voice")
     words = voice.get("forbidden_words")
     if words is not None and not (
@@ -334,7 +351,31 @@ def _validate(data, brand_dir: Path) -> tuple[dict, list[str], list[str]]:
         caps, notes = derive_caption_colors(tokens["colors"], tokens["captions"]["style"])
         tokens["caption_colors"] = caps
         tokens["derived"] = notes
+        tokens["motion"] = motion_style(tokens)
     return tokens, errors, warnings
+
+
+def resolve_theme(theme: str, bg: str) -> str:
+    """ "dark" or "light": `auto` follows the brand background's luminance."""
+    if theme in ("dark", "light"):
+        return theme
+    return "dark" if luminance(parse_hex(bg)) < DARK_BG_LUMINANCE else "light"
+
+
+def motion_style(tokens: dict) -> dict:
+    """tokens["motion"] with the motion-scene style filled in (interface 1 of the motion
+    block): theme (as written; `theme_resolved` is dark|light), depth, radius, energy and
+    type_scale. Missing fields are derived from the other tokens, never invented."""
+    m = dict(tokens.get("motion") or {})
+    m.setdefault("theme", "auto")
+    m["theme_resolved"] = resolve_theme(m["theme"], tokens["colors"]["bg"])
+    if not _enum_words(m.get("depth"), ENUMS["motion.depth"]):
+        m["depth"] = "glow" if m["theme_resolved"] == "dark" else "soft"
+    if not _enum_words(m.get("energy"), ENUMS["motion.energy"]):
+        m["energy"] = ENERGY_BY_CHARACTER.get(m.get("character", ""), "normal")
+    m.setdefault("radius", MOTION_RADIUS[2])
+    m.setdefault("type_scale", MOTION_TYPE_SCALE[2])
+    return m
 
 
 # --- public API --------------------------------------------------------------------

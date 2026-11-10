@@ -270,6 +270,23 @@ While a slide is on screen, no card or keyword is shown on top: the slide carrie
 content. Captions stay where you talk next to a slide: in a portrait or square video
 they sit on the line between the slide and you, clear of the slide's text and your face.
 
+## Motion scenes
+
+With **motion** on (*Neues Video* → "Animationen", or `--motion-mode auto`), the plan
+proposes a few moments where an animated scene shows what you mean: a number rolling to
+its value, a list ticking off, a comparison, a chart growing on your words. They run in a
+band above your head (your face stays visible, the captions move below it), in your
+brand's colours, fonts and style, with sound effects on the beats. Each moment is listed
+in the plan with a preview of where the band goes, what it shows and the words it follows;
+nothing is animated that you did not approve. The band never repeats what you say: the
+captions already do.
+
+```bash
+.venv/bin/videocut run ~/Movies/me.mov --brand my-brand --motion-mode auto
+.venv/bin/videocut run ~/Movies/me.mov --brand my-brand --motion-mode wish \
+  --motion-wish "the numbers as counters"
+```
+
 ## B-roll and generated pictures
 
 With **material** on, the plan proposes a few moments where a picture helps (at most one

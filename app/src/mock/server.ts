@@ -20,6 +20,11 @@ import type {
   MaterialWish,
   PdCandidate,
   SecretAccount,
+  SfxKind,
+  SfxLevel,
+  SfxOrigin,
+  SfxSettings,
+  SfxSound,
   Plan,
   PlanJson,
   Stage,
@@ -29,6 +34,7 @@ import type {
   VocabEntry,
   VocabSuggestion,
 } from "../api/types";
+import { SFX_LEVELS } from "../api/types";
 import { brandSheet, coverPicture, personStill, screenStill } from "./pictures";
 
 export interface MockOptions {
@@ -133,8 +139,30 @@ export interface MockState {
   materialSettings: MaterialSettings;
   imageModel: ImageModelStatus;
   labels: LabelSettings;
+  sfx: SfxSettings;
   /** Every request the fake saw (method, path, body), newest last. */
   calls: { method: string; path: string; body: unknown }[];
+}
+
+const SFX_KINDS: SfxKind[] = ["pop", "whoosh", "tick", "check", "strike", "type", "count", "impact", "swoosh_out"];
+function mockSound(kind: SfxKind, origin: SfxOrigin, id: string): SfxSound {
+  const ov = origin === "openverse";
+  return {
+    id,
+    kind,
+    origin,
+    title: ov ? `${kind} (CC0)` : `${kind}.wav`,
+    duration_s: 0.4,
+    author: ov ? "someone" : "",
+    licence: ov ? "CC0 1.0" : "",
+    licence_url: ov ? "https://creativecommons.org/publicdomain/zero/1.0/" : "",
+    source_url: ov ? `https://openverse.org/audio/${id}` : "",
+    attribution: ov ? `"${kind}" by someone, CC0 1.0` : "",
+  };
+}
+function mockSfx(): SfxSettings {
+  const kinds = Object.fromEntries(SFX_KINDS.map((k) => [k, { uses: "procedural" as SfxOrigin, sounds: [] as SfxSound[] }]));
+  return { sfx_default: "subtle", levels: [...SFX_LEVELS], kinds: kinds as SfxSettings["kinds"] };
 }
 
 const TYPES: VideoType[] = [
@@ -211,6 +239,13 @@ function planFor(title: string, variant = 0, note?: string): Plan {
       { id: "s1", template: "steps", content: { steps: ["Anfrage", "Prüfen", "Antworten"] }, t0: 13.0, t1: 19.5, layout: "slide", why: "Der Ablauf in drei Schritten.", source: "auto", still: "work/slides/stills/s1.jpg" },
       { id: "s2", template: "image", content: { asset: "input/slides/page_02.png" }, t0: 52.0, t1: 56.0, layout: "slide_full", why: "Deine Folie zum Schluss.", source: "upload", still: "work/slides/stills/s2.jpg" },
     ],
+    motion: [
+      {
+        id: "m1", src: [31.5, 38.0], components: ["checklist"], shows: "Die drei Schritte haken sich ab",
+        beats: { a1: { word: "Anfrage" }, a2: { word: "prüfen" }, a3: { word: "antworten", edge: "end" } },
+        why: "Der Ablauf ist die Botschaft.", still: "work/plan_stills/motion_m1.jpg",
+      },
+    ],
     risks: ["Bildschirmaufnahme bei 0:31 ist klein; Zoom auf höchstens 1,6×.", "Ton am Ende leicht hallig."],
     estimated_s: variant > 0 ? 44 : 41,
   };
@@ -258,6 +293,9 @@ function baseDetail(id: string, over: Partial<JobDetail>): JobDetail {
     runs: [],
     revisions: [],
     cut_style: "auto",
+    sfx: null,
+    sfx_resolved: "subtle",
+    sfx_events: false,
     cut_style_resolved: over.has_screen ? "calm" : "standard",
     redact_style: "auto",
     redact_style_default: true,
@@ -345,6 +383,8 @@ function seedJobs(): Map<string, MockJob> {
       approved: true,
       outputs: { reel: "out/reel.mp4", preview: "out/preview.mp4", cover: "out/cover.jpg" },
       slides: { mode: "auto", wish: "Die drei Tipps als Aufzählung", pages: 0, stale: false, marks: [{ id: "s1", t0: 8.2, t1: 14.6, layout: "slide" }] },
+      motion: { mode: "auto", wish: "", stale: false, spans: [{ id: "m1", t0: 3.1, t1: 9.4, flags: [] }] },
+      sfx_events: true,
       verify: {
         ok: false,
         checks: { loudness: { ok: true }, duration: { ok: true } },
@@ -499,6 +539,7 @@ export function createMock(opts: MockOptions = {}) {
       ...opts.imageModel,
     },
     labels: { ai_label_illustrations: true },
+    sfx: mockSfx(),
     calls: [],
   };
   const listeners = new Map<string, Set<(ev: JobEvent) => void>>();
@@ -658,6 +699,39 @@ export function createMock(opts: MockOptions = {}) {
         for (const k of ["material_default_mode", "image_provider", "stock_providers", "material_budget_usd"] as const)
           if (b[k] !== undefined) (m as unknown as Record<string, unknown>)[k] = b[k];
         return json(200, m);
+      }
+    }
+    if (a === "settings" && id === "sfx") {
+      const x = state.sfx;
+      const kinds = x.kinds as Record<string, SfxSettings["kinds"][SfxKind]>;
+      if (!b && method === "GET") return json(200, x);
+      if (!b && method === "PUT") {
+        const v = String((body as { sfx_default?: string })?.sfx_default ?? "");
+        if (!SFX_LEVELS.includes(v as SfxLevel)) return json(422, { detail: `unknown sfx level '${v}'` });
+        x.sfx_default = v as SfxLevel;
+        return json(200, x);
+      }
+      if (b === "fetch" && method === "POST") {
+        for (const [k, v] of Object.entries(kinds))
+          if (!v.sounds.some((s) => s.origin === "openverse")) {
+            v.sounds.push(mockSound(k as SfxKind, "openverse", `ov-${k}`));
+            if (v.uses === "procedural") v.uses = "openverse";
+          }
+        return json(200, x);
+      }
+      if (b && b in kinds) {
+        const v = kinds[b];
+        if (!c && method === "POST") {
+          v.sounds.unshift(mockSound(b as SfxKind, "upload", `up-${b}-${v.sounds.length + 1}`));
+          v.uses = "upload";
+          return json(200, x);
+        }
+        if (c && method === "DELETE") {
+          if (!v.sounds.some((s) => s.id === c)) return json(404, { detail: { message: `no sound '${c}'` } });
+          v.sounds = v.sounds.filter((s) => s.id !== c);
+          v.uses = v.sounds[0]?.origin ?? "procedural";
+          return json(200, x);
+        }
       }
     }
     if (a === "settings" && id === "secrets") {
@@ -883,6 +957,17 @@ export function createMock(opts: MockOptions = {}) {
         d.cut_style_resolved = resolveStyle(d);
         d.cut_stale = !!d.outputs?.reel && d.approved && job.cutWith !== d.cut_style_resolved;
         return json(200, d);
+      }
+      if (b === "sfx" && method === "PUT") {
+        const v = String((body as { sfx?: string })?.sfx ?? "");
+        if (v !== "default" && !SFX_LEVELS.includes(v as SfxLevel)) return json(422, { detail: `unknown sfx level '${v}'` });
+        if (state.active === id) return json(409, { detail: { message: "a run of this job is queued or active", code: "busy" } });
+        const before = d.sfx_resolved ?? state.sfx.sfx_default;
+        d.sfx = v === "default" ? null : (v as SfxLevel);
+        d.sfx_resolved = d.sfx ?? state.sfx.sfx_default;
+        const stale = !!d.outputs?.reel && d.approved && !!d.sfx_events && before !== d.sfx_resolved;
+        d.cut_stale = !!d.cut_stale || stale;
+        return json(200, { sfx: d.sfx, sfx_resolved: d.sfx_resolved, cut_stale: stale });
       }
       if (b === "redact-style" && method === "PUT") {
         const v = String((body as { redact_style?: string })?.redact_style ?? "");

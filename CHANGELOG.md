@@ -2,6 +2,104 @@
 
 ## Unreleased
 
+### Added — Motion: animated scenes in the pipeline (tool, plan gate, verify, render, app)
+- `videocut tool motion spans|stills|render|show|catalogue|plan-stills` (tools/motion.py,
+  replaces `scripts/motion_spike.py`): spans (`work/motion/spans.json`) only from the
+  approved plan.json `motion` moments, mapped through the EDL; the band from the face track
+  (top safe zone down to 8 % of the face height above the eye line); the job's brand profile as the only design source;
+  `--region-only` clips + `events.json` per span, several pages at once (default 2:
+  3 spans / 18.6 s rendered in 12.8 s instead of 26.7 s on one page), a trust record
+  outside the job folder (`state/<job>/motion_render.json`), reuse while spec, scene, fonts
+  and renderer are unchanged.
+- Job option `motion` off|auto|wish (`job motion`, `run --motion-mode/--motion-wish`, the
+  new-job form); a plan made for another setting is stale, like slides and material.
+- Plan gate: plan.json `motion` [{id, src, components, shows, beats, why, still}] checked by
+  `plan check` (every beat word spoken inside its moment, components from the catalogue);
+  the app shows each moment with a still of the band, its components, what it shows and
+  the beat list; feedback or removal per moment.
+- Overlays: each band is a hard block (captions and cards keep off it, cards inside a span
+  are cut like on slides); during a span the face counts to 72 % of its height for the
+  caption layout.
+- Verify: `motion_dropped`, `motion_missing`, `motion_untrusted`, `motion_stale`,
+  `motion_not_composited`, `motion_static` (> 0.6 s without change, freezedetect −50 dB),
+  `motion_repeats_caption` (band text read locally vs the captions around it),
+  `overlay_on_face` (drawn band box below the band limit: the eye line, measured at 26 %
+  of the landmark box, and 8 % of the face height above it stay free),
+  `motion_caption_overlap`, `motion_invented` (band text read locally that nobody said:
+  not in the transcript ±3 s, the approved `shows`/`labels` or the wish). plan.json
+  moments may name neutral `labels` (≤ 8) for the human to approve. The renderer's stage
+  ends one capture margin (6 % of the unit) above the band edge: a card's glow and pulse
+  had reached 65 px below the band (9 % of the face box, e2e).
+- Review fixes: the scene sandbox also denies `webkitRTCPeerConnection` and other WebRTC
+  names and turns off non-proxied WebRTC UDP; the blocked list is read-only for the scene.
+  Sounds play only for clips that are composited (no sound for a failed, missing or
+  switched-off scene). Moments on any layout without the face (screen, pip, split,
+  b-roll, slides) are dropped. Sound uploads run off the server's event loop. The motion
+  renderer has a timeout; the pinned renderer packages are part of the clip hash. The Result screen
+  lists motion flags; the brand editor edits the motion style (theme, depth, energy,
+  corner radius, type size).
+- Render composites every span's clip at its offset and place (render.json `motion`).
+- Skills: the plan proposes moments (show, never repeat; beat sheet); the overlays skill
+  writes one scene per span, inspects beat stills (max 3 rounds), follows the rules (one
+  main component, headline on a card, an event every 0.5 s, hand over, brand style) and
+  writes `work/motion_report.md`. The overlay run fails when it changes work/plan.json.
+
+### Added — Motion: sound effects from the motion events (`videocut tool sfx`)
+- `sfx build`: every span's `work/motion/<span>/events.json` → `work/sfx.wav` (48 kHz) +
+  `work/sfx.json`: one seeded sound per kind and job, slight pitch/gain/pan variation per
+  hit, strength → gain, per-kind spacing, one big transition sound per moment
+  (whoosh/swoosh_out/impact), at most 6 hits a second, never in the first frame of a word
+  onset (moved 30 ms ahead).
+- Sound library `$VIDEOCUT_HOME/sfx/<kind>/`: own uploads first, then Openverse audio
+  (`sfx fetch`, CC0/PDM only, key-less, credit sidecar), then sounds generated locally with
+  numpy (offline, tests, CI). Every file is decoded, trimmed, length-capped and normalised.
+- Render mixes the track under the voice (EQ dip, look-ahead sidechain ducking, limiter),
+  measures speech-band margin per hit before the encode and lowers hits that would cover
+  speech; render.json `"sfx"` reports levels and LUFS. Verify flags `sfx_masks_speech` and
+  `sfx_clipping`. The disclosure lists the sounds.
+- Job level `sfx: off|subtle|normal` (`job sfx`, `PUT /api/jobs/{id}/sfx`, default from
+  settings `sfx_default`, subtle); a changed level makes the reel stale. Settings API for
+  the library (list, upload, remove, fetch, preview audio); i18n keys `sfx.*`, `flag.sfx_*`.
+- App: sound-effect level on the job page (shown for jobs with motion; "cut again" when
+  the reel was mixed at another level), Settings → Sound effects (default level, per kind
+  which sound is used, play / upload / remove, Openverse fetch), Publish lists the sources.
+### Added — Motion design: brand-driven motion style, 23 components, cues, 3D (branch only)
+- Brand profile `motion` section gains `theme` (dark | light | auto from the background),
+  `depth` (flat | soft | glow), `radius`, `energy` (calm | normal | punchy) and `type_scale`;
+  validated in `brand.py`, missing fields derived from the other tokens (`motion_style()`),
+  `_example` has a neutral section, i18n keys `brands.motion.*` for the brand editor. The
+  page runtime resolves them into `vc.style` and `--vc-*` properties (theme palette from the
+  brand's own colours, accent glow and layered shadows, contrast guard for text on panel and
+  accent, energy scaling durations, spring overshoot and the micro-event beat).
+- `renderer/motion/components.js` rebuilt: entrances with blur + scale + spring, hand-over
+  morphs (`after`), micro-events every `vc.style.beat` s, fit-to-band slots, big heavy type.
+  The five spike components reworked; new: stat (unit change, source line), bar chart, line /
+  area chart, comparison, steps, table, rebuilt UI frames (browser, window, phone, terminal)
+  with chat, file list and app card, meter (bar / ring), chips, quote, pointer, image frame
+  with parallax, tilted plane (CSS 3D), and with Three.js 0.186.1 (MIT) a point field and an
+  extruded number. A generic line-icon set drawn for the project. `CATALOGUE.md` documents
+  every component (props, cues, durations).
+- Cues: `vc.cue(kind, t, {component, strength})` in the runtime and every component;
+  `motion.js --events <file>` writes `[{t, kind, component, strength}]` in output seconds
+  (`offset` in motion.json). `--gpu swiftshader|metal` picks the WebGL backend.
+- `brand sheet` appends a motion row (four moments in the brand's motion style);
+  `scripts/motion_gallery.py` renders the component gallery in any brand's look.
+
+### Added — Spike: Claude-authored motion scenes (branch only, see docs/spikes/motion.md)
+- `renderer/motion.js`: renders a scene module written per span (HTML/SVG/CSS on an
+  anime.js 4.5.0 timeline, MIT) in a sandboxed page (own origin, request filter, CSP
+  without connections, network APIs that throw, DNS mapped to nothing, time limits per
+  frame); any blocked request fails the render. Virtual clock, seeded randomness, one
+  sequential frame pass (stills are bit-identical to clip frames); `--region-only`
+  captures only the stage band.
+- `renderer/motion/`: runtime (brand tokens as CSS variables, `at(word)`, beat sheet,
+  `seek(t)`) and five components: counter, terminal, strike-through card, checklist,
+  kinetic headline. Covered by the token lint; scene modules are checked for colour and
+  font literals before they load.
+- `renderer/lib/ffmpeg.js` (encoder shared by render.js and motion.js),
+  `scripts/motion_spike.py` (motion.json for a span of a finished job; now replaced by
+  `videocut tool motion`).
+
 ### Added — Material: Openverse as key-less stock image source
 - `openverse` stock provider (images only, no key): `api.openverse.org/v1/images/` with
   `license=cc0,pdm,by` (never SA/ND/NC: the picture is cropped and recoloured, the video

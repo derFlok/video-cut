@@ -282,6 +282,24 @@ trägt den Inhalt. Untertitel bleiben, wo du neben einer Folie sprichst: im Hoch
 Quadratformat stehen sie auf der Linie zwischen Folie und dir, weg vom Folientext und von
 deinem Gesicht.
 
+## Animationen
+
+Mit **Animationen** (*Neues Video* → „Animationen", oder `--motion-mode auto`) schlägt der
+Plan ein paar Stellen vor, an denen eine animierte Szene zeigt, was du meinst: eine Zahl,
+die auf ihren Wert hochzählt, eine Liste, die sich abhakt, ein Vergleich, ein Diagramm,
+das mit deinen Worten wächst. Sie laufen in einem Band über deinem Kopf (dein Gesicht
+bleibt sichtbar, die Untertitel rücken darunter), in den Farben, Schriften und im Stil
+deiner Marke, mit Soundeffekten auf den Takten. Jede Stelle steht im Plan mit einer
+Vorschau, wo das Band liegt, was es zeigt und welchen Worten es folgt; animiert wird nur,
+was du freigegeben hast. Das Band wiederholt nie, was du sagst: das machen schon die
+Untertitel.
+
+```bash
+.venv/bin/videocut run ~/Movies/ich.mov --brand meine-marke --motion-mode auto
+.venv/bin/videocut run ~/Movies/ich.mov --brand meine-marke --motion-mode wish \
+  --motion-wish "die Zahlen als Zähler"
+```
+
 ## B-Roll und erzeugte Bilder
 
 Mit **Material** schlägt der Plan ein paar Stellen vor, an denen ein Bild hilft (höchstens

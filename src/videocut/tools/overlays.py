@@ -22,6 +22,14 @@ organic safe zones (docs/BRIEF.md §8). captions/overlays are copied from the ED
 B-roll (layout broll, tools/material.py): overlays.json "views" lists each b-roll range
 with "band": "lower" and no screen or speaker: the material fills the frame, there is no
 face, and captions go to the lower band there.
+
+Motion (tools/motion.py): every span of an approved motion moment adds a view
+{"layout": "motion", "screen": band, "motion": id}; the renderer treats the band as a hard
+block (captions and items keep off it), overlay items are cut off the spans like off the
+slides, and during a span the face track counts only down to motion.CAPTION_FACE_SHARE of
+the face height (captions may cover chin and neck below the band-filled top). overlays.json
+"motion" lists the spans [{id, t0, t1, region}], "motion_dropped" the moments that could
+not become one.
 AI label: for every AI-generated material item the cut shows (work/material.json, the
 chosen candidates with "ai_generated"; _ai_label) an "ai_badge" item is added over its
 output span, after the slide trimming; an "ai_badge" in the EDL is dropped, so only this
@@ -137,12 +145,20 @@ def build(job: Path) -> dict:
         views = sorted(views + _slide_views(plan, slides, face, src_size), key=lambda v: v["t0"])
     if any(is_broll(lay) for lay in layouts):  # b-roll: full-frame material, no face
         views = sorted(views + broll_views(plan, edl), key=lambda v: v["t0"])
+    # Motion bands (tools/motion.py): spans of the approved motion moments; each band is a
+    # hard block for captions and items, and captions may cover the chin while it runs.
+    from . import motion as motion_mod
+
+    mspans, mdropped, _ = motion_mod.build_spans(job, ctx=(edl, plan, src_size, face))
     plates = _plates.for_job(job, edl, plan.duration)
     plan = plan_mod.with_tail(plan, plates.tail_frames)
     cands, _ = redaction_enforced(job)
     shot_style = _redact_style.screenshot(_redact_style.resolved(read_job(job)))
     track = sorted(face_track(plan, face, src_size) + _speaker_track(views, plan.fps),
                    key=lambda f: f["t"])  # fmt: skip
+    track = motion_mod.caption_track(track, mspans)
+    if mspans:
+        views = sorted(views + motion_mod.views(mspans), key=lambda v: v["t0"])
     doc = {
         "size": list(edl.size),
         "width": edl.size[0],
@@ -160,6 +176,10 @@ def build(job: Path) -> dict:
             "shifted": plates.shifted,
         },
     }
+    if mspans or mdropped:
+        doc["motion"] = [{k: m[k] for k in ("id", "t0", "t1", "region")} for m in mspans]
+        if mdropped:
+            doc["motion_dropped"] = mdropped
     if views:
         doc["views"] = views
         doc["overlays"], hidden = off_slides(doc["overlays"], views)
@@ -198,10 +218,15 @@ def ai_badges(job: Path, edl, raw: dict) -> list[dict]:
 
 
 def off_slides(items: list, views: list[dict]) -> tuple[list, list[dict]]:
-    """Overlay items kept off every slide range (slide, slide_full, slide_split): an item
+    """Overlay items kept off every slide range (slide, slide_full, slide_split) and every
+    motion band (layout "motion": the band carries the content there): an item
     overlapping one keeps its longest part outside them, or is dropped below MIN_ITEM_S.
     Full-frame plates (the end card) stay. Returns (items, what was cut)."""
-    spans = sorted((v["t0"], v["t1"]) for v in views if is_slide(v.get("layout")))
+    spans = sorted(
+        (v["t0"], v["t1"])
+        for v in views
+        if is_slide(v.get("layout")) or v.get("layout") == "motion"
+    )
     if not spans:
         return items, []
     kept, hidden = [], []

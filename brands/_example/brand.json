@@ -12,7 +12,10 @@
   "fonts": { "display": "system-ui", "body": "system-ui", "weights": [400, 600, 800] },
   "logo": { "light": null, "dark": null, "placement": "none" },
   "captions": { "style": "box", "case": "normal", "highlight": "underline", "position": "center" },
-  "motion": { "character": "ruhig", "spring": { "w": 13, "z": 0.9 }, "transitions": "blur" },
+  "motion": {
+    "character": "ruhig", "spring": { "w": 13, "z": 0.9 }, "transitions": "blur",
+    "theme": "auto", "depth": "soft", "radius": 0.028, "energy": "normal", "type_scale": 1.0
+  },
   "icons": "none",
   "voice": { "address": "du", "tone": "neutral", "forbidden_words": [], "cta": "" },
   "music": { "mood": "neutral", "max_bpm": 110 },

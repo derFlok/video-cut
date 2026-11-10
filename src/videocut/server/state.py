@@ -178,6 +178,22 @@ def _cut_style(data: dict) -> tuple[str, str | None]:
     return data.get("cut_style") or "auto", resolved
 
 
+def _sfx(job: Path, data: dict) -> dict:
+    """Sound effects: sfx (job.json value, null: the settings default), sfx_resolved (null
+    when job.json has an invalid value) and sfx_events (the job has motion events)."""
+    from ..tools import sfx as sfx_tool
+
+    try:
+        resolved = sfx_tool.level(data)
+    except ToolError:
+        resolved = None
+    try:
+        has = bool(sfx_tool.event_files(job))
+    except ToolError:
+        has = False
+    return {"sfx": data.get("sfx"), "sfx_resolved": resolved, "sfx_events": has}
+
+
 def _redact_style(data: dict) -> dict:
     """How personal data is hidden: redact_style (the resolved one, null when job.json has
     an invalid value) and whether it is the brand's default."""
@@ -340,6 +356,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "captions_stale": captions_stale(job),
         **_target(job, data),
         **_redact_style(data),
+        **_sfx(job, data),
         "source_duration_s": source_duration(job),
         "lang": job_lang(data),
         "title": title(job, data),
@@ -358,6 +375,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "assets": data.get("assets", []),
         "slides": slides_view(job, data),
         "material": material_summary(job, data),
+        "motion": motion_view(job, data),
         "redaction": redaction_view(job),
         "outputs": outputs(job),
         "verify": verify if isinstance(verify, dict) else None,
@@ -365,6 +383,24 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "revisions": revs,
         "versions": versions,
     }
+
+
+def motion_view(job: Path, data: dict) -> dict:
+    """{mode, wish, stale} of job.json "motion" plus the motion check of the last verify
+    (verify.json "motion": per span id, t0, t1, flags)."""
+    from ..tools import _job_motion
+
+    out = _job_motion.view(job, data)
+    try:
+        v = json.loads((job / "out" / "verify.json").read_text())
+        spans = v.get("motion") if isinstance(v, dict) else None
+    except (OSError, ValueError):
+        spans = None
+    out["spans"] = [
+        {k: s.get(k) for k in ("id", "t0", "t1", "flags")}
+        for s in spans or [] if isinstance(s, dict)
+    ]  # fmt: skip
+    return out
 
 
 def material_summary(job: Path, data: dict) -> dict:

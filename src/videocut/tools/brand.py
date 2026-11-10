@@ -9,13 +9,14 @@ another format writes preview-<format>.jpg, e.g. preview-16x9.jpg, next to previ
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 from .. import brand
 from ..paths import RENDERER
-from . import _format, vocab
+from . import _format, _motion_sheet, vocab
 from ._geometry import safe_zones
 from .common import ToolError, binary, run_tool, write_json
 from .job import AGENT_ENV
@@ -188,6 +189,7 @@ def sheet_cmd(args) -> dict:
         result = run_renderer([str(doc), "--sheet", str(out)], Path(tmp), extra)
     if not out.is_file():
         raise ToolError(f"renderer reported success but wrote no {out}")
+    motion = motion_row(tokens, out)
     shown = spec["sheet"]["labels"]
     print(f"{out}: {len(shown)} tiles ({', '.join(shown)})")
     return {
@@ -198,7 +200,48 @@ def sheet_cmd(args) -> dict:
         "no_sample": [s for s in shown if s != "caption" and s not in SAMPLES],
         "fonts": result.get("fonts"),
         "skipped_scenes": result.get("skipped_scenes", []),
+        "motion": motion,
     }
+
+
+def motion_row(tokens: dict, sheet: Path) -> dict:
+    """Append a row of motion-scene stills (renderer/motion/sheet_scene.js) to the sheet, so
+    the person sees their motion style: theme, depth, radius, energy, type scale."""
+    src = _motion_sheet.SHEET_SCENE.read_text()
+    moments = int(re.search(r"export const MOMENTS = (\d+)", src).group(1))
+    slot = float(re.search(r"export const SLOT = ([0-9.]+)", src).group(1))
+    size = SHEET_SIZE
+    w, h = size
+    region = (round(w * 0.04), round(h * 0.1), round(w * 0.96), round(h * 0.38))
+    spec = _motion_sheet.motion_spec(tokens, size=size, region=region, duration=moments * slot)
+    times = [round(i * slot + 1.6, 3) for i in range(moments)]
+    with tempfile.TemporaryDirectory(prefix="videocut-motion-sheet-") as tmp:
+        pngs = _motion_sheet.stills(spec, src, Path(tmp) / "run", times)
+        width = _image_width(sheet)
+        row = _motion_sheet.contact_sheet(
+            pngs, Path(tmp) / "row.jpg", cols=moments, background=tokens["colors"]["bg"],
+            width=max(64, (width - 12 * (moments + 1)) // moments),
+        )  # fmt: skip
+        joined = Path(tmp) / "joined.jpg"
+        subprocess.run(
+            [binary("ffmpeg"), "-v", "error", "-y", "-i", str(sheet), "-i", str(row),
+             "-filter_complex", f"[1:v]scale={width}:-2[r];[0:v][r]vstack",
+             "-frames:v", "1", "-q:v", "3", str(joined)],
+            check=True, capture_output=True,
+        )  # fmt: skip
+        joined.replace(sheet)
+    m = tokens.get("motion", {})
+    keys = ("theme", "theme_resolved", "depth", "energy", "radius", "type_scale")
+    return {k: m.get(k) for k in keys}
+
+
+def _image_width(path: Path) -> int:
+    r = subprocess.run(
+        [binary("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=width", "-of", "csv=p=0", str(path)],
+        check=True, capture_output=True, text=True,
+    )  # fmt: skip
+    return int(r.stdout.strip().split()[0])
 
 
 def register(subparsers) -> None:

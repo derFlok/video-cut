@@ -37,8 +37,14 @@ may be there (none: nothing; upload: only the human's pages, template "image"; a
 
 `material_wishes` (optional; job.json "material", tools/_job_material.py) are checked by
 tools/material.wish_errors: none for mode none, at most one per 8 s of the target length,
-each inside one keep row, kinds by mode, a stock query and/or a generator prompt. Prints
-one line per problem with its JSON path.
+each inside one keep row, kinds by mode, a stock query and/or a generator prompt.
+
+`motion` (optional; job.json "motion", tools/_job_motion.py) are the motion moments
+`[{id: "m1", src: [s0, s1], components: [...], shows, beats: {id: {word, n?, edge?,
+offset?}}, why, still?}]` checked by tools/motion.plan_errors: none when motion is off, ids
+unique, inside the keep rows, no two at once, components from renderer/motion/CATALOGUE.md,
+every beat word spoken inside the moment. The approved plan.json is the only source of the
+motion spans (`videocut tool motion spans`). Prints one line per problem with its JSON path.
 """
 
 import json
@@ -46,7 +52,7 @@ from pathlib import Path
 
 from .. import redaction
 from ..edl import SCREEN_LAYOUTS, SLIDE_ID_RE, SLIDE_LAYOUTS
-from . import _format, _job_material, _job_slides
+from . import _format, _job_material, _job_motion, _job_slides
 from . import material as material_tool
 from . import slides as slides_tool
 from .brand import SAMPLES
@@ -343,7 +349,25 @@ def check_job(job: Path, path: Path | None = None) -> tuple[dict, list[str]]:
         data, fmt, duration, bool(meta.get("screen")), cands, slides_context(job, meta),
         _job_material.stored(meta)["mode"],
     )  # fmt: skip
+    errs += _motion_errors(job, meta, data)
     return data, errs
+
+
+def _motion_errors(job: Path, meta: dict, data: dict) -> list[str]:
+    """plan.json "motion" against the job's motion mode, the keep rows and the transcript
+    (every beat word spoken inside its moment)."""
+    from . import motion as motion_tool
+    from .captions import _words
+
+    try:
+        words = _words(job)
+    except ToolError:
+        words = None
+    keep = [
+        it["src"] for it in data.get("keep_list") or []
+        if isinstance(it, dict) and isinstance(it.get("src"), list) and len(it["src"]) == 2
+    ]  # fmt: skip
+    return motion_tool.plan_errors(data, _job_motion.stored(meta)["mode"], words, keep or None)
 
 
 def check(args) -> dict:
@@ -366,6 +390,7 @@ def check(args) -> dict:
         "personal_data": len(data.get("personal_data") or []),
         "slides": len(data.get("slides") or []),
         "material_wishes": len(data.get("material_wishes") or []),
+        "motion": len(data.get("motion") or []),
         "stills": sum(
             1 for it in (data.get("views") or []) + (data.get("personal_data") or [])
             if isinstance(it, dict) and it.get("still")

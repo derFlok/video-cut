@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Disclosure } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
-import { clock, useI18n } from "../i18n";
+import { clock, useI18n, type TKey } from "../i18n";
 
 /** "Veröffentlichen": what to tick on the platforms, the description text with its credits
  * and the AI material in the video (work/disclosure.json from the last full render). */
@@ -29,6 +29,7 @@ export function JobPublish({ id, reel }: { id: string; reel: string | null | und
   if (!doc?.ready && !err) return null;
   const ai = doc?.ai ?? [];
   const stock = doc?.stock ?? [];
+  const sounds = doc?.sounds ?? [];
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(doc?.snippet ?? "");
@@ -43,6 +44,20 @@ export function JobPublish({ id, reel }: { id: string; reel: string | null | und
       <h2 id="publish-title">{t("disclosure.title")}</h2>
       <ErrorBanner error={err} />
       {doc?.ready && !ai.length && !stock.length && <p>{t("disclosure.nothing")}</p>}
+      {doc?.ready && sounds.length > 0 && (
+        <>
+          <h3>{t("disclosure.sounds")}</h3>
+          <ul className="stack-sm" data-testid="publish-sounds">
+            {sounds.map((s) => (
+              <li key={`${s.kind}-${s.id}`}>
+                {t(`sfx.kind.${s.kind}` as TKey)}: {s.attribution ?? s.title ?? t(`sfx.origin.${s.origin}` as TKey)}
+                {s.licence && <span className="muted"> · {s.licence}</span>}
+                {s.origin !== "openverse" && <span className="muted"> · {t(`sfx.origin.${s.origin}` as TKey)}</span>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {doc?.ready && (ai.length > 0 || stock.length > 0) && (
         <>
           <h3>{t("disclosure.platforms")}</h3>

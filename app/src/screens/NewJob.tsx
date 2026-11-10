@@ -6,6 +6,7 @@ import {
   type CutStyleChoice,
   type FormatChoice,
   type MaterialMode,
+  type MotionMode,
   type RedactStyle,
   type SlidesMode,
   type TargetChoice,
@@ -16,6 +17,7 @@ import { AspectIcon } from "../components/AspectIcon";
 import { CutStyleSelect } from "../components/CutStyle";
 import { RedactStyleSelect } from "../components/RedactStyle";
 import { MaterialPicker, materialErrors, useMaterialDefault } from "../components/Material";
+import { MotionPicker, motionErrors } from "../components/Motion";
 import { SlidesPicker, needsFiles, slideErrors } from "../components/Slides";
 import { TargetSelect } from "../components/TargetLength";
 import { DropZone, formatBytes, hasExt, IMAGE_EXT, VIDEO_EXT } from "../components/DropZone";
@@ -73,6 +75,8 @@ export function NewJob() {
   const materialDefault = useMaterialDefault();
   const materialMode: MaterialMode = materialPick ?? materialDefault ?? "none";
   const [materialWish, setMaterialWish] = useState("");
+  const [motionMode, setMotionMode] = useState<MotionMode>("off");
+  const [motionWish, setMotionWish] = useState("");
   const [tried, setTried] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [phase, setPhase] = useState<"idle" | "upload" | "start">("idle");
@@ -96,6 +100,7 @@ export function NewJob() {
   const sendFiles = needsFiles(slidesMode) ? slideFiles : [];
   errors.push(...slideErrors(slidesMode, sendFiles, slidesWish, t));
   errors.push(...materialErrors(materialWish, t));
+  errors.push(...motionErrors(motionMode, motionWish, t));
   const busy = phase !== "idle";
 
   const submit = async (e: FormEvent) => {
@@ -124,6 +129,8 @@ export function NewJob() {
           slides: sendFiles,
           material_mode: materialMode,
           material_wish: materialMode === "none" ? undefined : materialWish.trim() || undefined,
+          motion_mode: motionMode,
+          motion_wish: motionMode === "wish" ? motionWish.trim() || undefined : undefined,
         },
         (p) => setProgress(p.total ? Math.round((p.loaded / p.total) * 100) : null),
       );
@@ -258,6 +265,7 @@ export function NewJob() {
       />
 
       <MaterialPicker mode={materialMode} onMode={setMaterialMode} wish={materialWish} onWish={setMaterialWish} disabled={busy} />
+      <MotionPicker mode={motionMode} onMode={setMotionMode} wish={motionWish} onWish={setMotionWish} disabled={busy} />
 
       <fieldset className="stack">
         <legend className="h2">{t("new.look")}</legend>

@@ -162,6 +162,18 @@ def main(argv: list[str] | None = None) -> int:
         help='what the material should show, in plain words (e.g. "calm office scenes")',
     )
     r.add_argument(
+        "--motion-mode",
+        metavar="MODE",
+        help="animated scenes in a band above the speaker: off (default), auto (Claude "
+        "proposes them in the plan), wish (following --motion-wish); a plan made for another "
+        "setting is planned again",
+    )
+    r.add_argument(
+        "--motion-wish",
+        metavar="TEXT",
+        help='what the motion scenes should show (e.g. "the numbers as counters")',
+    )
+    r.add_argument(
         "--material-skip",
         action="store_true",
         help="use no material for every wish not chosen yet (instead of waiting for a choice)",

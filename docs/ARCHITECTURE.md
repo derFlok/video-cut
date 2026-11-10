@@ -40,7 +40,7 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list`, `job slides [job] [--mode] [--wish]`, `job slides-import <job> FILE… [--replace]` | `job.py`, `_job_slides.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job sfx [job] <off\|subtle\|normal\|default>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list`, `job slides [job] [--mode] [--wish]`, `job slides-import <job> FILE… [--replace]` | `job.py`, `_job_slides.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]`, `brand vocab <id> add\|remove\|list` | `brand.py` |
 | `vocab show [job]`, `vocab apply [job]`, `vocab suggest [job] [--all]` | `vocab.py` |
 | `transcript show [job] [--from t --to t]`, `transcript edit <job> <i> <text>`, `transcript undo <job>` | `transcript.py` |
@@ -57,6 +57,8 @@
 | `edl check [file]`, `edl snap [--dry-run]`, `edl locate <t> [--source]` | `edl.py` |
 | `slides check [job]`, `slides stills [job] [--id]`, `slides render [job] [--force]` | `slides.py` |
 | `material fetch [job] [--wish N --query/--prompt]`, `material generate`, `material choose <job> <n> <id\|none>`, `material show [job]`, `job material [job] [--mode] [--wish]` | `material.py`, `_material_providers/`, `_job_material.py` |
+| `motion spans\|stills [--id] [--at]\|render [--id] [--force] [--jobs N]\|show\|catalogue\|plan-stills`, `job motion [job] [--mode off\|auto\|wish] [--wish]` | `motion.py`, `_job_motion.py` |
+| `sfx build [job]`, `sfx fetch [--kind K] [--per-kind N]`, `sfx list [--kind K]`, `sfx add <kind> <file> [--title]`, `sfx remove <kind> <id>` | `sfx.py`, `_sfx_library.py`, `_sfx_synth.py`, `_sfx_mix.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
 
@@ -68,7 +70,7 @@ framing, face track in output px, safe zones; shared by render, overlays and ver
 their filter graph; shared by render, overlays and verify), `_verify_screen.py` (the
 product-demo checks of verify), `_verify_slides.py` (the slide checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes),
 `_pdf.py` (PDF pages → PNG, macOS CoreGraphics in a child process), `_job_slides.py` (job slide settings, page import),
-`_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
+`_verify_motion.py` (the motion checks of verify), `_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
 snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
 (`speech_clipped`), `_style.py` (cut styles).
 
@@ -82,6 +84,8 @@ job.json   id, created, source (relative), type, brief, status, approval, brand,
            redact_style (optional auto|blur|crop|block; absent = the brand's
            redaction.style, default auto),
            material (optional {mode, wish}; plan_material: what the plan was made for),
+           sfx (optional off|subtle|normal: sound effects of the motion scenes; absent =
+           settings "sfx_default", default subtle),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
            format, cut style and chosen material of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
@@ -110,6 +114,11 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            slides/stills/<id>.jpg, <id>_sm.jpg (≤ 960 px), <id>.layout.json    slides stills
            slides/<id>.mov, <id>.json (layout report), <id>.spec.json           slides render
            material.json, material/<n>/c<k>.mp4|jpg|png, c<k>_sm.jpg           material fetch
+           motion/spans.json, motion/<id>/motion.json                            motion spans
+           motion/<id>/scene.js (overlay run), motion_report.md                 overlay run
+           motion/<id>/clip.mov, events.json, clip.json                         motion render
+           motion/<id>/stills/t*.png, sheet.jpg                                 motion stills
+           plan_stills/motion_<id>.jpg                                          motion plan-stills
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
            verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg,
            slides_NN.jpg                                                         verify
@@ -888,6 +897,88 @@ per-slide change, both `POST plan/feedback {text, slide}` (the id goes into
 wish, pages, stale, marks}`; `marks` are the slide moments in output seconds from the EDL
 (consecutive segments of one slide merged), drawn as a strip under the result player.
 
+## Motion (`tools/motion.py`, `renderer/motion.js`, `renderer/motion/`)
+
+Animated scenes in a band above the speaker, written by Claude per span, rendered by the
+sandboxed scene renderer of the spike (`docs/spikes/motion.md`: runtime, seek contract,
+sandbox, determinism). This section is the pipeline around it.
+
+**Setting.** job.json `motion` = `{mode: off|auto|wish, wish}` (`_job_motion.py`, absent =
+off); human only (`job motion`, `run --motion-mode/--motion-wish`, the new-job form field
+`motion_mode`/`motion_wish`); the plan records what it was made for (`plan_motion`), a
+change makes it stale and revokes an approval, like slides and material.
+
+**Plan gate.** The plan run writes plan.json `motion` = `[{id: "m1", src: [s0, s1]
+(source s), components, shows, beats: {id: {word, n?, edge?, offset?}}, why, still?}]` and
+the same as a *Motion* table in project.md. `plan check` (`motion.plan_errors`): off → none;
+ids `m<n>` unique; both ends inside keep rows; no two moments overlap; components from
+`renderer/motion/CATALOGUE.md` (`## \`name\`` headings; the spike's five without it);
+every beat resolves on the words spoken inside `src` (the renderer's `resolveBeats` rules,
+ported). `motion plan-stills` writes `work/plan_stills/motion_<id>.jpg` (the source frame
+in the middle of the moment, cropped to the output aspect around the face, the band drawn)
+and its path into `still`. The app's plan view shows one card per moment (still,
+components, what the band shows, the beat list, feedback/removal through plan feedback).
+The approval binds plan.json's SHA-256, so moments and beats are approved with the plan.
+
+**Spans (interface 3).** `build_spans` takes the moments of the **approved** plan.json
+only (nothing when it changed since the approval or motion is off), maps the transcript
+through the EDL like the captions, and per moment (in output order) keeps its own words:
+`t0` = first word − 0.15 s (never before the previous span's end), `t1` = last word +
+0.45 s (never after the next moment's start − 0.15 s, nor the reel's end). The region is
+`[side, top safe zone, w − side, min over the span of (face top + 18 % of the face height)]` (the eye line, 26 % of the landmark box, measured, and 8 % of the face
+height above it stay free), from the same face track overlays use (a third of the height without a face). Dropped,
+with the reason: words cut, shorter than 1.5 s, longer than 60 s, on a layout without the face (slide, screen, pip, split, b-roll), band
+lower than 12 % of the frame, a beat not spoken. `work/motion/spans.json` = `[{id, t0, t1,
+region, scene, beats}]`; per span `motion.json` = the renderer spec with `offset` = t0, the
+stage = the band minus the renderer's capture margin (6 % of the unit) at the bottom, so
+shadows and glow end at the band edge,
+the span's words in scene time and the resolved tokens of the job's brand (the only
+design source).
+
+**Render.** `motion render` runs `node renderer/motion.js <motion.json> --region-only --out
+clip.mov --events events.json` for every span whose `scene.js` exists, `VIDEOCUT_MOTION_JOBS`
+(default 2) pages at once (measured on an M3 Pro, 3 spans / 18.6 s: 1 page 26.7 s, 2 pages
+12.8 s, 3 pages 11.1 s; each page ~0.8 GB). `events.json` `[{t, kind, component, strength}]`
+is in output seconds (interface 2, read by the sound effects). `clip.json` keeps `place_at`,
+`out_size`, frames and the spec hash. The SHA-256 of clip, events and report plus the
+spec hash (spec + scene + font files + renderer code) go to
+`$VIDEOCUT_HOME/state/<job>/motion_render.json`; a clip is reused while all match
+(`status`: ok, no_scene, missing, stale, untrusted). `videocut tool render` calls the same
+`ensure_clips` (a failing scene is left out with a warning) and lays each clip over the
+picture (`motion.composite_graph`: own frame grid, first frame at round(t0 · fps), BT.709
+→ the cut's matrix, 4:4:4 alpha blend, scaled for previews); render.json `motion` lists
+them.
+
+**Captions and the band.** `overlays` adds a view `{layout: "motion", screen: band,
+motion: id}` per span: the renderer treats it as a hard block (`render.js` `validViews`),
+overlay items are cut off the spans like off slides (`off_slides`), and during a span the
+face track counts only down to 72 % of the face height, so captions may sit on chin and
+neck while the band takes the top (the spike's close-up rule). overlays.json `motion` /
+`motion_dropped`. Captions are never hidden for a band; verify checks that the band does
+not repeat them instead.
+
+**Verify** (`_verify_motion.py`, verify.json `motion` + `motion_flagged`, part of `ok`):
+`motion_dropped`, `motion_missing`, `motion_untrusted`, `motion_stale`,
+`motion_not_composited`; `motion_static`: ffmpeg `freezedetect=n=-50dB:d=0.6` over the clip
+laid on grey, ignoring the first and last 0.3 s; from 4 RGBA samples per second: the drawn
+box (alpha bounding box, output px) → `overlay_on_face` (> 2 % of the face box below the
+band limit, 8 % of the face height above the eye line) and `motion_caption_overlap` (> 10 % of the smaller box with a caption on
+screen); twice per second the band's text read locally (Vision) →
+`motion_repeats_caption` when ≥ 3 of its words (≥ 3 letters) and ≥ 60 % of them are
+caption words within ±1.5 s, and `motion_invented` when a band word (≥ 3 letters) or
+number (≥ 2 digits) is neither in the transcript within ±3 s of the span, nor in the
+approved moment's `shows` / `labels`, nor in the motion wish, in ≥ 2 samples (5-letter
+prefix match for inflection and OCR). Without text recognition this is a warning, not a
+pass.
+
+**Skills.** The plan skill proposes moments (*Motion*: show, never repeat; when; beats).
+The overlays skill writes `work/motion/<id>/scene.js`, renders beat stills and reads one
+contact sheet per span and round (≤ 3 rounds), follows the rules (show-not-repeat, one main
+component, headline on a card, an event every 0.5 s, hand over, brand style, inside the
+band) and writes `work/motion_report.md`. Agent runs read only the job folder, so
+`motion catalogue` prints the catalogue. `run` fails an overlay run that changed
+work/plan.json.
+
 ## EDL (`src/videocut/edl.py`)
 
 Schema from BRIEF §6. Segment times (`in`, `out`, `zoom_keys`) are source time, everything else
@@ -1042,6 +1133,51 @@ segment counts as showing no camera for `blink_at_cut`. `videocut tool sheet mat
 the candidates' thumbs on `work/sheets/material_NN.jpg`, labelled `<wish>/<id>` (+ "AI").
 The cut skill uses only chosen material, only inside its wish's span, never over the hook's
 first 2 s, at most 40 % of the reel.
+
+## Sound effects of the motion scenes (`tools/sfx.py`)
+
+Input: only `work/motion/<span>/events.json` `[{t (output s), kind, component, strength}]`
+(motion contract interface 2), span ids from `work/motion/spans.json` (else every
+`events.json` there). Kinds: `pop whoosh tick check strike type count impact swoosh_out`.
+
+**Library** (`_sfx_library.py`, `$VIDEOCUT_HOME/sfx/<kind>/<id>.wav + .json`): three origins,
+preferred in this order per kind: `upload` (the person's own, Settings or `sfx add`),
+`openverse` (`sfx fetch`: `api.openverse.org/v1/audio/`, `license=cc0,pdm` only, key-less,
+3.1 s between searches for the 20/min limit, files from the source CDN, at most 10 MB, no
+longer than the kind's `search_max_s`), `procedural` (`_sfx_synth.py`: numpy, 3 variants per
+kind, never stored; the offline, test and CI default). Nothing is bundled. Every file is
+decoded by ffmpeg (file protocol only, at most 30 s), high-passed at 30 Hz, trimmed of
+silence (-45 dB under its peak), cut to the kind's `max_s` with a fade, normalised to -20
+dBFS RMS over its active part with the peak at most -1 dBFS; the sidecar keeps origin,
+title, author, licence, source link, attribution and the wav's sha256 (a changed file is
+not used: the build falls back to a generated sound with a warning).
+
+**Track** (`sfx build`, run by render when the events changed): one sound per kind per job
+(seeded by the job id), per hit ±0.6 semitone, ±1.5 dB and a small pan (seeded). Placement
+(`plan_hits`, pure): gain from `strength` (none under 0.05); per-kind spacing, whoosh /
+swoosh_out / impact as one "air" family (one big sound per moment); any two hits ≥ 40 ms;
+at most 6 hits in any second, the lower-priority kinds dropped first; a hit in the first
+frame of a word onset (word times from words.json through the EDL) moves 30 ms before it.
+Writes `work/sfx.wav` (48 kHz stereo 16-bit, output time, peak ≤ -8 dBFS) and
+`work/sfx.json` (events' sha256, sounds, hits with gain/pitch/pan/shift, skipped with
+reason, counts, `fit`).
+
+**Mix** (`_sfx_mix.py`, render): after the voice's loudnorm, `sfx.wav` at the job level
+(subtle +10 dB, normal +15 dB over the track), an EQ dip at 2.2 kHz, `sidechaincompress`
+against the voice (threshold 0.008, ratio 4, attack 5 ms, release 200 ms, 25 ms look-ahead
+on the sidechain), `amix` without normalising, `alimiter` at -1.2 dBFS. Before the encode an
+audio-only pass with the same graph writes the voice, the ducked SFX bus and the
+pre-limiter mix and measures per hit the speech-band (300–4000 Hz) margin of the voice
+over the SFX while the voice speaks; a hit under 6 dB is lowered to 9 dB and the track built
+again (at most 2 rounds). render.json `"sfx"`: level, hits, counts, sounds, duck/limit
+settings and `analysis` (per hit margin/peak/loudness, min/median margin, voice and SFX LUFS,
+hit loudness vs voice, bus and pre-limiter peaks, `masked`, `clipped`), `fitted`. Verify:
+check `sfx` with flags `sfx_masks_speech` and `sfx_clipping`. The disclosure lists the
+sounds (`sounds`; Openverse credits in the snippet). A changed level makes the reel stale
+(`run.cut_done`, cut record `"sfx"`). API: `GET/PUT /api/settings/sfx`, `POST
+/api/settings/sfx/{kind}` (upload), `DELETE /api/settings/sfx/{kind}/{id}`, `POST
+/api/settings/sfx/fetch`, `GET /api/settings/sfx/{kind}/{id}/audio`, `PUT /api/jobs/{id}/sfx`;
+the job view has `sfx`, `sfx_resolved`, `sfx_events`.
 
 ## Revision runs (`run.revise`, skill `revise`)
 
