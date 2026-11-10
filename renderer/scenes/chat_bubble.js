@@ -5,6 +5,7 @@
 
 const style = require("../lib/style");
 const card = require("../lib/card");
+const material = require("../lib/material");
 
 const name = "chat_bubble";
 
@@ -45,19 +46,21 @@ function draw(ctx, t, item, env) {
       const [x0, y0, x1] = box;
       const y1 = box[3] - L.tail;
       const r = Math.min(L.px * 0.9, (y1 - y0) / 2);
-      c.fillStyle = fill;
-      c.beginPath();
-      c.roundRect(x0, y0, x1 - x0, y1 - y0, r);
-      c.fill();
-      // Tail: a small wedge from the bottom edge towards the sender's side.
+      // One outline: the bubble and its tail (a curved wedge towards the sender's side)
+      // as a single path, so the material (shadow, glass edge) runs around both.
       const tx = speaker ? x1 - r * 0.9 : x0 + r * 0.9;
       const dir = speaker ? 1 : -1;
-      c.beginPath();
-      c.moveTo(tx - dir * L.tail * 0.2, y1 - 1);
-      c.lineTo(tx + dir * L.tail * 0.9, y1 + L.tail);
-      c.lineTo(tx + dir * L.tail * 1.2, y1 - 1);
-      c.closePath();
-      c.fill();
+      const shape = (k) => {
+        k.beginPath();
+        k.roundRect(x0, y0, x1 - x0, y1 - y0, r);
+        k.moveTo(tx - dir * L.tail * 0.4, y1 - r * 0.5);
+        k.quadraticCurveTo(tx + dir * L.tail * 0.1, y1 + L.tail * 0.6, tx + dir * L.tail * 1.1, y1 + L.tail);
+        k.quadraticCurveTo(tx + dir * L.tail * 0.9, y1 + L.tail * 0.2, tx + dir * L.tail * 1.4, y1 - 1);
+        k.closePath();
+      };
+      // the speaker's reply is a solid bubble in the inverted pair; the viewer's is the material
+      material.plate(c, env, shape, { box: [x0, y0, x1, box[3]], px: L.px, color: fill, solid: speaker });
+      if (!speaker) material.vibrancy(c, env, L.px);
       card.drawRun(c, env, L.text, x0 + L.padX, y0 + L.padY, "left", ink);
     },
     { plate: false },

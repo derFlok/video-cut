@@ -25,7 +25,9 @@
              ignored with a warning. When the end card needs it (_plates: it starts
              after the last spoken word), the reel gets a held tail: the last frame
              repeats under the card, the audio is padded with silence after loudnorm
-             (render.json "tail_s"; output_duration includes it)
+             (render.json "tail_s"; output_duration includes it). With a glass brand the
+             video is first frosted through work/overlay_glass.mkv (_glass.py;
+             render.json "overlay_glass")
     motion   every span of an approved motion moment (tools/motion.py) whose scene exists:
              work/motion/<id>/clip.mov (rendered here when missing or stale, trusted only
              through its record) is laid over the picture at its band from round(t0 * fps)
@@ -89,6 +91,7 @@ from . import (
     _broll,
     _c2pa,
     _disclosure,
+    _glass,
     _job_motion,
     _layouts,
     _plates,
@@ -222,21 +225,34 @@ def overlay_matrix(info: dict) -> str:
     return space
 
 
-def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709") -> str:
+def composite_graph(index: int, fps, size: tuple[int, int], matrix: str = "bt709",
+                    glass: dict | None = None) -> str:  # fmt: skip
     """Filter lines that lay input `index` (the transparent overlay.mov) over [v] as [vo]:
     same fps, scaled to `size`, converted from the overlay's BT.709 to `matrix` (the cut
     video's), alpha blended in 4:4:4 so thin overlay edges keep their colour; the video
     decides the length (a shorter overlay just ends). Both inputs are put on the same
     frame grid first (pts = frame number), so overlay frame n lands on reel frame n even
-    when the joined segments carry rounded timestamps."""
+    when the joined segments carry rounded timestamps.
+    `glass` {"index", "params", "scale"}: the glass mask input; the picture is frosted
+    through it first (_glass)."""
     w, h = size
     tb = f"{Fraction(fps).denominator}/{Fraction(fps).numerator}"
+    base = f"[v]settb={tb},setpts=N,format=yuv444p[base];\n"
+    if glass:
+        base = (
+            f"[v]settb={tb},setpts=N,format=yuv444p,split[gbase][gsrc];\n"
+            f"[gsrc]{_glass.frost_chain(w, h, glass['params'], glass['scale'])}[gfz];\n"
+            + _glass.mask_input(glass["index"], fps, w, h, 0, "gmk")
+            + ";\n"
+            "[gfz][gmk]alphamerge[gfg];\n"
+            "[gbase][gfg]overlay=0:0:format=yuv444:eof_action=pass:shortest=0[base];\n"
+        )
     return (
         f";\n[{index}:v]setpts=PTS-STARTPTS,fps={fps},settb={tb},setpts=N,"
         f"scale={w}:{h}:flags=lanczos:in_color_matrix=bt709:in_range=tv:"
         f"out_color_matrix={matrix}:out_range=tv,format=yuva444p[ov];\n"
-        f"[v]settb={tb},setpts=N,format=yuv444p[base];\n"
-        "[base][ov]overlay=0:0:format=yuv444:eof_action=pass:shortest=0,"
+        + base
+        + "[base][ov]overlay=0:0:format=yuv444:eof_action=pass:shortest=0,"
         "format=yuv420p[vo]\n"
     )
 
@@ -443,12 +459,22 @@ def render(args) -> dict:
             warnings += [f"motion {d['id']} dropped: {d['why']}" for d in mres["dropped"]]
             warnings += [f"motion {i}: no scene yet" for i in mres["no_scene"]]
     sfx_use = _sfx_prepare(job, plan.duration, warnings, _sounding(mres))
+    glass = None
     mixed = bool(sfx_use and sfx_use["mixed"])
     graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off,
                            "vo_voice" if mixed else "a")  # fmt: skip
     if use_overlay:
-        graph += composite_graph(inputs.count("-i"), plan.fps, (ow, oh), overlay_matrix(info))
+        # the glass mask of the overlay (made in the same render, so fresh with it)
+        gmask = work / "overlay_glass.mkv"
+        gparams = _glass.read_params(gmask) if gmask.is_file() else None
+        if gparams and not is_fresh([gmask], [edl_path, *ov_inputs]):
+            gparams = None
+        oi = inputs.count("-i")
+        glass = {"index": oi + 1, "params": gparams, "scale": ow / edl.size[0]} if gparams else None
+        graph += composite_graph(oi, plan.fps, (ow, oh), overlay_matrix(info), glass)
         inputs += ["-i", str(overlay)]
+        if glass:
+            inputs += ["-i", str(gmask)]
         v_out = "[vo]"
     elif overlay.is_file():
         warnings.append(
@@ -466,10 +492,10 @@ def render(args) -> dict:
             overlay_matrix(info),
         )  # fmt: skip
         graph = graph.rstrip("\n") + text
-        for c in mres["clips"]:
-            inputs += ["-i", str(c["clip"])]
+        inputs += motion_mod.inputs(mres["clips"])
         motion_docs = [
             {k: c[k] for k in ("id", "t0", "t1", "place_at", "size", "events")}
+            | {"glass": bool(c.get("mask"))}
             for c in mres["clips"]
         ]
     if mixed:
@@ -623,6 +649,7 @@ def render(args) -> dict:
         "default_crop": "face" if face and face.get("median") else "centre",
         "face_follow_segments": followed,
         "overlay": use_overlay,
+        "overlay_glass": bool(use_overlay and glass),
         "layouts": report.get("layouts"),
         "screen": screen_rel,
         "screen_zoom_clamped": clamped,

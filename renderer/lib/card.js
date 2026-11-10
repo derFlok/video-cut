@@ -4,6 +4,7 @@
 // Colours, fonts and motion come only from env.tokens (via lib/style.js).
 
 const style = require("./style");
+const material = require("./material");
 const { step, brandSpring } = require("./spring");
 const { fitText, placeBlock, allowedArea } = require("./layout");
 
@@ -25,6 +26,10 @@ function luminance(hex) {
 function palette(tokens) {
   const c = style.captionColors(tokens);
   const raw = tokens.colors || {};
+  const m = material.resolve(tokens);
+  // a card is always a plate: on glass it takes the material's pair whatever the caption
+  // style
+  if (m.depth === "glass") return { fill: m.fill, text: m.text, accent: m.accent, muted: m.muted, sparing: !/frei|free/i.test(String(raw.accent_usage || "")) };
   return {
     fill: c.box,
     text: c.text,
@@ -83,6 +88,8 @@ function settle(tokens, tau) {
   return Math.max(0, Math.min(1, step(tau, w, z)));
 }
 
+const trackRole = (role) => (["display", "body", "label"].includes(role) ? role : "heading");
+
 // Words of `text` laid out at up to `px` (shrinking to `minPx`) in at most `maxLines`
 // lines of `maxWidth`. Returns {font, px, lineHeight, rows: [{text, width}], width, height}.
 function textRun(ctx, env, text, { px, role = "body", maxWidth, maxLines = 3, minPx }) {
@@ -92,7 +99,7 @@ function textRun(ctx, env, text, { px, role = "body", maxWidth, maxLines = 3, mi
   ctx.save();
   const fit = fitText(ctx, words.length ? words : [""], {
     font: (p) => {
-      ctx.letterSpacing = style.tracking(tokens, role === "display" ? "display" : role === "body" ? "body" : "heading", p);
+      ctx.letterSpacing = style.tracking(tokens, trackRole(role), p);
       return style.font(env, p, weight);
     },
     px,
@@ -111,15 +118,50 @@ function textRun(ctx, env, text, { px, role = "body", maxWidth, maxLines = 3, mi
 // Draw a text run with its top-left (align "left"), top-centre ("center") or
 // top-right ("right") at x, y.
 function drawRun(ctx, env, run, x, y, align, color) {
-  const role = run.role === "display" ? "display" : run.role === "body" ? "body" : "heading";
   ctx.save();
   ctx.font = run.font;
-  ctx.letterSpacing = style.tracking(env.tokens, role, run.px);
+  ctx.letterSpacing = style.tracking(env.tokens, trackRole(run.role), run.px);
   ctx.textBaseline = "middle";
   ctx.textAlign = align;
   ctx.fillStyle = color;
   run.rows.forEach((r, i) => ctx.fillText(r.text, x, y + (i + 0.5) * run.lineHeight));
   ctx.restore();
+}
+
+// Tabular figures for a one-line run (canvas has no font-variant-numeric): every digit
+// takes the widest digit's advance, so a counting number never jitters sideways.
+function tabularWidth(ctx, env, run, text) {
+  ctx.save();
+  ctx.font = run.font;
+  ctx.letterSpacing = style.tracking(env.tokens, trackRole(run.role), run.px);
+  const dw = Math.max(...[..."0123456789"].map((d) => ctx.measureText(d).width));
+  const w = [...String(text)].reduce((sum, ch) => sum + (/[0-9]/.test(ch) ? dw : ctx.measureText(ch).width), 0);
+  ctx.restore();
+  return { w, dw };
+}
+
+function drawTabular(ctx, env, run, text, x, y, align, color) {
+  const { w, dw } = tabularWidth(ctx, env, run, text);
+  ctx.save();
+  ctx.font = run.font;
+  ctx.letterSpacing = style.tracking(env.tokens, trackRole(run.role), run.px);
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillStyle = color;
+  let cx = align === "center" ? x - w / 2 : align === "right" ? x - w : x;
+  const cy = y + run.lineHeight / 2;
+  for (const ch of String(text)) {
+    const cw = ctx.measureText(ch).width;
+    if (/[0-9]/.test(ch)) {
+      ctx.fillText(ch, cx + (dw - cw) / 2, cy);
+      cx += dw;
+    } else {
+      ctx.fillText(ch, cx, cy);
+      cx += cw;
+    }
+  }
+  ctx.restore();
+  return w;
 }
 
 // Content width a card may use at most (safe area minus transition bleed and padding).
@@ -197,19 +239,24 @@ function layoutCard(env, item, measure, { position = "center", stage = false, la
 // Draw a placed card `t` seconds into a life of `dur` seconds: the brand transition,
 // the card plate (unless `plate: false`), then `paint(ctx, box, a)` for the content.
 // Returns the box actually drawn, or null when nothing is visible.
-function drawCard(ctx, env, L, t, dur, paint, { plate = true, color } = {}) {
+function drawCard(ctx, env, L, t, dur, paint, { plate = true, color, radius } = {}) {
   const { tokens } = env;
   const a = style.appear(tokens, t, dur);
   if (a.p <= 0) return null;
   ctx.save();
   const drawn = style.enter(ctx, tokens, a, L.px, L.box);
   if (plate) {
-    ctx.fillStyle = color || palette(tokens).fill;
-    ctx.beginPath();
-    ctx.roundRect(L.box[0], L.box[1], L.box[2] - L.box[0], L.box[3] - L.box[1], style.radius(tokens, L.px));
-    ctx.fill();
+    const [x0, y0, x1, y1] = L.box;
+    const r = radius ?? style.radius(tokens, L.px);
+    material.plate(ctx, env, (c) => {
+      c.beginPath();
+      c.roundRect(x0, y0, x1 - x0, y1 - y0, r);
+    }, { box: L.box, px: L.px, color });
   }
+  ctx.save();
+  material.vibrancy(ctx, env, L.px);
   paint(ctx, L.box, a);
+  ctx.restore();
   ctx.restore();
   return drawn;
 }
@@ -223,6 +270,8 @@ module.exports = {
   settle,
   textRun,
   drawRun,
+  tabularWidth,
+  drawTabular,
   maxCardWidth,
   layoutCard,
   drawCard,

@@ -2,6 +2,7 @@
 // (box | outline | plain). Shared by the caption and keyword scenes.
 
 const style = require("./style");
+const material = require("./material");
 const { fitText, placeBlock, allowedArea } = require("./layout");
 
 // Lay out `texts` (already cased) starting at font size `px`, placed in the preferred
@@ -36,7 +37,7 @@ function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, posi
   let clear = null; // the largest attempt clear of the face, in no band
   // `seam`: a caption goes on the seam of a stacked slide_split view on screen meanwhile.
   const sm = seam && env.seamDuring ? env.seamDuring(t0, t1) : null;
-  for (const k of [1, 0.85, 0.72, 0.6]) {
+  for (const k of [1, 0.93, 0.86, 0.8, 0.74, 0.68, 0.6]) {
     L = attempt(ctx, env, texts, { px: px * k, role, maxLines, position, anchor, share, reserve, sm, t0, t1 });
     if (!L.overlapsFace && L.fits && L.band !== "other") break;
     if (!L.overlapsFace && L.fits) clear = clear || L;
@@ -121,11 +122,13 @@ function drawBlock(ctx, env, L, t, dur, wordState) {
   ctx.save();
   const drawn = style.enter(ctx, tokens, a, L.px, L.box);
   if (L.style === "box") {
-    ctx.fillStyle = colors.box;
-    ctx.beginPath();
     const [x0, y0, x1, y1] = [L.box[0] - spread, L.box[1], L.box[2] + spread, L.box[3]];
-    ctx.roundRect(x0, y0, x1 - x0, y1 - y0, style.radius(tokens, L.px));
-    ctx.fill();
+    const r = style.radius(tokens, L.px);
+    material.plate(ctx, env, (c) => {
+      c.beginPath();
+      c.roundRect(x0, y0, x1 - x0, y1 - y0, r);
+    }, { box: [x0, y0, x1, y1], px: L.px, color: colors.box });
+    material.vibrancy(ctx, env, L.px);
   }
   ctx.font = L.font;
   ctx.letterSpacing = style.tracking(tokens, L.role, L.px);

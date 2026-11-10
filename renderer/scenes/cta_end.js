@@ -12,6 +12,7 @@
 
 const style = require("../lib/style");
 const card = require("../lib/card");
+const G = require("../lib/glass");
 
 const name = "cta_end";
 const plate = true;
@@ -92,6 +93,14 @@ function draw(ctx, t, item, env) {
   ctx.globalAlpha = plateA;
   ctx.fillStyle = plate;
   ctx.fillRect(0, 0, size[0], size[1]);
+  // light falling on the plate from above the lock-up: the ink at a few percent, fading out
+  const g = ctx.createRadialGradient(size[0] / 2, size[1] * 0.38, 0, size[0] / 2, size[1] * 0.38, Math.max(...size) * 0.7);
+  if (g && g.addColorStop) {
+    g.addColorStop(0, G.withAlpha(ink, 0.07));
+    g.addColorStop(1, G.withAlpha(ink, 0));
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size[0], size[1]);
+  }
   ctx.restore();
   const ct = t - tr;
   const cdur = dur - 1.5 * tr;
@@ -107,6 +116,18 @@ function draw(ctx, t, item, env) {
     if (L.logo) {
       ctx.drawImage(env.image(L.logo.ref), cx - L.logo.w / 2, y, L.logo.w, L.logo.h);
       y += L.logo.h + L.logo.gap;
+      if (L.text && L.logo.gap > 0) {
+        // the lock-up: a short hairline centred in the clear space ties logo and line
+        const rw = Math.min(L.logo.w * 0.4, L.px * 1.6);
+        const rh = Math.max(2, Math.round(L.px * 0.035));
+        ctx.save();
+        ctx.globalAlpha *= 0.35;
+        ctx.fillStyle = ink;
+        ctx.beginPath();
+        ctx.roundRect(cx - rw / 2, y - L.logo.gap / 2 - rh / 2, rw, rh, rh / 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
     if (L.text) card.drawRun(ctx, env, L.text, cx, y, "center", ink);
     ctx.restore();

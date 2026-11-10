@@ -5,7 +5,7 @@
 //
 //   node motion.js <motion.json> [--out <scene.mov>] [--stills <dir> <t,t,...>]
 //                  [--frame-timeout <ms>] [--region-only] [--events <events.json>]
-//                  [--gpu swiftshader|metal]
+//                  [--gpu swiftshader|metal] [--mask <glass.mkv>] [--backdrop]
 //
 // motion.json: {"mode": "motion", "size": [w, h], "fps", "duration" (s), "unit" (short
 // side), "region": [x0, y0, x1, y1] (where the stage sits), "tokens" (resolved brand
@@ -15,6 +15,12 @@
 //
 // --events writes the scene's cues (vc.cue) as [{t, kind, component, strength}] sorted by t,
 // t in output-video seconds (scene t + offset); the sound-effects track reads only that file.
+// --mask: with a glass brand (motion.depth "glass"), every frame is captured a second time
+// in the mask pass (only the glass surfaces, solid) and written as the glass mask clip
+// (gray FFV1, same size and frames as --out) plus <mask>.json with the frost parameters;
+// `render` frosts the video through it (lib/glass.js). Nothing is written for other brands.
+// --backdrop: a neutral generated picture under the stage and real CSS frost on the glass
+// (stills for the brand sheet; never for clips).
 // --gpu picks the WebGL backend: swiftshader (software, the default: deterministic
 // everywhere) or metal (ANGLE on the Mac GPU).
 //
@@ -41,7 +47,7 @@ if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(path.join(TOOLS, "ms-
   process.env.PLAYWRIGHT_BROWSERS_PATH = path.join(TOOLS, "ms-playwright");
 
 const { chromium } = require("playwright-core");
-const { startFfmpeg } = require("./lib/ffmpeg");
+const { startFfmpeg, startMask } = require("./lib/ffmpeg");
 const { literalErrors } = require("./lib/literals");
 
 const ORIGIN = "https://scene.invalid";
@@ -86,6 +92,8 @@ function parseArgs(argv) {
     } else if (arg === "--frame-timeout") a.frameTimeout = Number(rest.shift());
     else if (arg === "--region-only") a.regionOnly = true;
     else if (arg === "--events") a.events = rest.shift();
+    else if (arg === "--mask") a.mask = rest.shift();
+    else if (arg === "--backdrop") a.backdrop = true;
     else if (arg === "--gpu") {
       a.gpu = rest.shift();
       if (!GPU_ARGS[a.gpu]) throw new UsageError(`--gpu must be one of ${Object.keys(GPU_ARGS).join(", ")}`);
@@ -164,7 +172,7 @@ function pageHtml(fonts) {
     .join("\n");
   return `<!doctype html><html><head><meta charset="utf-8"><style>${faces}</style></head><body>
 <script src="/rt/spec.js"></script><script src="/rt/anime.js"></script>
-<script src="/rt/components.js"></script><script src="/rt/runtime.js"></script>
+<script src="/rt/glass.js"></script><script src="/rt/components.js"></script><script src="/rt/runtime.js"></script>
 </body></html>`;
 }
 
@@ -204,6 +212,7 @@ async function main() {
     beats,
     seed: Number.isInteger(spec.seed) ? spec.seed : 1,
     fontFamily,
+    backdrop: Boolean(args.backdrop),
   };
   const rt = (f) => fs.readFileSync(path.join(__dirname, "motion", f), "utf8");
   const files = {
@@ -211,6 +220,7 @@ async function main() {
     "/rt/anime.js": { body: fs.readFileSync(path.join(__dirname, "node_modules", "animejs", "dist", "bundles", "anime.umd.min.js"), "utf8"), type: MIME[".js"] },
     "/rt/components.js": { body: rt("components.js"), type: MIME[".js"] },
     "/rt/runtime.js": { body: rt("runtime.js"), type: MIME[".js"] },
+    "/rt/glass.js": { body: fs.readFileSync(path.join(__dirname, "lib", "glass.js"), "utf8"), type: MIME[".js"] },
   };
   for (const f of fs.readdirSync(THREE_DIR).filter((f) => /^three\.(module|core)\.js$/.test(f)))
     files[`/rt/three/${f}`] = { body: fs.readFileSync(path.join(THREE_DIR, f), "utf8"), type: MIME[".js"] };
@@ -225,6 +235,7 @@ async function main() {
     "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp", ...GPU_ARGS[args.gpu]] });
   summary.gpu = args.gpu;
   let ff = null;
+  let mf = null;
   try {
     const context = await browser.newContext({
       viewport: { width: spec.size[0], height: spec.size[1] },
@@ -284,6 +295,13 @@ async function main() {
     blocked.push(...info.blocked);
     summary.timeline_ms = info.duration_ms;
     summary.style = { theme: info.style.theme, depth: info.style.depth, energy: info.style.energy, contrast: info.style.contrast };
+    if (info.style.glass) summary.glass = { ...info.style.glass };
+    if (args.backdrop) {
+      if (args.out) throw new UsageError("--backdrop is for stills, not clips");
+      await page.evaluate(() => window.__vc.backdrop());
+    }
+    const maskOn = Boolean(args.mask && info.style.glass && args.out);
+    if (args.mask) for (const f of [args.mask, `${args.mask}.json`]) fs.rmSync(f, { force: true });
     const cdp = await context.newCDPSession(page);
     await cdp.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
 
@@ -313,6 +331,17 @@ async function main() {
       );
       return Buffer.from(shot.data, "base64");
     };
+    // The same frame in the mask pass (call right after frameAt: same seek).
+    const maskAt = async (t) => {
+      await page.evaluate(() => window.__vc.mask(true));
+      const shot = await withTimeout(
+        cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true, ...(clip ? { clip: { ...clip, scale: 1 } } : {}) }),
+        args.frameTimeout,
+        `mask capture at ${t.toFixed(3)} s`,
+      );
+      await page.evaluate(() => window.__vc.mask(false));
+      return Buffer.from(shot.data, "base64");
+    };
     check();
 
     // One sequential pass over the frame grid. Chromium keeps rasterised layers between
@@ -333,6 +362,8 @@ async function main() {
     }
     const last = args.out ? frames - 1 : Math.max(...want.keys());
     if (args.out) ff = startFfmpeg(args.out, outSize, spec.fps);
+    if (maskOn) mf = startMask(args.mask, outSize, spec.fps);
+    let maskMs = 0;
     const r0 = process.hrtime.bigint();
     let drawMs = 0;
     let encMs = 0;
@@ -344,10 +375,22 @@ async function main() {
       const b = process.hrtime.bigint();
       if (ff) await ff.write(png);
       encMs += Number(process.hrtime.bigint() - b) / 1e6;
+      if (mf) {
+        const c = process.hrtime.bigint();
+        await mf.write(await maskAt(i / spec.fps));
+        maskMs += Number(process.hrtime.bigint() - c) / 1e6;
+      }
     }
     if (ff) {
       await ff.end();
       ff = null;
+    }
+    if (mf) {
+      await mf.end();
+      mf = null;
+      fs.writeFileSync(`${args.mask}.json`, JSON.stringify({ ...summary.glass, size: outSize, fps: spec.fps, frames: last + 1 }, null, 1) + "\n");
+      summary.glass.mask = args.mask;
+      summary.glass.mask_ms_per_frame = Math.round(maskMs / (last + 1));
     }
     const secs = Number(process.hrtime.bigint() - r0) / 1e9;
     const n = last + 1;
@@ -368,6 +411,7 @@ async function main() {
     summary.requests = { ...served, blocked: blocked.length };
   } finally {
     if (ff) ff.kill();
+    if (mf) mf.kill();
     await Promise.race([browser.close(), new Promise((r) => setTimeout(r, 5000))]);
   }
   summary.seconds = Math.round(Number(process.hrtime.bigint() - tStart) / 1e7) / 100;

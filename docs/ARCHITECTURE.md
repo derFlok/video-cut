@@ -419,6 +419,82 @@ sample content on the brand background (one labelled tile per scene) as the prev
 Fonts are never fetched from the network; a family name without a file falls back to the
 system UI font.
 
+## Material and glass (`renderer/lib/material.js`, `lib/glass.js`, `tools/_glass.py`)
+
+Every plate the canvas scenes draw (caption box, cards, chat bubble, split columns, the AI
+label) and every surface of the motion components is drawn in the brand's
+`motion.depth`: `flat`, `soft` (soft shadow plus a contact shadow), `glow` (accent halo and
+edge) or `glass`. Without a value the default stays what motion used before: glow when the
+plate is dark, soft when it is light; glass is opt-in per brand. The shared craft for all
+depths: size-specific tracking when the brand sets none (display −0.025 em, heading
+−0.012 em, body 0, label +0.012 em), tabular figures for counting numbers and bar values
+(canvas has no `font-variant-numeric`: every digit takes the widest digit's advance), a
+radius of 0.4 × the type size, rounded bars on a faint track with a gradient towards the
+head, `screenshot_frame` as a window (title bar with three dots) or a phone (even bezel,
+concentric radii, camera island), the end card's logo lock-up (a hairline in the clear
+space) on a plate with light falling from above, and springs that never bounce at
+`energy: calm`.
+
+**Glass.** The renderers capture with alpha and never see the video, so CSS
+`backdrop-filter` has nothing to blur. Each render therefore also writes a **glass mask**:
+the alpha of every glass plate per frame, with the plate's own fade, scale and blur-in, as
+a gray FFV1 clip (`work/overlay_glass.mkv`, `work/motion/<id>/glass.mkv`) plus
+`<mask>.json` with the frost parameters (sigma = 6.4 % of the short side, saturation 1.35,
+contrast 0.55 pivoted on the backdrop's mean, brightness lift +0.10 light / −0.07 dark). The canvas scenes fill each glass shape into a
+second canvas with the same transform, alpha and filter; the motion page captures every
+frame a second time with `html.vc-mask` (only `.vc-card` and `.vc-chip` visible, filled
+solid). `render` frosts the picture through the mask before it lays the overlay on top:
+shrink to a quarter, `gblur`, `eq` contrast/saturation/brightness, scale back up, `alphamerge` with
+the mask, overlay; for a motion clip only its own frames and region are frosted (`trim`,
+`crop`). The strong blur and the compression towards the mean turn busy content under the
+glass (hair, a face) into a calm, even material instead of a dark smear. The overlay
+itself carries the tint (the panel colour at the tint alpha), a soft inner gradient a few
+percent lighter at the top, grain (a deterministic hash-noise tile), a large, very soft,
+low shadow outside the shape only, a crisp 1 px specular rim lit from the frame's top-left
+and fading out towards the bottom-right (no outline; on canvas the gradient is anchored to
+the frame, so the highlight slides along the edge as the plate moves), and
+continuous-curvature corners (canvas: each `roundRect` of a glass shape becomes a
+squircle path, so tint, shadow and mask match; DOM: `corner-shape: squircle`).
+
+**Polarity.** Glass follows the picture under it, not only the brand theme: when the
+measured frost's median luminance is ≥ 0.25 the glass is light (white with 8 % of the
+brand surface's hue at a 0.36 tint, the brand's darkest colour as ink), else dark (the
+brand's darkest colour at 0.42, its lightest as ink). A dark tint over a bright wall read
+as mud. The brand keeps the hue of the tint, the ink and the accent; without a
+measurement the brand theme decides. Captions without a box (`plain`, `outline`) are not
+on glass: they keep the brand caption colours and their halo or outline.
+
+**Vibrancy guard.** `_glass.backdrop_range` measures the luminance the frost can have in
+this job: the source's keyframes, tonemapped like the render, shrunk to 96 px wide and
+blurred like the frost; the 0.5th, 99.5th and 50th percentile of relative luminance
+(`work/glass_backdrop.json`, cached per source file). It reaches the renderers as
+`tokens.glass_backdrop`. The guard works on the frost's own range (the measured one
+through the frost's `eq`), so the contrast comes mainly from the compression and the
+lift; the tint alpha starts at the material's own and grows only when the text would
+still miss 4.5:1 over the darkest or the lightest frost; the accent and muted text (used
+large or secondary) are lifted towards white or black until they keep 3:1 instead of
+making the glass opaque. The renderer summaries and `clip.json` report `theme`,
+`tint_alpha`, `densified`, `contrast_worst`, `backdrop`, `frost_range` and `accent_text`.
+Without a measurement the guard assumes black and white under the frost. The AI label
+is never glass (a solid pill in the brand's material). Text on glass has no halo: the guard
+already holds the contrast, and a per-glyph canvas shadow tripled the overlay render time.
+The canvas plates draw their shadows once into a sprite per shape and reuse it while the
+plate stays the same (a Gaussian `shadowBlur` every frame doubled the render time of a
+soft plate).
+
+**Brand sheet.** Every tile and the motion row are drawn over a neutral generated picture
+(gradient, soft discs, fine stripes, grain: `glass.backdrop`, no third-party media); the
+sheet frosts it through the mask in the page (canvas filter) and the motion stills use
+real `backdrop-filter` (`motion.js --backdrop`), guarded against that picture's range.
+
+Cost, measured on a 27.8 s 9:16 reel (M3 Pro, per 20 s of video, before → after): a
+brand without glass is unchanged (overlays 27 → 29 s, render 32 → 29 s). With glass the
+overlays take 24 → 40 s (the mask canvas and its second stream), `render` 29 → 35 s (the
+frost) and +0.25 GB peak memory (2.1 → 2.4 GB), a motion clip 33 → 66–77 s (every frame
+is captured twice: 66–87 ms picture + 40 ms mask; the upper values with the larger glass
+shadows and squircle corners, measured under a lower but still shared load). The node renderers stay at 0.9 GB (canvas)
+and 0.3 GB (motion).
+
 ## Overlays and captions (step 8)
 
 `captions` maps `work/words.json` through the segments to output time (a word cut to less
@@ -1539,5 +1615,14 @@ lettering.
   interpreter regardless of pyenv/Homebrew.
 - **Claude skills ship as a Claude Code plugin** loaded with `claude --plugin-dir`, so they work
   regardless of the job folder.
+- **Glass through a mask, frosted in FFmpeg.** The renderers capture overlays with alpha
+  and never see the video, so a glass plate cannot blur what is under it in the page.
+  Rejected: feeding the decoded video into the page as a background (a full-resolution
+  frame per frame into the sandboxed page, the overlay clip would no longer be
+  transparent and could not be reused across previews or formats). Chosen: a per-frame
+  glass mask written next to each clip and an FFmpeg frost through it at composite time:
+  deterministic, the overlay stays a transparent layer, the frost is computed at a quarter
+  of the size, and text contrast is guarded against the frost range measured in the
+  job's own video.
 - **Agent runs are restricted** (see `SECURITY.md`); in local mode they use `--setting-sources`
   to keep the user's personal Claude Code hooks and settings out of job runs (to be verified).

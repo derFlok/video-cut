@@ -22,11 +22,11 @@ function layout(ctx, item, env) {
       (k) => {
         const px = unit * 0.055 * k;
         const pad = Math.round(px * 0.55);
-        const rule = Math.max(3, Math.round(px * 0.12));
+        const rule = Math.max(4, Math.round(px * 0.14));
         const ruleGap = Math.round(px * 0.45);
         const maxW = card.maxCardWidth(env, px, pad) - rule - ruleGap;
         const title = card.textRun(ctx, env, style.setCase(tokens, titleOf(item)), { px, role: "heading", maxWidth: maxW, maxLines: 2 });
-        const sub = subOf(item) ? card.textRun(ctx, env, subOf(item), { px: px * 0.7, role: "body", maxWidth: maxW, maxLines: 2 }) : null;
+        const sub = subOf(item) ? card.textRun(ctx, env, subOf(item), { px: px * 0.7, role: "label", maxWidth: maxW, maxLines: 2 }) : null;
         const between = sub ? Math.round(px * 0.15) : 0;
         return {
           px,
@@ -57,7 +57,11 @@ function draw(ctx, t, item, env) {
     const h = box[3] - box[1] - 2 * L.pad;
     const k = card.settle(tokens, t - card.reachTime(tokens) * 0.4);
     c.fillStyle = pal.accent;
-    c.fillRect(x, y + (h * (1 - k)) / 2, L.rule, h * k);
+    if (h * k > 0) {
+      c.beginPath();
+      c.roundRect(x, y + (h * (1 - k)) / 2, L.rule, h * k, L.rule / 2);
+      c.fill();
+    }
     const tx = x + L.rule + L.ruleGap;
     card.drawRun(c, env, L.title, tx, y, "left", pal.text);
     if (L.sub) card.drawRun(c, env, L.sub, tx, y + L.title.height + L.between, "left", pal.muted);

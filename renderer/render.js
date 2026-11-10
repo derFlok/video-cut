@@ -4,6 +4,7 @@
 //
 //   node render.js <overlays.json> [--out <overlay.mov>] [--boxes <boxes.json>]
 //                  [--still <t> <png>] [--sheet <jpg>] [--blur <subframes>]
+//                  [--glass <mask.mkv>]
 //   node render.js <slide.json> [--out <slide.mov>] [--still <t> <png>] [--report <json>]
 //
 // A spec with "mode": "slide" is one slide (renderer/slides/<template>.js) as an OPAQUE
@@ -17,6 +18,11 @@
 // Image files scenes ask for (screenshots, logos) are read only from inside the job
 // folder: $VIDEOCUT_JOB_DIR, else the folder of overlays.json. Logos may also come
 // from the brands folders ($VIDEOCUT_HOME/brands, the bundled brands/).
+//
+// --glass: with a brand whose motion.depth is "glass", also write the glass mask (the
+// alpha of every glass plate per frame, gray FFV1) and <mask>.json with the frost
+// parameters; `render` blurs the video through it (lib/glass.js). Nothing is written (and
+// a stale mask is removed) when no glass plate is drawn.
 //
 // Deterministic: frame i depends only on overlays.json and i (no clock, no randomness).
 // Prints whatever it wants, then exactly one JSON summary line last; exits 0 or 1.
@@ -54,6 +60,7 @@ function parseArgs(argv) {
     else if (arg === "--boxes") [a.boxes] = take(arg);
     else if (arg === "--sheet") [a.sheet] = take(arg);
     else if (arg === "--report") [a.report] = take(arg);
+    else if (arg === "--glass") [a.glass] = take(arg);
     else if (arg === "--still") {
       const [t, png] = take(arg, 2);
       a.still = { t: Number(t), png };
@@ -125,6 +132,16 @@ function pageMain(spec) {
   const acc = mk(size[0], size[1]);
   const ctx = main.getContext("2d");
   const accCtx = acc.getContext("2d");
+  // Glass mask (lib/material.js fills every glass plate into it as well).
+  const material = window.__load("lib/material");
+  const G = window.__load("lib/glass");
+  // A sheet over the generated backdrop guards the glass against that picture's frost.
+  if (spec.sheet && spec.sheet.backdrop && !tokens.glass_backdrop) tokens.glass_backdrop = G.backdropRange(size[0], size[1]);
+  const glassOn = material.resolve(tokens).depth === "glass";
+  const maskC = glassOn ? mk(size[0], size[1]) : null;
+  const maskCtx = maskC ? maskC.getContext("2d") : null;
+  const accMask = glassOn ? mk(size[0], size[1]) : null;
+  const accMaskCtx = accMask ? accMask.getContext("2d") : null;
   const memo = new Map();
   // Product demo (overlays.json "views", flattened by validViews): every item keeps off a
   // screen view that does not fill the frame and off every zoom target.
@@ -167,6 +184,8 @@ function pageMain(spec) {
     // and an offscreen canvas for scenes that prepare images once (redaction).
     image: (ref) => images[ref] || null,
     canvas: mk,
+    mask: null, // set only while frames are drawn (layout never draws)
+    maskUsed: false,
   };
 
   // Lay out every item once, in time order, so placement never depends on which
@@ -216,21 +235,105 @@ function pageMain(spec) {
   }
 
   // Frame at time t with `sub` subframes spread over one frame interval (motion blur).
+  // `mask`: the glass mask canvas of the frame, or null when no glass plate was drawn.
   function render(t, sub) {
+    env.mask = maskCtx;
+    env.maskUsed = false;
     if (sub <= 1) {
       ctx.clearRect(0, 0, size[0], size[1]);
-      return { canvas: main, boxes: drawAt(t) };
+      if (maskCtx) maskCtx.clearRect(0, 0, size[0], size[1]);
+      const boxes = drawAt(t);
+      return { canvas: main, boxes, mask: env.maskUsed ? maskC : null };
     }
     accCtx.clearRect(0, 0, size[0], size[1]);
     accCtx.globalCompositeOperation = "lighter";
     accCtx.globalAlpha = 1 / sub;
+    if (accMaskCtx) {
+      accMaskCtx.clearRect(0, 0, size[0], size[1]);
+      accMaskCtx.globalCompositeOperation = "lighter";
+      accMaskCtx.globalAlpha = 1 / sub;
+    }
     const boxes = [];
+    let used = false;
     for (let k = 0; k < sub; k++) {
       ctx.clearRect(0, 0, size[0], size[1]);
+      if (maskCtx) maskCtx.clearRect(0, 0, size[0], size[1]);
+      env.maskUsed = false;
       boxes.push(...drawAt(t + ((k + 0.5) / sub - 0.5) / fps));
       accCtx.drawImage(main, 0, 0);
+      if (env.maskUsed) {
+        accMaskCtx.drawImage(maskC, 0, 0);
+        used = true;
+      }
     }
-    return { canvas: acc, boxes };
+    return { canvas: acc, boxes, mask: used ? accMask : null };
+  }
+
+  // The frame over a picture: `back` (a canvas the frame's size), the frost (back blurred
+  // and saturated as `render` does it in FFmpeg) through the glass mask, the overlay on
+  // top. For the brand sheet, which has no video.
+  let frosted = null;
+  // the frost of this material at this frame size (polarity and backdrop from the tokens)
+  function frostParams() {
+    const m = material.resolve(tokens);
+    return G.frost(Math.min(size[0], size[1]), m.theme, tokens.glass_backdrop);
+  }
+  function over(r, back) {
+    const out = mk(size[0], size[1]);
+    const c = out.getContext("2d");
+    c.drawImage(back, 0, 0);
+    if (r.mask) {
+      if (!frosted) {
+        const fr = frostParams();
+        frosted = mk(size[0], size[1]);
+        const f = frosted.getContext("2d");
+        // like FFmpeg's eq: contrast pivots on mid-grey, brightness is added
+        f.filter = `blur(${fr.sigma}px) saturate(${fr.saturation}) contrast(${fr.contrast})`;
+        f.drawImage(back, 0, 0);
+        f.filter = "none";
+        const v = Math.round(Math.abs(fr.brightness) * 255);
+        f.globalCompositeOperation = fr.brightness >= 0 ? "lighter" : "difference";
+        if (fr.brightness < 0) {
+          // subtract: invert, add, invert back
+          f.fillStyle = G.hex([255, 255, 255]);
+          f.fillRect(0, 0, size[0], size[1]);
+          f.globalCompositeOperation = "lighter";
+          f.fillStyle = G.hex([v, v, v]);
+          f.fillRect(0, 0, size[0], size[1]);
+          f.globalCompositeOperation = "difference";
+          f.fillStyle = G.hex([255, 255, 255]);
+        } else f.fillStyle = G.hex([v, v, v]);
+        f.fillRect(0, 0, size[0], size[1]);
+        f.globalCompositeOperation = "source-over";
+      }
+      const g = mk(size[0], size[1]);
+      const gc = g.getContext("2d");
+      gc.drawImage(r.mask, 0, 0);
+      gc.globalCompositeOperation = "source-in";
+      gc.drawImage(frosted, 0, 0);
+      c.drawImage(g, 0, 0);
+    }
+    c.drawImage(r.canvas, 0, 0);
+    return out;
+  }
+  let backdropC = null;
+  function backdrop() {
+    if (!backdropC) {
+      // computed at a quarter of the size and drawn up (it is soft anyway)
+      const w = Math.ceil(size[0] / 4);
+      const h = Math.ceil(size[1] / 4);
+      const b = G.backdrop(w, h);
+      const small = mk(w, h);
+      const sc = small.getContext("2d");
+      const img = sc.createImageData(w, h);
+      img.data.set(b.data);
+      sc.putImageData(img, 0, 0);
+      backdropC = mk(size[0], size[1]);
+      const bc = backdropC.getContext("2d");
+      bc.imageSmoothingQuality = "high";
+      bc.drawImage(small, 0, 0, size[0], size[1]);
+    }
+    return backdropC;
   }
 
   // Boxes only (no image) for a list of frame times: --boxes without --out.
@@ -238,8 +341,11 @@ function pageMain(spec) {
 
   window.frame = (t, sub) => {
     const r = render(t, sub);
-    return { png: r.canvas.toDataURL("image/png"), boxes: r.boxes };
+    return { png: r.canvas.toDataURL("image/png"), boxes: r.boxes, mask: r.mask ? r.mask.toDataURL("image/png") : null };
   };
+  window.glass = glassOn
+    ? { ...frostParams(), material: material.report(tokens) }
+    : null;
 
   // `opt.labels` (one per time) replaces the time label, `opt.background` (a colour)
   // replaces the checkerboard: the brand preview sheet shows scenes on the brand's own
@@ -268,7 +374,8 @@ function pageMain(spec) {
       boxes.push(...r.boxes);
       const x = (k % cols) * cw;
       const y = Math.floor(k / cols) * ch;
-      sc.drawImage(r.canvas, x, y, cw, ch);
+      // `opt.backdrop`: each tile over a neutral generated picture, glass frosted over it
+      sc.drawImage(opt.backdrop ? over(r, backdrop()) : r.canvas, x, y, cw, ch);
       sc.strokeStyle = "#000";
       sc.strokeRect(x + 0.5, y + 0.5, cw - 1, ch - 1);
       const label = opt.labels && opt.labels[k] != null ? String(opt.labels[k]) : `${t.toFixed(2)} s`;
@@ -522,7 +629,7 @@ function validate(spec) {
   if (errs.length) throw new Error(`overlays.json: ${errs.join("; ")}`);
 }
 
-const { startFfmpeg } = require("./lib/ffmpeg");
+const { startFfmpeg, startMask } = require("./lib/ffmpeg");
 
 // Nine moments across the duration, one per ninth: its centre, or, when nothing is fully
 // in at the centre (a gap or a transition), the middle of the item nearest to it that
@@ -673,6 +780,7 @@ async function main() {
   const t0 = process.hrtime.bigint();
   const browser = await chromium.launch();
   let ff = null;
+  let mf = null;
   try {
     const page = await browser.newPage({ viewport: { width: 64, height: 64 } });
     await page.setContent("<!doctype html><html><body></body></html>");
@@ -683,7 +791,7 @@ async function main() {
     if (assets.length) summary.images = await loadImages(page, assets);
     const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
     await page.evaluate(pageMain, {
-      size, fps, safe: spec.safe || {}, face, views: validViews(spec.views), hidden: hiddenSpans(spec.views), bands: bandSpans(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
+      size, fps, safe: spec.safe || {}, sheet: spec.sheet && args.sheet ? { backdrop: spec.sheet.backdrop === true } : null, face, views: validViews(spec.views), hidden: hiddenSpans(spec.views), bands: bandSpans(spec.views), tokens: spec.tokens, items: list, sceneNames, fontFamily,
     });
     // Items that could not be placed clear of the face / of each other / inside the safe
     // area even at their smallest size (no room left).
@@ -707,7 +815,7 @@ async function main() {
       // overlays.json may fix the sheet: {"sheet": {"times": [s], "labels": [..], "background": "#hex"}}
       const fixed = spec.sheet && typeof spec.sheet === "object" ? spec.sheet : {};
       const times = Array.isArray(fixed.times) && fixed.times.length ? fixed.times : sheetTimes(list, spec.duration);
-      const opt = { labels: fixed.labels, background: fixed.background };
+      const opt = { labels: fixed.labels, background: fixed.background, backdrop: fixed.backdrop === true };
       const r = await page.evaluate(([ts, sub, o]) => window.sheet(ts, sub, o), [times, args.blur, opt]);
       fs.writeFileSync(args.sheet, decode(r.jpg));
       summary.sheet = args.sheet;
@@ -722,24 +830,45 @@ async function main() {
       for (let i = 0; i < times.length; i += 60)
         collect(await page.evaluate(([ts, sub]) => window.boxesFor(ts, sub), [times.slice(i, i + 60), args.blur]));
     }
+    const glass = await page.evaluate(() => window.glass);
+    if (args.glass) {
+      for (const f of [args.glass, `${args.glass}.json`]) fs.rmSync(f, { force: true });
+    }
     if (args.out) {
       const blank = decode(await page.evaluate(() => window.blank()));
       ff = startFfmpeg(args.out, size, fps);
+      // The glass mask streams alongside; it is dropped when no plate was glass.
+      if (glass && args.glass) mf = startMask(args.glass, size, fps);
+      let masked = 0;
       let drawn = 0;
       const r0 = process.hrtime.bigint();
       for (let i = 0; i < frames; i++) {
         const t = i / fps;
         if (!active(t)) {
           await ff.write(blank);
+          if (mf) await mf.write(blank);
           continue;
         }
         const r = await page.evaluate(([t, sub]) => window.frame(t, sub), [t, args.blur]);
         collect(r.boxes);
         drawn++;
         await ff.write(decode(r.png));
+        if (mf) {
+          await mf.write(r.mask ? decode(r.mask) : blank);
+          if (r.mask) masked++;
+        }
       }
       await ff.end();
       ff = null;
+      if (mf) {
+        await mf.end();
+        mf = null;
+        if (!masked) fs.rmSync(args.glass, { force: true });
+      }
+      if (glass && args.glass && masked) {
+        fs.writeFileSync(`${args.glass}.json`, JSON.stringify({ ...glass, size, fps, frames, masked_frames: masked }, null, 1) + "\n");
+        summary.glass = { mask: args.glass, masked_frames: masked, ...glass };
+      } else if (glass) summary.glass = { mask: null, masked_frames: 0, ...glass };
       const secs = Number(process.hrtime.bigint() - r0) / 1e9;
       Object.assign(summary, {
         out: args.out,
@@ -760,6 +889,7 @@ async function main() {
     }
   } finally {
     if (ff) ff.kill();
+    if (mf) mf.kill();
     await browser.close();
   }
   summary.seconds = round(Number(process.hrtime.bigint() - t0) / 1e9);

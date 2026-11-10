@@ -83,7 +83,7 @@
   for (const [k, v] of Object.entries(vars)) if (v != null) root.style.setProperty(k, v);
 
   // --- motion style (brand profile `motion` section; interface 1) ----------------------
-  // theme dark|light|auto, depth flat|soft|glow, radius (share of the unit), energy
+  // theme dark|light|auto, depth flat|soft|glow|glass, radius (share of the unit), energy
   // calm|normal|punchy, type_scale. Resolved like src/videocut/brand.py motion_style() when a
   // job's tokens predate these fields. Every colour below is derived from brand colours.
   const ms0 = tok.motion || {};
@@ -113,8 +113,13 @@
   };
   const brandDark = L(col.bg || EXTREME[1]) < 0.18;
   const themeRaw = pick(ms0.theme, ["dark", "light", "auto"], "auto");
-  const theme = themeRaw === "auto" ? (brandDark ? "dark" : "light") : themeRaw;
-  const depth = pick(ms0.depth, ["flat", "soft", "glow"], theme === "dark" ? "glow" : "soft");
+  let theme = themeRaw === "auto" ? (brandDark ? "dark" : "light") : themeRaw;
+  const depth = pick(ms0.depth, ["flat", "soft", "glow", "glass"], theme === "dark" ? "glow" : "soft");
+  // Glass follows what is under it: light glass over a bright picture, dark glass over a
+  // dark one (the measured backdrop's median; the brand theme without a measurement).
+  const GL = window.__vcGlass;
+  const measured = depth === "glass" && GL ? tok.glass_backdrop || (spec.backdrop ? GL.backdropRange(spec.size[0], spec.size[1]) : null) : null;
+  if (depth === "glass" && GL) theme = GL.polarity(measured, theme);
   const charEnergy = { ruhig: "calm", federnd: "normal", knackig: "punchy" }[pick(ms0.character, ["ruhig", "federnd", "knackig"], "")];
   const energy = pick(ms0.energy, ["calm", "normal", "punchy"], charEnergy || "normal");
   const num = (v, lo, hi, d) => (Number.isFinite(v) && v >= lo && v <= hi ? v : d);
@@ -134,6 +139,15 @@
   if ((theme === "dark") === (L(surf) < 0.18)) [panel, ink] = [surf, text];
   else if (theme === "dark") [panel, ink] = col.dark && L(col.dark) < 0.18 ? [col.dark, col.dark_text || surf] : [text, surf];
   else [panel, ink] = [text, L(col.bg) < L(surf) ? col.bg : surf];
+  if (depth === "glass" && GL) {
+    // light glass: white with a hint of the brand surface, the brand's darkest colour as
+    // ink; dark glass: the brand's darkest colour as tint, its lightest as ink
+    const base = [surf, text, col.bg, col.dark].filter((c) => chan(c));
+    const darkest = base.reduce((a, b) => (L(b) < L(a) ? b : a), base[0]);
+    const lightest = base.reduce((a, b) => (L(b) > L(a) ? b : a), base[0]);
+    if (theme === "light") [panel, ink] = [GL.lightTint(col.surface || surf), darkest];
+    else if (L(panel) >= 0.18) [panel, ink] = [darkest, lightest];
+  }
   panel = hx(chan(panel));
   ink = guard(ink, panel, 7);
   const accent = hx(chan(vars["--vc-accent"]));
@@ -154,7 +168,30 @@
       `0 0 0 ${sh(0.0018)} ${alpha(accent, 0.45)}, 0 0 ${sh(0.03)} ${alpha(accent, 0.32)}, 0 0 ${sh(0.09)} ${alpha(accent, 0.16)}, 0 ${sh(0.02)} ${sh(0.06)} ${alpha(shade, 0.45)}`,
       `0 0 0 ${sh(0.0025)} ${alpha(accent, 0.7)}, 0 0 ${sh(0.05)} ${alpha(accent, 0.5)}, 0 0 ${sh(0.16)} ${alpha(accent, 0.25)}, 0 ${sh(0.03)} ${sh(0.09)} ${alpha(shade, 0.5)}`,
     ],
+    // glass: a large, very soft, low shadow outside the panel (box-shadow never paints
+    // under it) and a faint contact line under the edge
+    glass: [
+      `0 ${sh(0.002)} ${sh(0.006)} ${alpha(shade, theme === "dark" ? 0.12 : 0.06)}, 0 ${sh(0.03)} ${sh(0.12)} ${alpha(shade, theme === "dark" ? 0.22 : 0.12)}`,
+      `0 ${sh(0.003)} ${sh(0.008)} ${alpha(shade, theme === "dark" ? 0.14 : 0.07)}, 0 ${sh(0.045)} ${sh(0.16)} ${alpha(shade, theme === "dark" ? 0.26 : 0.14)}`,
+    ],
   }[depth];
+
+  // Glass (lib/glass.js, served as /rt/glass.js): the panel is the theme's panel colour at
+  // a tint alpha the vibrancy guard chose against the frost measured under the glass in this
+  // job (tokens.glass_backdrop); ink 4.5:1, the accent (large text) 3:1. The frost itself
+  // comes from the glass mask (seek + mask pass below) and FFmpeg.
+  let glass = null;
+  if (depth === "glass" && GL) {
+    const base = GL.TINT[theme];
+    // the frost's own luminance range: the measured backdrop (stills over the generated
+    // backdrop: that picture's) through the frost's compression and lift
+    const frost = GL.frost(spec.unit, theme, measured);
+    const range = GL.frostRange(measured, frost);
+    // ink 4.5:1 (a denser tint only when the frost alone misses); the accent text and the
+    // muted text are lifted to 3:1 (large text) instead of making the glass opaque
+    glass = { ...GL.tint(panel, ink, base, GL.MIN_CONTRAST, range) };
+    Object.assign(glass, { base, theme, backdrop: GL.span(measured), range, frost, accent_text: GL.accentOn(panel, accentText, glass.alpha, range), muted: GL.accentOn(panel, muted, glass.alpha, range) });
+  }
   Object.assign(vars, {
     "--vc-panel": panel,
     "--vc-panel-2": panel2,
@@ -179,6 +216,41 @@
     "--vc-radius-sm": `${Math.round(radiusK * 0.5 * spec.unit)}px`,
     "--vc-ts": String(typeScale),
   });
+  if (glass) {
+    const white = EXTREME[1];
+    const g = GL.grain();
+    const cv = document.createElement("canvas");
+    cv.width = g.width;
+    cv.height = g.height;
+    const gc = cv.getContext("2d");
+    const img = gc.createImageData(g.width, g.height);
+    img.data.set(g.data);
+    gc.putImageData(img, 0, 0);
+    const dark = theme === "dark";
+    Object.assign(vars, {
+      "--vc-glass": alpha(panel, glass.alpha),
+      "--vc-hi-text": glass.accent_text,
+      "--vc-ink-muted": glass.muted,
+      // nested surfaces on glass are ink washes, not a second opaque panel
+      "--vc-panel": alpha(panel, glass.alpha),
+      "--vc-panel-2": alpha(ink, dark ? 0.08 : 0.06),
+      "--vc-panel-a80": alpha(panel, Math.min(1, glass.alpha + 0.2)),
+      // top light: a soft inner gradient (a few % lighter at the top) and a crisp 1 px
+      // rim, bright at the top-left and fading out (no outline at the bottom-right)
+      "--vc-glass-hi": alpha(white, dark ? 0.06 : 0.16),
+      "--vc-glass-hi0": alpha(white, 0),
+      "--vc-spec-hi": alpha(white, dark ? 0.38 : 0.95),
+      "--vc-spec-lo": alpha(white, dark ? 0.04 : 0.2),
+      "--vc-spec-rim": alpha(white, dark ? 0.08 : 0.35),
+      "--vc-grain": `url(${cv.toDataURL("image/png")})`,
+      "--vc-mask-ink": white,
+      "--vc-glow": alpha(accent, 0.3),
+      "--vc-glow-soft": alpha(accent, 0.12),
+      "--vc-text-glow": "none",
+      "--vc-sheen": alpha(white, dark ? 0.12 : 0.3),
+    });
+    root.classList.add("vc-glass");
+  }
   for (const [k, v] of Object.entries(vars)) if (v != null) root.style.setProperty(k, v);
 
   // Brand spring (w = natural frequency, z = damping ratio) as an anime.js spring; energy
@@ -189,8 +261,10 @@
   const w = w0 / ENERGY.dur;
   const z = Math.max(0.3, Math.min(1, z0 / Math.sqrt(ENERGY.overshoot)));
   const mkSpring = (ww, zz) => (A.spring || A.createSpring)({ mass: 1, stiffness: ww * ww, damping: 2 * zz * ww, velocity: 0 });
-  const spring = mkSpring(w, z);
-  const springPop = mkSpring(w * 1.15, Math.max(0.3, z * 0.62));
+  // calm energy never bounces (Apple: critically damped unless a gesture carried momentum)
+  const calm = energy === "calm";
+  const spring = calm ? mkSpring(w, 1) : mkSpring(w, z);
+  const springPop = calm ? mkSpring(w * 1.1, 1) : mkSpring(w * 1.15, Math.max(0.3, z * 0.62));
   const style = {
     theme,
     theme_raw: themeRaw,
@@ -204,6 +278,17 @@
     overshoot: ENERGY.overshoot,
     drift: ENERGY.drift,
     colors: { panel, panel2, ink, muted, line, accent, accentText, onAccent },
+    glass: glass && {
+      tint_alpha: glass.alpha,
+      tint_base: glass.base,
+      densified: glass.densified,
+      contrast_worst: glass.contrast,
+      theme: glass.theme,
+      backdrop: glass.backdrop,
+      frost_range: glass.range,
+      accent_text: glass.accent_text,
+      ...glass.frost,
+    },
     contrast: {
       ink_on_panel: Math.round(cr(ink, panel) * 100) / 100,
       accent_text_on_panel: Math.round(cr(accentText, panel) * 100) / 100,
@@ -300,6 +385,31 @@
   };
   vc.c = window.__vcComponents ? window.__vcComponents(vc) : {};
 
+  // The glass material over the components' own surfaces (cards and chips), and the mask
+  // pass: with html.vc-mask only glass surfaces show, filled solid, with every transform,
+  // opacity and blur of their own and their parents (the frost follows them exactly).
+  const hair = `${Math.max(1, Math.round(spec.unit * 0.0012))}px`;
+  const grainPx = Math.round(spec.unit * 0.09);
+  const inset = `inset 0 ${hair} 0 var(--vc-spec-hi), inset 0 0 0 ${hair} var(--vc-spec-rim)`;
+  // continuous-curvature corners (squircle) where the browser has corner-shape; the
+  // radius grows so the corner keeps its optical size
+  vc.css(`
+    html.vc-glass .vc-card, html.vc-glass .vc-chip {
+      background-color: var(--vc-glass);
+      background-image: linear-gradient(170deg, var(--vc-glass-hi), var(--vc-glass-hi0) 60%), var(--vc-grain);
+      background-size: auto, ${grainPx}px ${grainPx}px;
+      box-shadow: var(--vc-shadow), ${inset}; }
+    @supports (corner-shape: squircle) {
+      html.vc-glass .vc-card { corner-shape: squircle; border-radius: calc(var(--vc-radius) * 1.45); }
+      html.vc-glass .vc-chip { corner-shape: squircle; }
+    }
+    html.vc-glass .vc-card.lg { box-shadow: var(--vc-shadow-lg), ${inset}; }
+    html.vc-glass .vc-win.phone .screen { background: var(--vc-panel-2); }
+    html.vc-mask * { visibility: hidden !important; }
+    html.vc-mask .vc-card, html.vc-mask .vc-chip { visibility: visible !important; background: var(--vc-mask-ink) !important;
+      box-shadow: none !important; border-color: var(--vc-mask-ink) !important; }
+  `);
+
   function seek(t) {
     now = t;
     tl.seek(Math.max(0, t * 1000));
@@ -314,6 +424,32 @@
   window.__vc = {
     vc,
     seek,
+    // the glass mask pass on/off (motion.js captures one frame in each state)
+    mask: (on) => {
+      root.classList.toggle("vc-mask", Boolean(on));
+      return Boolean(glass);
+    },
+    // `--backdrop` (brand sheet, previews): a neutral generated picture under the stage and
+    // real backdrop-filter frost on the glass surfaces, so a still shows the material
+    // without a video.
+    backdrop: () => {
+      const [w, h] = spec.size;
+      const b = GL.backdrop(Math.ceil(w / 4), Math.ceil(h / 4));
+      const cv = document.createElement("canvas");
+      cv.width = b.width;
+      cv.height = b.height;
+      const c2 = cv.getContext("2d");
+      const img = c2.createImageData(b.width, b.height);
+      img.data.set(b.data);
+      c2.putImageData(img, 0, 0);
+      document.body.style.backgroundImage = `url(${cv.toDataURL("image/png")})`;
+      document.body.style.backgroundSize = "100% 100%";
+      if (glass) {
+        const f = glass.frost;
+        // (CSS brightness multiplies; FFmpeg's eq adds: close enough for a still)
+        vc.css(`html.vc-glass .vc-card, html.vc-glass .vc-chip { backdrop-filter: blur(${f.sigma}px) saturate(${f.saturation}) contrast(${f.contrast}) brightness(${1 + f.brightness}); }`);
+      }
+    },
     // Load the scene module (same origin; a module that fails to load fails the render).
     load: async (url, threeUrl) => {
       if (threeUrl) vc.THREE = await import(threeUrl);

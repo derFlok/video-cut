@@ -9,6 +9,13 @@ const { step, brandSpring } = require("./spring");
 function captionColors(tokens) {
   const c = tokens.caption_colors || {};
   const raw = tokens.colors || {};
+  const m = require("./material").resolve(tokens);
+  // On glass the material decides the pair (light glass takes the brand's dark ink), but
+  // only where the caption sits ON glass (style box). Plain and outline captions have no
+  // box: they lie on the video itself, whose brightness under them the glass polarity
+  // (the median under the panels) says nothing about, so they keep the brand's caption
+  // colours and their halo/outline.
+  if (m.depth === "glass" && captionSettings(tokens).style === "box") return { text: m.text, box: m.fill, highlight: m.accent };
   return {
     text: c.text || raw.text,
     box: c.box || raw.surface || raw.bg,
@@ -59,10 +66,13 @@ function font(env, px, weight = strongest(env.tokens)) {
   return `${weight} ${Math.round(px)}px ${env.fonts.family}`;
 }
 
-// Letter spacing in px for a role ("display", "heading", "body"), from tokens in em.
+// Letter spacing in px for a role ("display", "heading", "body", "label"), from tokens in
+// em. Without a brand value the tracking follows the size, as optical sizing does: large
+// display type tightens, small labels open up a little, body text stays at 0.
+const TRACK = { display: -0.025, heading: -0.012, body: 0, label: 0.012 };
 function tracking(tokens, role, px) {
   const t = tokens.fonts && tokens.fonts.tracking;
-  const em = t && Number.isFinite(t[role]) ? t[role] : 0;
+  const em = t && Number.isFinite(t[role]) ? t[role] : TRACK[role] || 0;
   return `${(em * px).toFixed(2)}px`;
 }
 
@@ -94,7 +104,7 @@ function transition(tokens) {
 }
 
 function radius(tokens, px) {
-  return Number.isFinite(tokens.radius_px) ? tokens.radius_px : Math.round(px * 0.28);
+  return Number.isFinite(tokens.radius_px) ? tokens.radius_px : Math.round(px * 0.4);
 }
 
 // Visibility of an item `t` seconds into its life of `dur` seconds: the brand spring
@@ -154,6 +164,7 @@ module.exports = {
   strongest,
   font,
   tracking,
+  TRACK,
   captionSettings,
   setCase,
   transition,

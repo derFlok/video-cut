@@ -322,7 +322,7 @@ export interface Brand {
   /** Motion-scene style (all optional: depth and energy follow the theme and character). */
   motion?: {
     theme?: "dark" | "light" | "auto";
-    depth?: "flat" | "soft" | "glow";
+    depth?: "flat" | "soft" | "glow" | "glass";
     radius?: number;
     energy?: "calm" | "normal" | "punchy";
     type_scale?: number;

@@ -169,8 +169,9 @@ test("screenshot redaction is burnt in before the first visible frame", () => {
   assert.ok(x <= b0 * L.src.w && y <= b1 * L.src.h && x + w >= b2 * L.src.w && y + h >= b3 * L.src.h);
   // Nothing drew the original before (the copy is ready at layout) and frames only use the copy.
   const images = main.log.filter((o) => o[0] === "drawImage");
-  assert.ok(images.length > 0);
-  assert.ok(images.every((o) => o[1] === prepared), "frames draw only the redacted copy");
+  assert.ok(images.some((o) => o[1] === prepared));
+  // (the other images are the plate's cached shadow sprites)
+  assert.ok(images.every((o) => o[1] !== SHOT), "frames draw only the redacted copy");
 });
 
 test("screenshot blur draws the averaged cells over the fill, never the original", () => {

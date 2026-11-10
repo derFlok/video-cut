@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const DIRS = ["scenes", "slides", "motion"].map((d) => path.join(__dirname, "..", d));
-const HELPERS = ["textblock.js", "style.js", "layout.js", "card.js", "assets.js", "slide.js", "literals.js"].map((f) => path.join(__dirname, "..", "lib", f));
+const HELPERS = ["textblock.js", "style.js", "layout.js", "card.js", "assets.js", "slide.js", "literals.js", "glass.js", "material.js"].map((f) => path.join(__dirname, "..", "lib", f));
 const files = [...DIRS.flatMap((d) => fs.readdirSync(d).filter((f) => f.endsWith(".js")).map((f) => path.join(d, f))), ...HELPERS];
 
 const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");

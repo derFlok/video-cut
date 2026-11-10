@@ -9,7 +9,7 @@ function rate(fps) {
   return String(fps);
 }
 
-function startFfmpeg(out, size, fps, opaque = false) {
+function startFfmpeg(out, size, fps, opaque = false, encode = null) {
   // An opaque slide clip: ProRes 422 HQ without alpha; an overlay: ProRes 4444 with alpha.
   const codec = opaque ? ["-profile:v", "3", "-pix_fmt", "yuv422p10le"] : ["-profile:v", "4444", "-pix_fmt", "yuva444p10le"];
   const ff = spawn(
@@ -17,12 +17,15 @@ function startFfmpeg(out, size, fps, opaque = false) {
     [
       "-y", "-loglevel", "error",
       "-f", "image2pipe", "-framerate", rate(fps), "-c:v", "png", "-i", "-",
-      // BT.709 limited range, tagged: render composites it into a BT.709 reel (an
-      // untagged RGB -> YUV conversion would use BT.601 and shift the brand colours).
-      "-vf", `scale=${size[0]}:${size[1]}:out_color_matrix=bt709:out_range=tv`,
-      "-c:v", "prores_ks", ...codec,
-      "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-      "-color_range", "tv", out,
+      ...(encode || [
+        // BT.709 limited range, tagged: render composites it into a BT.709 reel (an
+        // untagged RGB -> YUV conversion would use BT.601 and shift the brand colours).
+        "-vf", `scale=${size[0]}:${size[1]}:out_color_matrix=bt709:out_range=tv`,
+        "-c:v", "prores_ks", ...codec,
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+        "-color_range", "tv",
+      ]),
+      out,
     ],
     { stdio: ["pipe", "ignore", "pipe"] },
   );
@@ -47,4 +50,10 @@ function startFfmpeg(out, size, fps, opaque = false) {
   return { write, end: () => (ff.stdin.end(), done), kill: () => ff.kill("SIGKILL") };
 }
 
-module.exports = { rate, startFfmpeg };
+// The glass mask (lib/glass.js): PNG frames (white plates on transparent) -> their alpha as
+// gray, lossless FFV1 (mostly empty frames: a few kB each).
+function startMask(out, size, fps) {
+  return startFfmpeg(out, size, fps, false, ["-vf", "alphaextract,format=gray", "-c:v", "ffv1", "-level", "3", "-g", "1"]);
+}
+
+module.exports = { rate, startFfmpeg, startMask };
