@@ -57,6 +57,7 @@
 | `edl check [file]`, `edl snap [--dry-run]`, `edl locate <t> [--source]` | `edl.py` |
 | `slides check [job]`, `slides stills [job] [--id]`, `slides render [job] [--force]` | `slides.py` |
 | `material fetch [job] [--wish N --query/--prompt]`, `material generate`, `material choose <job> <n> <id\|none>`, `material show [job]`, `job material [job] [--mode] [--wish]` | `material.py`, `_material_providers/`, `_job_material.py` |
+| `motion spans\|stills [--id] [--at]\|render [--id] [--force] [--jobs N]\|show\|catalogue\|plan-stills`, `job motion [job] [--mode off\|auto\|wish] [--wish]` | `motion.py`, `_job_motion.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
 
@@ -68,7 +69,7 @@ framing, face track in output px, safe zones; shared by render, overlays and ver
 their filter graph; shared by render, overlays and verify), `_verify_screen.py` (the
 product-demo checks of verify), `_verify_slides.py` (the slide checks of verify), `_ocr.py` (local text recognition: macOS Vision through ctypes),
 `_pdf.py` (PDF pages → PNG, macOS CoreGraphics in a child process), `_job_slides.py` (job slide settings, page import),
-`_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
+`_verify_motion.py` (the motion checks of verify), `_audio_env.py` (energy envelope of `audio.wav` in video time), `_snap.py` (cut-point
 snapping, quiet room for crossfades, cut points in speech), `_verify_audio.py`
 (`speech_clipped`), `_style.py` (cut styles).
 
@@ -110,6 +111,11 @@ work/      probe.json, audio_raw.wav, audio.wav (+ audio.json), proxy.mp4       
            slides/stills/<id>.jpg, <id>_sm.jpg (≤ 960 px), <id>.layout.json    slides stills
            slides/<id>.mov, <id>.json (layout report), <id>.spec.json           slides render
            material.json, material/<n>/c<k>.mp4|jpg|png, c<k>_sm.jpg           material fetch
+           motion/spans.json, motion/<id>/motion.json                            motion spans
+           motion/<id>/scene.js (overlay run), motion_report.md                 overlay run
+           motion/<id>/clip.mov, events.json, clip.json                         motion render
+           motion/<id>/stills/t*.png, sheet.jpg                                 motion stills
+           plan_stills/motion_<id>.jpg                                          motion plan-stills
 out/       preview.mp4 | reel.mp4, cover.jpg, render.json                        render
            verify.json, verify/cut_NN.jpg, captions_NN.jpg, overlays_NN.jpg,
            slides_NN.jpg                                                         verify
@@ -887,6 +893,82 @@ per-slide change, both `POST plan/feedback {text, slide}` (the id goes into
 `work/plan_feedback.json` `slide`; an unknown id is a 400). Job detail `slides` = `{mode,
 wish, pages, stale, marks}`; `marks` are the slide moments in output seconds from the EDL
 (consecutive segments of one slide merged), drawn as a strip under the result player.
+
+## Motion (`tools/motion.py`, `renderer/motion.js`, `renderer/motion/`)
+
+Animated scenes in a band above the speaker, written by Claude per span, rendered by the
+sandboxed scene renderer of the spike (`docs/spikes/motion.md`: runtime, seek contract,
+sandbox, determinism). This section is the pipeline around it.
+
+**Setting.** job.json `motion` = `{mode: off|auto|wish, wish}` (`_job_motion.py`, absent =
+off); human only (`job motion`, `run --motion-mode/--motion-wish`, the new-job form field
+`motion_mode`/`motion_wish`); the plan records what it was made for (`plan_motion`), a
+change makes it stale and revokes an approval, like slides and material.
+
+**Plan gate.** The plan run writes plan.json `motion` = `[{id: "m1", src: [s0, s1]
+(source s), components, shows, beats: {id: {word, n?, edge?, offset?}}, why, still?}]` and
+the same as a *Motion* table in project.md. `plan check` (`motion.plan_errors`): off → none;
+ids `m<n>` unique; both ends inside keep rows; no two moments overlap; components from
+`renderer/motion/CATALOGUE.md` (`## \`name\`` headings; the spike's five without it);
+every beat resolves on the words spoken inside `src` (the renderer's `resolveBeats` rules,
+ported). `motion plan-stills` writes `work/plan_stills/motion_<id>.jpg` (the source frame
+in the middle of the moment, cropped to the output aspect around the face, the band drawn)
+and its path into `still`. The app's plan view shows one card per moment (still,
+components, what the band shows, the beat list, feedback/removal through plan feedback).
+The approval binds plan.json's SHA-256, so moments and beats are approved with the plan.
+
+**Spans (interface 3).** `build_spans` takes the moments of the **approved** plan.json
+only (nothing when it changed since the approval or motion is off), maps the transcript
+through the EDL like the captions, and per moment (in output order) keeps its own words:
+`t0` = first word − 0.15 s (never before the previous span's end), `t1` = last word +
+0.45 s (never after the next moment's start − 0.15 s, nor the reel's end). The region is
+`[side, top safe zone, w − side, min over the span of (face top + 20 % of the face height)]`
+from the same face track overlays use (a third of the height without a face). Dropped,
+with the reason: words cut, shorter than 1.5 s, longer than 60 s, on a slide layout, band
+lower than 12 % of the frame, a beat not spoken. `work/motion/spans.json` = `[{id, t0, t1,
+region, scene, beats}]`; per span `motion.json` = the renderer spec with `offset` = t0,
+the span's words in scene time and the resolved tokens of the job's brand (the only
+design source).
+
+**Render.** `motion render` runs `node renderer/motion.js <motion.json> --region-only --out
+clip.mov --events events.json` for every span whose `scene.js` exists, `VIDEOCUT_MOTION_JOBS`
+(default 2) pages at once (measured on an M3 Pro, 3 spans / 18.6 s: 1 page 26.7 s, 2 pages
+12.8 s, 3 pages 11.1 s; each page ~0.8 GB). `events.json` `[{t, kind, component, strength}]`
+is in output seconds (interface 2, read by the sound effects). `clip.json` keeps `place_at`,
+`out_size`, frames and the spec hash. The SHA-256 of clip, events and report plus the
+spec hash (spec + scene + font files + renderer code) go to
+`$VIDEOCUT_HOME/state/<job>/motion_render.json`; a clip is reused while all match
+(`status`: ok, no_scene, missing, stale, untrusted). `videocut tool render` calls the same
+`ensure_clips` (a failing scene is left out with a warning) and lays each clip over the
+picture (`motion.composite_graph`: own frame grid, first frame at round(t0 · fps), BT.709
+→ the cut's matrix, 4:4:4 alpha blend, scaled for previews); render.json `motion` lists
+them.
+
+**Captions and the band.** `overlays` adds a view `{layout: "motion", screen: band,
+motion: id}` per span: the renderer treats it as a hard block (`render.js` `validViews`),
+overlay items are cut off the spans like off slides (`off_slides`), and during a span the
+face track counts only down to 72 % of the face height, so captions may sit on chin and
+neck while the band takes the top (the spike's close-up rule). overlays.json `motion` /
+`motion_dropped`. Captions are never hidden for a band; verify checks that the band does
+not repeat them instead.
+
+**Verify** (`_verify_motion.py`, verify.json `motion` + `motion_flagged`, part of `ok`):
+`motion_dropped`, `motion_missing`, `motion_untrusted`, `motion_stale`,
+`motion_not_composited`; `motion_static`: ffmpeg `freezedetect=n=-50dB:d=0.6` over the clip
+laid on grey, ignoring the first and last 0.3 s; from 4 RGBA samples per second: the drawn
+box (alpha bounding box, output px) → `overlay_on_face` (> 2 % of the face box below the
+brow line) and `motion_caption_overlap` (> 10 % of the smaller box with a caption on
+screen); twice per second the band's text read locally (Vision) →
+`motion_repeats_caption` when ≥ 3 of its words (≥ 3 letters) and ≥ 60 % of them are
+caption words within ±1.5 s. Without text recognition this is a warning, not a pass.
+
+**Skills.** The plan skill proposes moments (*Motion*: show, never repeat; when; beats).
+The overlays skill writes `work/motion/<id>/scene.js`, renders beat stills and reads one
+contact sheet per span and round (≤ 3 rounds), follows the rules (show-not-repeat, one main
+component, headline on a card, an event every 0.5 s, hand over, brand style, inside the
+band) and writes `work/motion_report.md`. Agent runs read only the job folder, so
+`motion catalogue` prints the catalogue. `run` fails an overlay run that changed
+work/plan.json.
 
 ## EDL (`src/videocut/edl.py`)
 

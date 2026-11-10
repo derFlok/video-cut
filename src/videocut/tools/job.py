@@ -30,6 +30,8 @@ Layout of $VIDEOCUT_HOME/jobs/<id>/:
                plan_slides records what the plan was made for; _job_slides.py),
                material (optional {mode: none|stock|generated|both, wish}; absent: none;
                plan_material records what the plan was made for; _job_material.py),
+               motion (optional {mode: off|auto|wish, wish}; absent: off; plan_motion
+               records what the plan was made for; _job_motion.py),
                vocabulary (optional transcript vocabulary of this video, tools/vocab.py:
                [{term, variants, note?}]; merged with the brand's, the job wins),
     input/     the recording (hard link or copy, never moved) and other uploads;
@@ -65,7 +67,16 @@ from pathlib import Path
 from .. import brand
 from .. import redaction as red
 from ..paths import state_dir
-from . import _format, _job_material, _job_slides, _length, _redact_style, _style, vocab
+from . import (
+    _format,
+    _job_material,
+    _job_motion,
+    _job_slides,
+    _length,
+    _redact_style,
+    _style,
+    vocab,
+)
 from .common import (
     ID_RE,
     JOB_FILE,
@@ -227,6 +238,11 @@ def approve_job(job: Path) -> dict:
     if _job_material.plan_stale(job, data):
         raise ToolError(
             f"the plan was made for other material: plan again (`videocut run {job.name} --replan`)"
+        )
+    if _job_motion.plan_stale(job, data):
+        raise ToolError(
+            f"the plan was made for another motion setting: plan again "
+            f"(`videocut run {job.name} --replan`)"
         )
     try:
         cands = red.load(job) or []  # what the human saw; stays redacted (redaction.enforced)
@@ -713,6 +729,13 @@ def show(args) -> dict:
             + ("; the plan was made for other material, stale" if mat["stale"] else "")
             + "; chosen material: `videocut tool material show`"
         )
+    out["motion"] = mo = _job_motion.view(job, data)
+    if mo["mode"] != "off":
+        print(
+            f"motion: {mo['mode']}"
+            + (f"; wish: {mo['wish']}" if mo["wish"] else "")
+            + ("; the plan was made for another motion setting, stale" if mo["stale"] else "")
+        )
     return out
 
 
@@ -992,6 +1015,7 @@ def register(subparsers) -> None:
     _register_redact_style(sub)
     _job_slides.register(sub, job_parent)
     _job_material.register(sub, job_parent)
+    _job_motion.register(sub, job_parent)
 
 
 # --- redaction style (_redact_style.py) ----------------------------------------------------

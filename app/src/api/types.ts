@@ -47,6 +47,39 @@ export interface JobSlides {
   /** Where the reel shows each slide (output seconds). */
   marks: { id: string; t0: number; t1: number; layout?: string | null }[];
 }
+/** Motion scenes of a job (job.json "motion"): animated scenes in a band above the speaker. */
+export type MotionMode = "off" | "auto" | "wish";
+export const MOTION_MODES: MotionMode[] = ["off", "auto", "wish"];
+export const MOTION_WISH_MAX = 2000;
+
+/** A beat of a motion moment: an event of the scene on a spoken word. */
+export interface MotionBeat {
+  word: string;
+  n?: number;
+  edge?: "start" | "end";
+  offset?: number;
+}
+
+/** A motion moment of the plan (plan.json "motion"; source seconds). */
+export interface PlanMotion {
+  id: string;
+  src: [number, number];
+  components: string[];
+  /** What the band shows (never the spoken words again). */
+  shows: string;
+  beats: Record<string, MotionBeat>;
+  why?: string;
+  still?: string | null;
+}
+
+/** Job detail "motion": the setting and the motion check of the last verify. */
+export interface JobMotion {
+  mode: MotionMode;
+  wish: string;
+  stale: boolean;
+  spans?: { id: string; t0: number; t1: number; flags?: string[] }[];
+}
+
 /** Material of a job (job.json "material"): stock footage, AI-generated stills, both. */
 export type MaterialMode = "none" | "stock" | "generated" | "both";
 export const MATERIAL_MODES: MaterialMode[] = ["none", "stock", "generated", "both"];
@@ -429,6 +462,7 @@ export interface JobDetail {
   plan_target_s?: number | null;
   slides?: JobSlides;
   material?: JobMaterial;
+  motion?: JobMotion;
   /** Where the job waits for the human (status "waiting"). */
   gate?: "plan" | "material" | "result" | null;
   /** Length of the camera recording (work/probe.json), for the duration hints. */
@@ -466,6 +500,7 @@ export interface PlanJson {
   personal_data?: PdCandidate[];
   slides?: PlanSlide[];
   material_wishes?: MaterialWish[];
+  motion?: PlanMotion[];
   risks?: (string | { text?: string; [k: string]: unknown })[];
   change_note?: string;
   /** The target the plan was made for and its estimate of the output length (seconds). */

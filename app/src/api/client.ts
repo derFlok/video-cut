@@ -18,6 +18,7 @@ import type {
   JobVocabulary,
   ImageModelStatus,
   MaterialMode,
+  MotionMode,
   MaterialSettings,
   MaterialView,
   LabelSettings,
@@ -243,6 +244,9 @@ export const api = {
       /** Material: stock footage and/or AI-generated stills, with a free-text wish. */
       material_mode?: MaterialMode;
       material_wish?: string;
+      /** Motion scenes: off, auto, or following a free-text wish. */
+      motion_mode?: MotionMode;
+      motion_wish?: string;
     },
     onProgress: (p: UploadProgress) => void,
     signal?: AbortSignal,
@@ -261,6 +265,8 @@ export const api = {
     for (const f of fields.slides ?? []) form.append("slides", f);
     if (fields.material_mode && fields.material_mode !== "none") form.append("material_mode", fields.material_mode);
     if (fields.material_wish) form.append("material_wish", fields.material_wish);
+    if (fields.motion_mode && fields.motion_mode !== "off") form.append("motion_mode", fields.motion_mode);
+    if (fields.motion_wish) form.append("motion_wish", fields.motion_wish);
     form.append("camera", fields.camera);
     if (fields.screen) form.append("screen", fields.screen);
     for (const a of fields.assets ?? []) form.append("assets", a);

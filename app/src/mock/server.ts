@@ -211,6 +211,13 @@ function planFor(title: string, variant = 0, note?: string): Plan {
       { id: "s1", template: "steps", content: { steps: ["Anfrage", "Prüfen", "Antworten"] }, t0: 13.0, t1: 19.5, layout: "slide", why: "Der Ablauf in drei Schritten.", source: "auto", still: "work/slides/stills/s1.jpg" },
       { id: "s2", template: "image", content: { asset: "input/slides/page_02.png" }, t0: 52.0, t1: 56.0, layout: "slide_full", why: "Deine Folie zum Schluss.", source: "upload", still: "work/slides/stills/s2.jpg" },
     ],
+    motion: [
+      {
+        id: "m1", src: [31.5, 38.0], components: ["checklist"], shows: "Die drei Schritte haken sich ab",
+        beats: { a1: { word: "Anfrage" }, a2: { word: "prüfen" }, a3: { word: "antworten", edge: "end" } },
+        why: "Der Ablauf ist die Botschaft.", still: "work/plan_stills/motion_m1.jpg",
+      },
+    ],
     risks: ["Bildschirmaufnahme bei 0:31 ist klein; Zoom auf höchstens 1,6×.", "Ton am Ende leicht hallig."],
     estimated_s: variant > 0 ? 44 : 41,
   };

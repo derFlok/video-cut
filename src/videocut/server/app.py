@@ -26,6 +26,7 @@ from .. import run as pipeline
 from ..tools import (
     _format,
     _job_material,
+    _job_motion,
     _job_slides,
     _length,
     _redact_style,
@@ -408,6 +409,8 @@ def create_app(
                     "slides_wish",
                     "material_mode",
                     "material_wish",
+                    "motion_mode",
+                    "motion_wish",
                 },  # fmt: skip
                 field_caps={"slides": (MAX_SLIDE_FILES, MAX_SLIDE_BYTES)},
             )
@@ -996,6 +999,8 @@ def _new_job(form) -> dict:
     try:
         material_mode = _job_material.parse_mode(f.get("material_mode") or "none")
         material_wish = _job_material.parse_wish(f.get("material_wish"))
+        motion_mode = _job_motion.parse_mode(f.get("motion_mode") or "off")
+        motion_wish = _job_motion.parse_wish(f.get("motion_wish"))
     except ToolError as e:
         raise HTTPException(400, str(e)) from None
     if slide_files and slides_mode in ("none", "auto"):
@@ -1028,6 +1033,8 @@ def _new_job(form) -> dict:
         _new_job_settings(job, brand_ref, words, f, slide_files, slides_mode, slides_wish)
         if material_mode != "none" or material_wish:
             _job_material.set_material(job, material_mode, material_wish, say=lambda _: None)
+        if motion_mode != "off" or motion_wish:
+            _job_motion.set_motion(job, motion_mode, motion_wish, say=lambda _: None)
     except HTTPException:
         shutil.rmtree(job, ignore_errors=True)  # no half-made job is left behind
         raise

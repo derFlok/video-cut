@@ -30,6 +30,7 @@ MODULES = [
     "slides",
     "transcript",
     "material",
+    "motion",
 ]
 
 

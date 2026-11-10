@@ -26,6 +26,10 @@
              after the last spoken word), the reel gets a held tail: the last frame
              repeats under the card, the audio is padded with silence after loudnorm
              (render.json "tail_s"; output_duration includes it)
+    motion   every span of an approved motion moment (tools/motion.py) whose scene exists:
+             work/motion/<id>/clip.mov (rendered here when missing or stale, trusted only
+             through its record) is laid over the picture at its band from round(t0 * fps)
+             on (render.json "motion"); a failing scene is left out with a warning
     slides   segments with "layout" slide/slide_split/slide_full show the slide's opaque clip
              (work/slides/<id>.mov from `videocut tool slides render`, run here when a clip
              is missing or stale) with the speaker as a round bubble / beside it
@@ -79,6 +83,7 @@ from . import (
     _broll,
     _c2pa,
     _disclosure,
+    _job_motion,
     _layouts,
     _plates,
     _redact_blur,
@@ -86,6 +91,7 @@ from . import (
     _snap,
 )
 from . import _render_plan as plan_mod
+from . import motion as motion_mod
 from . import slides as slides_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed, sized
@@ -433,6 +439,28 @@ def render(args) -> dict:
             "the EDL has captions/overlays but there is no work/overlay.mov; run "
             "`videocut tool overlays` first"
         )
+    motion_docs = []
+    if _job_motion.stored(read_job(job))["mode"] != "off":
+        try:
+            mres = motion_mod.ensure_clips(job)
+        except ToolError as e:
+            mres = None
+            warnings.append(f"motion scenes left out: {e}")
+        if mres:
+            warnings += [f"motion {d['id']} dropped: {d['why']}" for d in mres["dropped"]]
+            warnings += [f"motion {i}: no scene yet" for i in mres["no_scene"]]
+            if mres["clips"]:
+                text, v_out = motion_mod.composite_graph(
+                    mres["clips"], inputs.count("-i"), plan.fps, ow / edl.size[0], v_out,
+                    overlay_matrix(info),
+                )  # fmt: skip
+                graph = graph.rstrip("\n") + text
+                for c in mres["clips"]:
+                    inputs += ["-i", str(c["clip"])]
+                motion_docs = [
+                    {k: c[k] for k in ("id", "t0", "t1", "place_at", "size", "events")}
+                    for c in mres["clips"]
+                ]
     graph_file = work / "render_filter.txt"
     _write_graph(graph_file, graph)
 
@@ -526,6 +554,8 @@ def render(args) -> dict:
         report["screen_zoom_clamped"] = clamped
     if slide_docs:
         report["slides"] = slide_docs
+    if motion_docs:
+        report["motion"] = motion_docs
     if broll_docs:
         report["broll"] = broll_docs
     if red_source != "none" or styles:
@@ -574,6 +604,7 @@ def render(args) -> dict:
         "screen_zoom_clamped": clamped,
         "slides": slide_docs,
         "broll": broll_docs,
+        "motion": motion_docs,
         "speaker": speaker,
         "redaction": report.get("redaction"),
         "snap": report.get("snap"),

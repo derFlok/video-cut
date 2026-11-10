@@ -141,6 +141,72 @@ those words. No card, keyword, number, list or screenshot during ANY slide layou
 No overlay repeating a slide's words or numbers elsewhere either. Never change
 `work/slides.json` or a slide segment (the run fails otherwise).
 
+## 3b. Motion scenes (only when `job show` → `motion.mode` is not `off`)
+
+The human approved **motion moments** with the plan (`work/plan.json` `motion`): an
+animated scene in a band above the speaker's head for a stretch of words. You write one
+scene module per moment; you never add, move or drop a moment, and never edit
+`work/plan.json`, `work/motion/spans.json`, `motion.json`, `clip.*` or `events.json`
+(the tools write them; the run fails or verify flags `motion_untrusted`).
+
+1. `videocut tool motion spans` → per span `id`, `t0`/`t1` (output s), `region` (the band,
+   output px), `words` (what is said in it), `beat_times` (scene seconds of each beat of
+   the approved beat sheet), `components`, `shows`; `dropped` moments are reported, not
+   fixed by you. `videocut tool motion catalogue` → every component: what it shows, its
+   props, the sound cues it emits, min/max duration.
+2. Write `work/motion/<id>/scene.js` for each span:
+
+   ```js
+   export default function scene(vc) {
+     const { c, beat: b, stage } = vc;   // components, beat times, the band
+     const list = c.checklist(stage, { label: "…", items: [{ text: "…", at: b("a1"), check: b("a1") + 0.35 }] });
+     vc.tl.add(list, { scale: [{ to: 1.04 }, { to: 1 }] }, vc.ms(b("a3")));   // a micro-event
+   }
+   ```
+   `vc.at(word, n)` / `vc.end(word, n)` give further word times, `vc.duration` the span
+   length, `vc.onSeek(t => …)` a pure function of t for digits and text. Scene time 0 is
+   the span start.
+3. **Rules** (the reviewer of the reel checks each one):
+   - **Show, never repeat.** The band shows what is meant: the number, the list ticking
+     off, the chart growing, the comparison, the struck option and its answer, a rebuilt
+     UI. Text in the band is a label or an item, never the spoken sentence again (verify:
+     `motion_repeats_caption`). Follow the approved `shows`.
+   - **One main component at a time** in the band; a headline always sits on a card.
+   - **Something happens at least every 0.5 s** while the span runs: items, ticks,
+     counters, per-word emphasis, a nudge or a tally on the beats in between (verify:
+     `motion_static` for > 0.6 s without visible change).
+   - **Hand over, never hard-swap:** the outgoing component leaves (or transforms) before
+     the next one enters; the last one leaves by the span end.
+   - **Brand style only:** colours, fonts, radius, depth, light/dark and energy come from
+     the brand (the components read them); never a colour, font or size literal (the
+     renderer refuses the scene). Stay inside the band: never below its bottom edge (the
+     eyes; verify: `overlay_on_face`).
+   - Words, numbers and names only as spoken (or in the human's motion wish).
+4. **Render, inspect, fix — at most 3 rounds per span:** `videocut tool motion stills --id
+   <id>` (one still 0.3 s after every beat) → read `work/motion/<id>/stills/sheet.jpg`
+   (one image per span and round; these are extra to the image budget above) → fix the
+   scene. Check: readable at phone size, nothing cut off, one thing at a time, the right
+   item on each beat, nothing that repeats the captions.
+5. `videocut tool motion render` (all spans; clips that did not change are kept), then
+   continue with step 4 below; `videocut tool overlays` keeps captions and cards off every
+   band by itself (captions may sit lower, on the chin, while a band runs).
+6. Write `work/motion_report.md`:
+
+   ```markdown
+   # Motion report
+   | Span | Output | Components | Shows | Rounds | Verify |
+   ## Rounds
+   - m1 r1: <what the sheet showed> → <what you changed>
+   ## Open doubts for the human
+   ```
+
+Motion flags in `videocut tool verify` (`motion_flagged`): `motion_static` → add
+micro-events between the beats; `motion_repeats_caption` → replace the repeated words by
+what they mean (a number, an icon list, a chart); `overlay_on_face` → smaller or higher,
+inside the band; `motion_caption_overlap` → keep inside the band; `motion_missing` /
+`motion_stale` / `motion_untrusted` → `videocut tool motion render` again;
+`motion_dropped` → note it in the report (the human decides).
+
 ## 4. Render, check, fix (max 2 rounds)
 
 1. `videocut tool edl check` until it passes.

@@ -69,6 +69,11 @@ of `videocut tool slides render` (trusted only as recorded): `slide_text_overflo
 `slide_stale` / `slide_unchecked`. A slide_full stretch is a still on purpose; in slide /
 slide_split the frozen check looks inside the speaker area only.
 out/verify/slides_NN.jpg: one tile per slide, near the end of its stretch.
+Motion (_verify_motion.py; tools/motion.py spans): `motion_dropped`, `motion_missing`,
+`motion_untrusted`, `motion_stale`, `motion_not_composited`, `motion_static` (no visible
+change for > 0.6 s inside a span), `motion_repeats_caption` (band text = caption words),
+`overlay_on_face` (the band's drawn box below the brow line) and `motion_caption_overlap`;
+verify.json "motion" (per span) and "motion_flagged".
 B-roll (_verify_broll.py; render.json "broll"): the middle frame of each stretch flags
 `broll_black` (mostly black) or `broll_aspect` (letterbox/pillarbox bars: not cropped to
 fill); check "broll". A broll segment shows no camera for the blink check. A b-roll image
@@ -97,7 +102,15 @@ import numpy as np
 from ..edl import Edl, EdlError, is_broll, load, output_spans
 from ..paths import tool_env
 from . import _image as im
-from . import _plates, _verify_ai, _verify_audio, _verify_broll, _verify_screen, _verify_slides
+from . import (
+    _plates,
+    _verify_ai,
+    _verify_audio,
+    _verify_broll,
+    _verify_motion,
+    _verify_screen,
+    _verify_slides,
+)
 from . import material as material_mod
 from . import overlays as overlays_mod
 from ._geometry import job_size, overlap, safe_zones, sized
@@ -905,10 +918,14 @@ def verify(args) -> dict:
         for d in slide_doc.get("slides", [])
         if d["flags"]
     ]
+    motion = _verify_motion.check(job, render, edl.captions if edl is not None else [],
+                                  boxes, face_track)  # fmt: skip
+    warnings += motion["warnings"]
+    motion_flagged = motion["flagged"]
     failed = [k for k, c in checks.items() if not c["ok"]]
     ok = (
         not failed and not flagged and not overlay_flagged and not screen_flagged
-        and not slide_flagged
+        and not slide_flagged and not motion_flagged
     )  # fmt: skip
     doc = {
         "ok": ok,
@@ -931,6 +948,8 @@ def verify(args) -> dict:
         "screen_zoom_clamped": demo.get("clamped", []),
         "slides": slide_doc.get("slides", []),
         "slide_flagged": slide_flagged,
+        "motion": motion["spans"],
+        "motion_flagged": motion_flagged,
         "broll": broll_docs,
         "slide_sheets": [str(p.relative_to(job)) for p in sl_sheets],
         "caption_sheets": [str(p.relative_to(job)) for p in sheets],
@@ -949,6 +968,8 @@ def verify(args) -> dict:
         print(f"screen {d['check']} {where}: {', '.join(d['flags'])}")
     for d in slide_flagged:
         print(f"slide {d.get('id')}: {', '.join(d['flags'])}")
+    for d in motion_flagged:
+        print(f"motion {d.get('id')}: {', '.join(d['flags'])}")
     for d in broll_docs:
         if d["flags"]:
             print(f"b-roll segment {d['segment']} at {d['t']}s: {', '.join(d['flags'])}")
@@ -967,6 +988,7 @@ def verify(args) -> dict:
         "overlay_flagged": overlay_flagged,
         "screen_flagged": screen_flagged,
         "slide_flagged": slide_flagged,
+        "motion_flagged": motion_flagged,
         "screen_zoom_clamped": demo.get("clamped", []),
         "failed": failed,
         "warnings": warnings,

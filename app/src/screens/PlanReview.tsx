@@ -6,6 +6,7 @@ import { LiveLog } from "../components/LiveLog";
 import { Markdown } from "../components/Markdown";
 import { PlanMaterialWishes } from "../components/Material";
 import { SlideCards } from "../components/Slides";
+import { MotionCards } from "../components/Motion";
 import { TargetPanel } from "../components/TargetLength";
 import { clockFine, useI18n } from "../i18n";
 import type { Live } from "./JobPage";
@@ -78,7 +79,8 @@ export function PlanReview({ live }: { live: Live }) {
     job.status !== "running" &&
     !job.plan_target_stale &&
     !job.slides?.stale &&
-    !job.material?.stale;
+    !job.material?.stale &&
+    !job.motion?.stale;
   const canAsk = !job.approved && !revising && !live.running;
 
   const sendAsk = async (e: FormEvent) => {
@@ -166,6 +168,11 @@ export function PlanReview({ live }: { live: Live }) {
 
       {plan && <TargetPanel live={live} plan={plan.plan} onReplan={(text) => void askClaude(text)} />}
 
+      {plan && job.motion?.stale && (
+        <p className="banner banner-warn" data-testid="motion-stale">
+          {t("motion.stale")}
+        </p>
+      )}
       {plan && job.slides?.stale && (
         <p className="banner banner-warn" data-testid="slides-stale">
           {t("slides.stale")}
@@ -367,6 +374,10 @@ export function StructuredPlan({
 
       {plan.slides && plan.slides.length > 0 && (
         <SlideCards jobId={jobId} slides={plan.slides} keep={plan.keep_list} canAsk={canAsk} onAsk={onSlide} />
+      )}
+
+      {plan.motion && plan.motion.length > 0 && (
+        <MotionCards jobId={jobId} moments={plan.motion} canAsk={canAsk} onAsk={(text) => onSlide(text, "")} />
       )}
 
       {plan.material_wishes && plan.material_wishes.length > 0 && <PlanMaterialWishes wishes={plan.material_wishes} />}

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Added — Motion: animated scenes in the pipeline (tool, plan gate, verify, render, app)
+- `videocut tool motion spans|stills|render|show|catalogue|plan-stills` (tools/motion.py,
+  replaces `scripts/motion_spike.py`): spans (`work/motion/spans.json`) only from the
+  approved plan.json `motion` moments, mapped through the EDL; the band from the face track
+  (top safe zone to face top + 20 %); the job's brand profile as the only design source;
+  `--region-only` clips + `events.json` per span, several pages at once (default 2:
+  3 spans / 18.6 s rendered in 12.8 s instead of 26.7 s on one page), a trust record
+  outside the job folder (`state/<job>/motion_render.json`), reuse while spec, scene, fonts
+  and renderer are unchanged.
+- Job option `motion` off|auto|wish (`job motion`, `run --motion-mode/--motion-wish`, the
+  new-job form); a plan made for another setting is stale, like slides and material.
+- Plan gate: plan.json `motion` [{id, src, components, shows, beats, why, still}] checked by
+  `plan check` (every beat word spoken inside its moment, components from the catalogue);
+  the app shows each moment with a still of the band, its components, what it shows and
+  the beat list; feedback or removal per moment.
+- Overlays: each band is a hard block (captions and cards keep off it, cards inside a span
+  are cut like on slides); during a span the face counts to 72 % of its height for the
+  caption layout.
+- Verify: `motion_dropped`, `motion_missing`, `motion_untrusted`, `motion_stale`,
+  `motion_not_composited`, `motion_static` (> 0.6 s without change, freezedetect −50 dB),
+  `motion_repeats_caption` (band text read locally vs the captions around it),
+  `overlay_on_face` (drawn band box), `motion_caption_overlap`.
+- Render composites every span's clip at its offset and place (render.json `motion`).
+- Skills: the plan proposes moments (show, never repeat; beat sheet); the overlays skill
+  writes one scene per span, inspects beat stills (max 3 rounds), follows the rules (one
+  main component, headline on a card, an event every 0.5 s, hand over, brand style) and
+  writes `work/motion_report.md`. The overlay run fails when it changes work/plan.json.
+
 ### Added — Spike: Claude-authored motion scenes (branch only, see docs/spikes/motion.md)
 - `renderer/motion.js`: renders a scene module written per span (HTML/SVG/CSS on an
   anime.js 4.5.0 timeline, MIT) in a sandboxed page (own origin, request filter, CSP
@@ -14,7 +42,8 @@
   kinetic headline. Covered by the token lint; scene modules are checked for colour and
   font literals before they load.
 - `renderer/lib/ffmpeg.js` (encoder shared by render.js and motion.js),
-  `scripts/motion_spike.py` (motion.json for a span of a finished job).
+  `scripts/motion_spike.py` (motion.json for a span of a finished job; now replaced by
+  `videocut tool motion`).
 
 ### Added — Material: Openverse as key-less stock image source
 - `openverse` stock provider (images only, no key): `api.openverse.org/v1/images/` with

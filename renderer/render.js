@@ -472,9 +472,11 @@ function validViews(views) {
   for (const v of Array.isArray(views) ? views : []) {
     if (!span(v)) continue;
     if (box(v.screen)) {
+      // the slide part of a slide_split view and a motion band (tools/motion.py) are hard
       const split = v.layout === "slide_split";
+      const hard = split || v.layout === "motion";
       const seam = split && Number.isFinite(v.seam) && box(v.content) ? { seam: v.seam, content: v.content.slice() } : {};
-      out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice(), hard: split, ...seam });
+      out.push({ t0: v.t0, t1: v.t1, screen: v.screen.slice(), hard, ...seam });
     }
     for (const f of Array.isArray(v.focus) ? v.focus : []) {
       if (span(f) && box(f.box)) out.push({ t0: f.t0, t1: f.t1, screen: f.box.slice() });

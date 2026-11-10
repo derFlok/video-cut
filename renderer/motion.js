@@ -68,6 +68,7 @@ function parseArgs(argv) {
       if (!a.stillTimes.length || !a.stillTimes.every(Number.isFinite)) throw new UsageError("--stills needs <dir> <t,t,...>");
     } else if (arg === "--frame-timeout") a.frameTimeout = Number(rest.shift());
     else if (arg === "--region-only") a.regionOnly = true;
+    else if (arg === "--events") a.events = rest.shift();
     else if (arg.startsWith("--")) throw new UsageError(`unknown option ${arg}`);
     else if (!a.input) a.input = arg;
     else throw new UsageError(`unexpected argument ${arg}`);
@@ -327,6 +328,17 @@ async function main() {
       ms_per_frame: { draw_and_capture: Math.round(drawMs / n), encode_wait: Math.round(encMs / n) },
     });
     if (args.out) Object.assign(summary, { out: args.out, out_size: outSize, place_at: clip ? [clip.x, clip.y] : [0, 0] });
+    // --events: the sound cues the scene emitted (vc.cue, interface 2) in output seconds.
+    if (args.events) {
+      const off = Number.isFinite(spec.offset) ? spec.offset : 0;
+      const cues = await page.evaluate(() => (Array.isArray(window.__vc.events) ? window.__vc.events : []));
+      const events = cues
+        .filter((e) => e && Number.isFinite(e.t) && typeof e.kind === "string")
+        .map((e) => ({ t: Math.round((e.t + off) * 1000) / 1000, kind: e.kind, component: e.component || null, strength: Number.isFinite(e.strength) ? e.strength : 1 }))
+        .sort((a, b) => a.t - b.t);
+      fs.writeFileSync(args.events, JSON.stringify(events) + "\n");
+      summary.events = events.length;
+    }
     summary.requests = { ...served, blocked: blocked.length };
   } finally {
     if (ff) ff.kill();
