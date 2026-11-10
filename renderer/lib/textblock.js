@@ -37,7 +37,7 @@ function layoutBlock(ctx, env, texts, { px, role = "heading", maxLines = 3, posi
   let clear = null; // the largest attempt clear of the face, in no band
   // `seam`: a caption goes on the seam of a stacked slide_split view on screen meanwhile.
   const sm = seam && env.seamDuring ? env.seamDuring(t0, t1) : null;
-  for (const k of [1, 0.85, 0.72, 0.6]) {
+  for (const k of [1, 0.93, 0.86, 0.8, 0.74, 0.68, 0.6]) {
     L = attempt(ctx, env, texts, { px: px * k, role, maxLines, position, anchor, share, reserve, sm, t0, t1 });
     if (!L.overlapsFace && L.fits && L.band !== "other") break;
     if (!L.overlapsFace && L.fits) clear = clear || L;

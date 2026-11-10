@@ -26,11 +26,12 @@ function luminance(hex) {
 function palette(tokens) {
   const c = style.captionColors(tokens);
   const raw = tokens.colors || {};
+  const m = material.resolve(tokens);
   return {
     fill: c.box,
     text: c.text,
     accent: c.highlight,
-    muted: raw.muted || c.text,
+    muted: m.depth === "glass" ? m.muted : raw.muted || c.text,
     sparing: !/frei|free/i.test(String(raw.accent_usage || "")),
   };
 }

@@ -11,9 +11,10 @@ the picture; then the overlay (tint, specular edge, grain, content) goes on top.
 
 Vibrancy: `backdrop_range` measures the luminance the frost can have in this job (the
 source's keyframes, tonemapped like the render, shrunk and blurred like the frost; the
-0.5th and 99.5th percentile of relative luminance). The renderers take it as
-tokens["glass_backdrop"] and pick a tint dense enough that text keeps its contrast over
-the darkest and the lightest frost actually in the video (lib/glass.js `tint`).
+0.5th, 99.5th and 50th percentile of relative luminance). The renderers take it as
+tokens["glass_backdrop"]: the median decides light or dark glass, the frost compresses
+the luminance towards it, and the tint is made dense enough that text keeps its contrast
+over the darkest and the lightest frost actually in the video (lib/glass.js).
 """
 
 import json
@@ -25,8 +26,9 @@ from ._color import to_sdr
 from .common import binary
 
 SAMPLE_W = 96  # px of the measuring frames (the frost has no detail to lose)
-FROST_SIGMA = 0.032  # share of the short side, as renderer/lib/glass.js FROST_SIGMA
-PERCENTILES = (0.005, 0.995)
+FROST_SIGMA = 0.064  # share of the short side, as renderer/lib/glass.js FROST_SIGMA
+PERCENTILES = (0.005, 0.995, 0.5)  # lmin, lmax, median (the glass polarity)
+VERSION = 2
 MAX_FRAMES = 48
 CACHE = "work/glass_backdrop.json"
 DOWN = 4  # the frost is blurred at a quarter of the size
@@ -46,11 +48,11 @@ def _lum(r: int, g: int, b: int) -> float:
 
 
 def backdrop_range(job: Path, src: Path, info: dict) -> list[float] | None:
-    """[lmin, lmax] relative luminance of the frost over the job's video (cached in
+    """[lmin, lmax, lmid] relative luminance of the frost over the job's video (cached in
     work/glass_backdrop.json per source file, size and mtime); None when it cannot be
     measured (the renderers then guard against black and white)."""
     st = src.stat()
-    key = {"source": str(src.resolve()), "size": st.st_size, "mtime": st.st_mtime}
+    key = {"source": str(src.resolve()), "size": st.st_size, "mtime": st.st_mtime, "v": VERSION}
     cache = job / CACHE
     try:
         doc = json.loads(cache.read_text())
@@ -79,8 +81,7 @@ def backdrop_range(job: Path, src: Path, info: dict) -> list[float] | None:
         buf = r.stdout[i * frame : (i + 1) * frame]
         lums += [_lum(buf[k], buf[k + 1], buf[k + 2]) for k in range(0, frame, 3)]
     lums.sort()
-    lo, hi = (lums[min(len(lums) - 1, int(p * len(lums)))] for p in PERCENTILES)
-    rng = [round(lo, 4), round(hi, 4)]
+    rng = [round(lums[min(len(lums) - 1, int(p * len(lums)))], 4) for p in PERCENTILES]
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps({"key": key, "frames": len(pick), "range": rng}) + "\n")
     return rng
@@ -91,6 +92,8 @@ def read_params(mask: Path) -> dict | None:
     try:
         p = json.loads(Path(f"{mask}.json").read_text())
         if all(isinstance(p.get(k), int | float) for k in ("sigma", "saturation", "brightness")):
+            if not isinstance(p.get("contrast"), int | float):
+                p["contrast"] = 1
             return p
     except (OSError, ValueError, AttributeError):
         pass
@@ -99,12 +102,15 @@ def read_params(mask: Path) -> dict | None:
 
 def frost_chain(w: int, h: int, params: dict, scale: float = 1.0) -> str:
     """Filter chain (no labels) turning a w x h picture into its frost at output `scale`
-    (the mask json's sigma is in renderer px)."""
+    (the mask json's sigma is in renderer px). eq: y -> (y - 0.5) * contrast + 0.5 +
+    brightness, the renderer chose brightness so the compression pivots on the backdrop's
+    mean (lib/glass.js `frost`)."""
     dw, dh = max(2, w // DOWN), max(2, h // DOWN)
     sigma = max(0.5, params["sigma"] * scale / DOWN)
     return (
         f"scale={dw}:{dh}:flags=area,gblur=sigma={sigma:.2f},"
-        f"eq=saturation={params['saturation']}:brightness={params['brightness']},"
+        f"eq=contrast={params.get('contrast', 1)}:saturation={params['saturation']}"
+        f":brightness={params['brightness']},"
         f"scale={w}:{h}:flags=bicubic,format=yuv444p"
     )
 

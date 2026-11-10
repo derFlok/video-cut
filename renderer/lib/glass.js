@@ -24,15 +24,26 @@
 })(typeof self !== "undefined" ? self : this, function () {
   "use strict";
   // Frost: Gaussian sigma as a share of the frame's short side; the composite blurs at a
-  // quarter of the size (the frost has no detail to lose), so this is ~35 px at 1080.
-  const FROST_SIGMA = 0.032;
-  const FROST_SATURATION = 1.5;
-  const FROST_BRIGHTNESS = { dark: -0.04, light: 0.05 };
-  // The material's own tint alpha (before the vibrancy guard): Apple's "regular" material.
-  const TINT = { dark: 0.48, light: 0.55 };
+  // quarter of the size (the frost has no detail to lose), so this is ~70 px at 1080: busy
+  // content under the glass (hair, a face, text) becomes an even, calm material.
+  const FROST_SIGMA = 0.064;
+  const FROST_SATURATION = 1.35;
+  // The frost's luminance is compressed towards the backdrop's own mean (FFmpeg `eq`
+  // contrast, pivoted on the mean) and lifted (light glass) or lowered (dark glass): the
+  // contrast for the ink comes mainly from here, a denser tint is the last resort.
+  const FROST_CONTRAST = 0.55;
+  const FROST_LIFT = { dark: -0.07, light: 0.1 };
+  // The material's own tint alpha before the vibrancy guard: light glass is a thin
+  // white-ish veil, dark glass a little denser.
+  const TINT = { dark: 0.42, light: 0.36 };
+  // Polarity: glass over a frost whose median relative luminance is at least this is light
+  // glass (white-ish tint, the brand's dark colour as ink), else dark glass. A bright wall
+  // under a dark tint reads as mud; Apple's materials follow what is under them.
+  const LIGHT_AT = 0.25;
+  // How much of the brand's surface hue the light tint keeps.
+  const LIGHT_HUE = 0.08;
   const MIN_CONTRAST = 4.5;
   const LARGE_CONTRAST = 3; // WCAG AA for large text: the accent words and figures
-
 
   function chan(hex) {
     const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || "").trim());
@@ -60,12 +71,23 @@
     const c = Math.round(Math.max(0, Math.min(1, v)) * 255);
     return [c, c, c];
   }
-  // A measured backdrop range [lmin, lmax] (relative luminance of the frost), else the
-  // full range (black .. white).
-  const span = (range) =>
-    Array.isArray(range) && range.length === 2 && range.every((v) => Number.isFinite(v) && v >= 0 && v <= 1) && range[0] <= range[1]
-      ? range
-      : [0, 1];
+  // A measured backdrop range [lmin, lmax] or [lmin, lmax, lmid] (relative luminance of the
+  // frost: 0.5th, 99.5th percentile and median) as [lmin, lmax]; the full range (black ..
+  // white) when there is none.
+  const valid = (range) =>
+    Array.isArray(range) && (range.length === 2 || range.length === 3) && range.every((v) => Number.isFinite(v) && v >= 0 && v <= 1) && range[0] <= range[1];
+  const span = (range) => (valid(range) ? range.slice(0, 2) : [0, 1]);
+  // The backdrop's typical luminance (the median when measured), or null.
+  const mid = (range) => (valid(range) ? (range.length === 3 ? range[2] : (range[0] + range[1]) / 2) : null);
+  // "light" | "dark" glass for a measured backdrop; `fallback` (the brand theme) without one.
+  const polarity = (range, fallback) => {
+    const m = mid(range);
+    return m == null ? (fallback === "light" ? "light" : "dark") : m >= LIGHT_AT ? "light" : "dark";
+  };
+  // sRGB encode/decode of a relative luminance (FFmpeg's eq works on the encoded value).
+  const enc = (l) => (l <= 0.0031308 ? 12.92 * l : 1.055 * l ** (1 / 2.4) - 0.055);
+  const dec = (v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
   // What the ink sits on at tint alpha `a` over the worst backdrop in `range` (luminance
   // [lmin, lmax] of the frost under the panel; black and white without one) and its ratio.
@@ -173,8 +195,8 @@
     return { width: w, height: h, data: px };
   }
 
-  // [lmin, lmax] of the frost over the generated backdrop (the 0.5th and 99.5th
-  // percentile of relative luminance after a blur like the frost's): the vibrancy guard's
+  // [lmin, lmax, lmid] of the frost over the generated backdrop (the 0.5th, 99.5th and
+  // 50th percentile of relative luminance after a blur like the frost's): the vibrancy guard's
   // range where the backdrop stands in for video (brand sheet).
   function backdropRange(w, h) {
     const sw = 64;
@@ -200,18 +222,36 @@
       }
     ls.sort((a, b2) => a - b2);
     const at = (p) => Math.round(ls[Math.min(ls.length - 1, Math.floor(p * ls.length))] * 10000) / 10000;
-    return [at(0.005), at(0.995)];
+    return [at(0.005), at(0.995), at(0.5)];
   }
 
-  // Frost parameters for a frame with short side `unit` and a dark|light theme (written
-  // next to the mask clip; `render` reads them from there).
-  function frost(unit, theme) {
+  // Frost parameters for a frame with short side `unit`, glass polarity `theme` and the
+  // measured backdrop `range` (written next to the mask clip; `render` reads them there).
+  // eq maps y -> (y - 0.5) * contrast + 0.5 + brightness; brightness is chosen so the
+  // compression pivots on the backdrop's own mean, then lifted/lowered.
+  function frost(unit, theme, range = null) {
+    const light = theme === "light";
+    const m = mid(range);
+    const y = enc(m == null ? (light ? 0.6 : 0.08) : m);
     return {
       sigma: Math.round(FROST_SIGMA * unit * 10) / 10,
       saturation: FROST_SATURATION,
-      brightness: FROST_BRIGHTNESS[theme === "dark" ? "dark" : "light"],
+      contrast: FROST_CONTRAST,
+      brightness: Math.round(((y - 0.5) * (1 - FROST_CONTRAST) + FROST_LIFT[light ? "light" : "dark"]) * 1000) / 1000,
     };
   }
 
-  return { LARGE_CONTRAST, grey, span, FROST_SIGMA, FROST_SATURATION, FROST_BRIGHTNESS, TINT, MIN_CONTRAST, chan, hex, withAlpha, lum, ratio, over, worst, tint, lift, accentOn, hash, grain, backdrop, backdropRange, frost };
+  // The luminance range of the frost itself: the measured backdrop range through the
+  // frost's eq (what the tint actually lies on).
+  function frostRange(range, f) {
+    const c = f.contrast == null ? 1 : f.contrast;
+    const map = (l) => dec(clamp01((enc(l) - 0.5) * c + 0.5 + f.brightness));
+    const [lo, hi] = span(range).map(map);
+    return [Math.round(Math.min(lo, hi) * 10000) / 10000, Math.round(Math.max(lo, hi) * 10000) / 10000];
+  }
+
+  // The light glass tint: white with a hint of the brand's surface hue.
+  const lightTint = (hueHex) => hex(chan(hueHex) ? [255, 255, 255].map((v, i) => v + (chan(hueHex)[i] - v) * LIGHT_HUE) : [255, 255, 255]);
+
+  return { LARGE_CONTRAST, grey, span, mid, polarity, frostRange, lightTint, LIGHT_AT, FROST_SIGMA, FROST_SATURATION, FROST_CONTRAST, FROST_LIFT, TINT, MIN_CONTRAST, chan, hex, withAlpha, lum, ratio, over, worst, tint, lift, accentOn, hash, grain, backdrop, backdropRange, frost };
 });

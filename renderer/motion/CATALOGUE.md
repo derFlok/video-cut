@@ -55,7 +55,7 @@ Durations: **min** is the shortest span that reads (entry + content + a beat of 
 | `headline` | a short claim, words building one by one; a word boxed, underlined or lit | `words: [{text, at}]` | `mark: [{index, at, style: box\|underline\|glow}]`, `size` (0.085), `card` (true) | `pop` per word (0.2), `impact` per mark | 1.2 / 4 s |
 | `stat` | a big number counting (odometer reels for whole numbers) with unit, label, source; the unit can change on a word | `value`, `at` (count start) | `from` (0), `dur` (0.9), `decimals`, `sep`, `dec`, `prefix`, `unit`, `unitTo` + `unitAt`, `label`, `source`, `bar` (0..1), `size` (0.22) | `pop`, `count`, `tick`s, `impact`; `whoosh` on unit change | 1.5 / 5 s |
 | `counter` | spike alias of `stat` (`to`, `suffix`) | `to`, `at` | as `stat` | as `stat` | 1.5 / 5 s |
-| `checklist` | items appearing and being checked, a tally pill 0/n ... n/n | `items: [{text, at, check?}]` | `label`, `columns`, `size` (0.05), `tally` (true) | `pop` per item, `check` per check | 2 / 10 s |
+| `checklist` | items appearing and being checked, a tally pill 0/n ... n/n (built in: do not add a second counter) | `items: [{text, at, check?}]` | `label`, `columns`, `size` (0.05; rows are set 1.22x larger), `tally` (true) | `pop` per item, `check` per check | 2 / 10 s |
 | `strikeCard` | an option struck through, the answer popping in | `text`, `strikeAt` | `label`, `then`, `thenAt`, `size` | `pop`, `strike`, `impact` | 1.5 / 4 s |
 | `compare` | two columns, one wins (loser dims and is struck, winner grows with a check badge) | `left`, `right` (`{title, items?, value?, icon?}`), `at` | `winner` (`right`), `winAt`, `vs` (text or false), `width` (0.84) | `pop` per side, `strike`, `impact` | 2 / 6 s |
 | `steps` | a timeline: nodes light up, the track draws between them | `steps: [{title, at, sub?, icon?}]` | `width` (0.86), `enter` | `pop`, `tick` per step, `check` on the last | 2 / 8 s |
@@ -107,9 +107,12 @@ panel), `--vc-hi-soft`, `--vc-glow`, `--vc-glow-soft`, `--vc-shadow`, `--vc-shad
 `--vc-bg/surface/text/muted/accent/...`). A dark theme on a light brand uses the brand's
 `colors.dark`/`dark_text`, or text and surface swapped. Contrast guard: ink ≥ 7:1 on the panel,
 accent text ≥ 4.5:1, text on the accent ≥ 4.5:1, muted ≥ 3:1 (a colour that misses is moved
-toward black or white until it passes); on glass the ink keeps 4.5:1 over the frost
-measured in the job's video (a denser tint when needed) and the accent text is lifted to
-3:1. Build glass surfaces from `.vc-card` (or `.vc-chip`): only those are frosted. Energy
+toward black or white until it passes). Glass follows the picture under it: over a bright
+video it is light glass (a white-ish tint with a hint of the brand surface, the brand's
+darkest colour as ink), over a dark one dark glass (the theme swaps accordingly). The ink
+keeps 4.5:1 over the frost measured in the job's video (the frost is compressed towards
+the picture's mean and lifted; a denser tint only as a last resort); accent and muted text
+are lifted to 3:1. Glass cards get continuous-curvature corners. Build glass surfaces from `.vc-card` (or `.vc-chip`): only those are frosted. Energy
 scales durations (calm 1.2x, punchy 0.8x),
 spring overshoot (calm: none, critically damped) and the micro-event beat.
 

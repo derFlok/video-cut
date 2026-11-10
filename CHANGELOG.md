@@ -13,6 +13,15 @@
 - Vibrancy guard: the frost range is measured in the job's own video
   (`work/glass_backdrop.json`); the tint gets denser until text keeps 4.5:1 over the
   darkest and lightest frost, the accent text is lifted to 3:1; both reported.
+- Glass follows the picture under it: over a bright video it is light glass (white with a
+  hint of the brand surface, the brand's darkest colour as ink), over a dark one dark glass
+  (the measured median decides; the brand theme without a measurement). The frost is
+  blurred twice as strongly and its luminance compressed towards the picture's mean and
+  lifted, so hair or a face under a panel reads as a calm material; the tint densifies only
+  as a last resort. Glass plates get continuous-curvature corners, a soft inner top light,
+  a crisp 1 px rim without a bottom outline and a large, very soft shadow.
+- Larger type on a phone: motion labels and pills ~1.23x, checklist rows 1.22x; captions
+  try finer size steps, so a caption between face and safe zone keeps more of its size.
 - Every depth: soft/glow shadows on the canvas plates (they were flat), size-specific
   tracking, tabular figures, rounder radii, rounded bars on a track with a gradient,
   `screenshot_frame` as a window or a phone, the end card's logo lock-up, chat bubble and
@@ -26,7 +35,7 @@
   longer filled twice (its opacity was compounded during fades).
 - Cost per 20 s of a 9:16 reel (M3 Pro, before → after): without glass unchanged
   (overlays 27 → 29 s, render 32 → 29 s); with glass overlays 24 → 40 s, render 29 → 35 s
-  (peak 2.1 → 2.4 GB), a motion clip 33 → 66 s (mask capture 42 ms/frame).
+  (peak 2.1 → 2.4 GB), a motion clip 33 → 66–77 s (mask capture 40 ms/frame).
 
 ### Added — Motion: animated scenes in the pipeline (tool, plan gate, verify, render, app)
 - `videocut tool motion spans|stills|render|show|catalogue|plan-stills` (tools/motion.py,

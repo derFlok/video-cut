@@ -12,10 +12,12 @@ function captionColors(tokens) {
   const c = tokens.caption_colors || {};
   const raw = tokens.colors || {};
   const m = require("./material").resolve(tokens);
+  // on glass the material decides the pair (light glass takes the brand's dark ink)
+  if (m.depth === "glass") return { text: m.text, box: m.fill, highlight: m.accent };
   return {
     text: c.text || raw.text,
     box: c.box || raw.surface || raw.bg,
-    highlight: m.depth === "glass" ? m.accent : c.highlight || raw.accent || raw.text,
+    highlight: c.highlight || raw.accent || raw.text,
   };
 }
 

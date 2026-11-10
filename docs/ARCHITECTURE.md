@@ -439,28 +439,42 @@ space) on a plate with light falling from above, and springs that never bounce a
 `backdrop-filter` has nothing to blur. Each render therefore also writes a **glass mask**:
 the alpha of every glass plate per frame, with the plate's own fade, scale and blur-in, as
 a gray FFV1 clip (`work/overlay_glass.mkv`, `work/motion/<id>/glass.mkv`) plus
-`<mask>.json` with the frost parameters (sigma = 3.2 % of the short side, saturation 1.5,
-brightness −0.04 dark / +0.05 light). The canvas scenes fill each glass shape into a
+`<mask>.json` with the frost parameters (sigma = 6.4 % of the short side, saturation 1.35,
+contrast 0.55 pivoted on the backdrop's mean, brightness lift +0.10 light / −0.07 dark). The canvas scenes fill each glass shape into a
 second canvas with the same transform, alpha and filter; the motion page captures every
 frame a second time with `html.vc-mask` (only `.vc-card` and `.vc-chip` visible, filled
 solid). `render` frosts the picture through the mask before it lays the overlay on top:
-shrink to a quarter, `gblur`, `eq` saturation/brightness, scale back up, `alphamerge` with
+shrink to a quarter, `gblur`, `eq` contrast/saturation/brightness, scale back up, `alphamerge` with
 the mask, overlay; for a motion clip only its own frames and region are frosted (`trim`,
-`crop`). The overlay itself carries the tint (the panel colour at the tint alpha), a top
-sheen, grain (a deterministic hash-noise tile), a soft shadow outside the shape only, and a
-1 px specular edge lit from the frame's top-left (on canvas the gradient is anchored to the
-frame, so the highlight slides along the edge as the plate moves).
+`crop`). The strong blur and the compression towards the mean turn busy content under the
+glass (hair, a face) into a calm, even material instead of a dark smear. The overlay
+itself carries the tint (the panel colour at the tint alpha), a soft inner gradient a few
+percent lighter at the top, grain (a deterministic hash-noise tile), a large, very soft,
+low shadow outside the shape only, a crisp 1 px specular rim lit from the frame's top-left
+and fading out towards the bottom-right (no outline; on canvas the gradient is anchored to
+the frame, so the highlight slides along the edge as the plate moves), and
+continuous-curvature corners (canvas: each `roundRect` of a glass shape becomes a
+squircle path, so tint, shadow and mask match; DOM: `corner-shape: squircle`).
+
+**Polarity.** Glass follows the picture under it, not only the brand theme: when the
+measured frost's median luminance is ≥ 0.25 the glass is light (white with 8 % of the
+brand surface's hue at a 0.36 tint, the brand's darkest colour as ink), else dark (the
+brand's darkest colour at 0.42, its lightest as ink). A dark tint over a bright wall read
+as mud. The brand keeps the hue of the tint, the ink and the accent; without a
+measurement the brand theme decides.
 
 **Vibrancy guard.** `_glass.backdrop_range` measures the luminance the frost can have in
 this job: the source's keyframes, tonemapped like the render, shrunk to 96 px wide and
-blurred like the frost; the 0.5th and 99.5th percentile of relative luminance
+blurred like the frost; the 0.5th, 99.5th and 50th percentile of relative luminance
 (`work/glass_backdrop.json`, cached per source file). It reaches the renderers as
-`tokens.glass_backdrop`. The tint alpha starts at the material's own (0.48 dark, 0.55
-light) and grows until the text keeps 4.5:1 over the darkest and the lightest measured
-frost; the accent (used only for large text: highlight word, figures) is lifted towards
-white or black until it keeps 3:1 instead of making the glass opaque. The renderer
-summaries and `clip.json` report `tint_alpha`, `densified`, `contrast_worst`, `backdrop`
-and `accent_text`. Without a measurement the guard assumes black and white. The AI label
+`tokens.glass_backdrop`. The guard works on the frost's own range (the measured one
+through the frost's `eq`), so the contrast comes mainly from the compression and the
+lift; the tint alpha starts at the material's own and grows only when the text would
+still miss 4.5:1 over the darkest or the lightest frost; the accent and muted text (used
+large or secondary) are lifted towards white or black until they keep 3:1 instead of
+making the glass opaque. The renderer summaries and `clip.json` report `theme`,
+`tint_alpha`, `densified`, `contrast_worst`, `backdrop`, `frost_range` and `accent_text`.
+Without a measurement the guard assumes black and white under the frost. The AI label
 is never glass (a solid pill in the brand's material). Text on glass has no halo: the guard
 already holds the contrast, and a per-glyph canvas shadow tripled the overlay render time.
 The canvas plates draw their shadows once into a sprite per shape and reuse it while the
@@ -475,8 +489,9 @@ real `backdrop-filter` (`motion.js --backdrop`), guarded against that picture's 
 Cost, measured on a 27.8 s 9:16 reel (M3 Pro, per 20 s of video, before → after): a
 brand without glass is unchanged (overlays 27 → 29 s, render 32 → 29 s). With glass the
 overlays take 24 → 40 s (the mask canvas and its second stream), `render` 29 → 35 s (the
-frost) and +0.25 GB peak memory (2.1 → 2.4 GB), a motion clip 33 → 66 s (every frame is
-captured twice: 66 ms picture + 42 ms mask). The node renderers stay at 0.9 GB (canvas)
+frost) and +0.25 GB peak memory (2.1 → 2.4 GB), a motion clip 33 → 66–77 s (every frame
+is captured twice: 66–87 ms picture + 40 ms mask; the upper values with the larger glass
+shadows and squircle corners, measured under a lower but still shared load). The node renderers stay at 0.9 GB (canvas)
 and 0.3 GB (motion).
 
 ## Overlays and captions (step 8)

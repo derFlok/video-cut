@@ -21,7 +21,7 @@ function pick(v, allowed) {
 }
 
 // Resolved material of a token set: {depth, dark, fill, text, accent, muted, shade, white,
-// tint: {alpha, densified, contrast} (glass only)}. Memoised per tokens object.
+// glass only: theme, frost (eq params), tint: {alpha, densified, contrast, range}}. Memoised per tokens object.
 function resolve(tokens) {
   if (cache.has(tokens)) return cache.get(tokens);
   const raw = tokens.colors || {};
@@ -37,15 +37,36 @@ function resolve(tokens) {
   const shade = cands.reduce((a, b) => (G.lum(G.chan(b)) < G.lum(G.chan(a)) ? b : a), cands[0]);
   const m = { depth, dark, fill, text, accent, muted: raw.muted || text, shade, white: G.hex([255, 255, 255]) };
   if (depth === "glass") {
-    const base = G.TINT[dark ? "dark" : "light"];
-    const range = G.span(tokens.glass_backdrop);
-    // text needs 4.5:1 on the glass (a denser tint when the material's own misses); the
+    // Polarity follows the measured backdrop (light glass over a bright picture, dark glass
+    // over a dark one); the brand keeps the hue of the tint, the ink and the accent.
+    const measured = tokens.glass_backdrop;
+    const theme = G.polarity(measured, dark ? "dark" : "light");
+    const lightest = cands.reduce((a, b) => (G.lum(G.chan(b)) > G.lum(G.chan(a)) ? b : a), cands[0]);
+    if (theme === "light") {
+      m.fill = G.lightTint(raw.surface || fill);
+      m.text = shade;
+    } else if (!dark) {
+      m.fill = shade;
+      m.text = lightest;
+    }
+    m.dark = theme === "dark";
+    m.theme = theme;
+    const base = G.TINT[theme];
+    // the frost's own luminance range (the measured one through the frost's eq): the
+    // tint lies on that
+    m.frost = G.frost(1, theme, measured);
+    const range = G.frostRange(measured, m.frost);
+    // text needs 4.5:1 on the glass (a denser tint only when the frost alone misses); the
     // accent (the highlight word, figures: large text) is lifted to 3:1 instead
-    m.tint = G.tint(fill, text, base, G.MIN_CONTRAST, range);
+    m.tint = G.tint(m.fill, m.text, base, G.MIN_CONTRAST, range);
     m.tint.base = base;
     m.tint.range = range;
-    m.accent = G.accentOn(fill, accent, m.tint.alpha, range);
+    m.tint.theme = theme;
+    m.accent = G.accentOn(m.fill, accent, m.tint.alpha, range);
     m.tint.accent = m.accent;
+    // secondary text: the ink towards the tint, kept at 3:1 over the worst frost
+    const soft = G.hex(G.chan(m.text).map((v, i) => v + (G.chan(m.fill)[i] - v) * 0.32));
+    m.muted = G.accentOn(m.fill, soft, m.tint.alpha, range);
   }
   cache.set(tokens, m);
   return m;
@@ -98,7 +119,8 @@ function plate(ctx, env, shape, opt = {}) {
     if (kind === "glow" || m.dark) edge(ctx, shape, kind === "glow" ? G.withAlpha(m.accent, 0.42) : G.withAlpha(m.white, 0.08), px);
     return;
   }
-  // glass
+  // glass: continuous-curvature corners for every rounded rectangle of the shape
+  shape = squircled(shape);
   const a = m.tint.alpha;
   // shadow outside the shape only (the frost shows through the tint, a shadow under it
   // would muddy it): clip to everything but the shape, fill with a shadow
@@ -110,9 +132,10 @@ function plate(ctx, env, shape, opt = {}) {
     c.clip("evenodd");
     shape(c);
     c.fillStyle = color;
-    c.shadowColor = G.withAlpha(m.shade, m.dark ? 0.42 : 0.2);
-    c.shadowBlur = px * 1.1;
-    c.shadowOffsetY = px * 0.22;
+    // large, very soft and low: the glass floats, it does not sit on a dark halo
+    c.shadowColor = G.withAlpha(m.shade, m.dark ? 0.24 : 0.13);
+    c.shadowBlur = px * 2.4;
+    c.shadowOffsetY = px * 0.4;
     c.fill();
   });
   // tint
@@ -122,14 +145,14 @@ function plate(ctx, env, shape, opt = {}) {
   ctx.fillStyle = color;
   ctx.fill();
   ctx.restore();
-  // sheen (lighter at the top) and grain
+  // top light: a soft inner gradient a few % lighter at the top, and grain
   ctx.save();
   shape(ctx);
   ctx.clip();
   const g = box ? ctx.createLinearGradient(0, box[1], 0, box[3]) : null;
   if (g && g.addColorStop) {
-    g.addColorStop(0, G.withAlpha(m.white, m.dark ? 0.1 : 0.22));
-    g.addColorStop(0.5, G.withAlpha(m.white, 0));
+    g.addColorStop(0, G.withAlpha(m.white, m.dark ? 0.06 : 0.16));
+    g.addColorStop(0.6, G.withAlpha(m.white, 0));
     ctx.fillStyle = g;
     ctx.fillRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
   }
@@ -139,9 +162,9 @@ function plate(ctx, env, shape, opt = {}) {
     ctx.fillRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
   }
   ctx.restore();
-  // specular edge: light from the frame's top-left, darker towards the bottom-right; the
-  // gradient is anchored to the frame, so the highlight slides along the edge as the
-  // plate moves
+  // specular rim (1 px): light from the frame's top-left, fading out towards the
+  // bottom-right (no outline there); the gradient is anchored to the frame, so the
+  // highlight slides along the edge as the plate moves
   const [W, H] = env.size || [1080, 1920];
   const T = ctx.getTransform();
   if (T && T.inverse && typeof DOMPoint === "function") {
@@ -149,10 +172,10 @@ function plate(ctx, env, shape, opt = {}) {
     const p0 = inv.transformPoint(new DOMPoint(0, 0));
     const p1 = inv.transformPoint(new DOMPoint(W, H));
     const s = ctx.createLinearGradient(p0.x, p0.y, p1.x, p1.y);
-    s.addColorStop(0, G.withAlpha(m.white, m.dark ? 0.5 : 0.85));
-    s.addColorStop(0.55, G.withAlpha(m.white, m.dark ? 0.14 : 0.35));
-    s.addColorStop(1, G.withAlpha(m.shade, m.dark ? 0.35 : 0.16));
-    edge(ctx, shape, s, px);
+    s.addColorStop(0, G.withAlpha(m.white, m.dark ? 0.45 : 0.95));
+    s.addColorStop(0.5, G.withAlpha(m.white, m.dark ? 0.1 : 0.4));
+    s.addColorStop(1, G.withAlpha(m.white, m.dark ? 0.03 : 0.15));
+    edge(ctx, shape, s, px, 2);
   }
   // mask
   if (env.mask) {
@@ -189,7 +212,7 @@ function sprite(ctx, env, shape, box, px, key, draw) {
   const store = env.__sprites || (env.__sprites = new Map());
   let s = store.get(id);
   if (!s) {
-    const pad = Math.ceil(px * 3.5);
+    const pad = Math.ceil(px * 5);
     const x = Math.floor(box[0]) - pad;
     const y = Math.floor(box[1]) - pad;
     const cv = env.canvas(Math.ceil(box[2]) + pad - x, Math.ceil(box[3]) + pad - y);
@@ -201,6 +224,44 @@ function sprite(ctx, env, shape, box, px, key, draw) {
     store.set(id, s);
   }
   ctx.drawImage(s.cv, s.x, s.y);
+}
+
+// Continuous-curvature ("squircle") corners: every roundRect the shape draws becomes a
+// rounded rectangle whose corners blend into the sides (each corner a cubic reaching
+// SQ_REACH times the radius along the sides, handles at SQ_K), so the curvature has no
+// jump where side and corner meet. Capsules (radius = half the short side) stay round.
+const SQ_REACH = 1.4;
+const SQ_K = 0.8;
+function squirclePath(c, x, y, w, h, r) {
+  const R = Math.min(r * SQ_REACH, w / 2, h / 2);
+  const k = R * SQ_K;
+  c.moveTo(x + R, y);
+  c.lineTo(x + w - R, y);
+  c.bezierCurveTo(x + w - R + k, y, x + w, y + R - k, x + w, y + R);
+  c.lineTo(x + w, y + h - R);
+  c.bezierCurveTo(x + w, y + h - R + k, x + w - R + k, y + h, x + w - R, y + h);
+  c.lineTo(x + R, y + h);
+  c.bezierCurveTo(x + R - k, y + h, x, y + h - R + k, x, y + h - R);
+  c.lineTo(x, y + R);
+  c.bezierCurveTo(x, y + R - k, x + R - k, y, x + R, y);
+  c.closePath();
+}
+function squircled(shape) {
+  return (c) =>
+    shape(
+      new Proxy(c, {
+        get(target, prop) {
+          if (prop === "roundRect")
+            return (x, y, w, h, r) => {
+              const rr = Array.isArray(r) ? r[0] : r;
+              if (!Number.isFinite(rr) || rr <= 0 || rr >= Math.min(w, h) / 2 - 0.5) return target.roundRect(x, y, w, h, r);
+              squirclePath(target, x, y, w, h, rr);
+            };
+          const v = target[prop];
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      }),
+    );
 }
 
 // Append the shape's path to the current path (shape() starts with beginPath, so replay
@@ -216,13 +277,14 @@ function shapeInto(ctx, shape) {
   shape(proxy);
 }
 
-// A 1 px (at least) inner edge in `stroke` (a colour or gradient), clipped to the shape.
-function edge(ctx, shape, stroke, px) {
+// A 1 px (at least) inner edge in `stroke` (a colour or gradient), clipped to the shape
+// (`width`: the stroke width, half of it inside).
+function edge(ctx, shape, stroke, px, width) {
   ctx.save();
   shape(ctx);
   ctx.clip();
   shape(ctx);
-  ctx.lineWidth = Math.max(2, px * 0.05);
+  ctx.lineWidth = width || Math.max(2, px * 0.05);
   ctx.strokeStyle = stroke;
   ctx.stroke();
   ctx.restore();
@@ -238,7 +300,7 @@ function vibrancy(_ctx, _env, _px) {}
 function report(tokens) {
   const m = resolve(tokens);
   return m.depth === "glass"
-    ? { depth: m.depth, tint_alpha: m.tint.alpha, tint_base: m.tint.base, densified: m.tint.densified, contrast_worst: m.tint.contrast, backdrop: m.tint.range, accent_text: m.accent }
+    ? { depth: m.depth, theme: m.theme, tint_alpha: m.tint.alpha, tint_base: m.tint.base, densified: m.tint.densified, contrast_worst: m.tint.contrast, backdrop: G.span(tokens.glass_backdrop), frost_range: m.tint.range, accent_text: m.accent }
     : { depth: m.depth };
 }
 

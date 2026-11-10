@@ -38,12 +38,12 @@ window.__vcComponents = function (vc) {
       background: linear-gradient(100deg, var(--vc-ink-a0) 10%, var(--vc-sheen) 50%, var(--vc-ink-a0) 90%); filter: blur(${px(0.012)}); }
     .vc-slot { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
       justify-content: center; gap: ${px(0.02)}; }
-    .vc-label { font-weight: var(--vc-w-mid); color: var(--vc-ink-muted); font-size: ${fz(0.034)}; letter-spacing: 0.01em;
+    .vc-label { font-weight: var(--vc-w-mid); color: var(--vc-ink-muted); font-size: ${fz(0.042)}; letter-spacing: 0.01em;
       white-space: nowrap; line-height: 1.2; }
     .vc-kicker { display: flex; align-items: center; justify-content: space-between; gap: ${px(0.03)}; margin-bottom: ${px(0.016)}; }
     .vc-pill { display: inline-flex; align-items: center; gap: ${px(0.008)}; padding: ${px(0.006)} ${px(0.016)};
       border-radius: 999px; background: var(--vc-hi-soft); color: var(--vc-hi-text); font-weight: var(--vc-w-strong);
-      font-size: ${fz(0.03)}; font-variant-numeric: tabular-nums; white-space: nowrap; }
+      font-size: ${fz(0.037)}; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .vc-pill.solid { background: var(--vc-hi); color: var(--vc-on-hi); box-shadow: 0 0 ${px(0.02)} var(--vc-glow); }
     .vc-num { font-weight: var(--vc-w-strong); font-variant-numeric: tabular-nums; line-height: 0.95; letter-spacing: -0.035em;
       text-shadow: var(--vc-text-glow); }
@@ -140,8 +140,8 @@ window.__vcComponents = function (vc) {
       font-weight: var(--vc-w-strong); font-size: ${fz(0.03)}; color: var(--vc-ink-muted); position: relative; }
     .vc-steps .node .on { position: absolute; inset: ${px(-0.004)}; border-radius: 50%; background: var(--vc-hi); color: var(--vc-on-hi);
       display: flex; align-items: center; justify-content: center; transform: scale(0); box-shadow: 0 0 ${px(0.03)} var(--vc-glow); }
-    .vc-steps .t1 { font-weight: var(--vc-w-strong); font-size: ${fz(0.032)}; text-align: center; white-space: nowrap; }
-    .vc-steps .t2 { font-size: ${fz(0.022)}; color: var(--vc-ink-muted); text-align: center; white-space: nowrap; }
+    .vc-steps .t1 { font-weight: var(--vc-w-strong); font-size: ${fz(0.038)}; text-align: center; white-space: nowrap; }
+    .vc-steps .t2 { font-size: ${fz(0.028)}; color: var(--vc-ink-muted); text-align: center; white-space: nowrap; }
     .vc-steps .track { position: absolute; height: ${px(0.005)}; background: var(--vc-line); border-radius: 9px; z-index: 0; }
     .vc-steps .track > i { display: block; height: 100%; background: var(--vc-hi); transform-origin: 0 50%; transform: scaleX(0);
       border-radius: inherit; box-shadow: 0 0 ${px(0.016)} var(--vc-glow); }
@@ -625,6 +625,10 @@ window.__vcComponents = function (vc) {
     return stat(parent, { ...p, unit: p.suffix || p.unit, value: p.to, at: p.at, size: p.size || 0.2 });
   }
 
+  // List rows are set larger than the `size` a scene passes (a phone holds 9:16 at arm's
+  // length: the rows must read at a glance).
+  const LIST = 1.22;
+
   // Checklist: items appear on their words and are checked (box fills with glow, the check
   // draws, the row nudges); a tally pill counts 0/n ... n/n. items: [{text, at, check}].
   function checklist(parent, p = {}) {
@@ -642,7 +646,7 @@ window.__vcComponents = function (vc) {
     const times = [];
     for (const it of items) {
       const row = vc.el("div", "row", grid);
-      row.style.fontSize = fz(size);
+      row.style.fontSize = fz(size * LIST);
       const bx = vc.el("div", "box", row);
       const fill = vc.el("div", "fill", bx);
       const svg = vc.el("svg", "", bx);
@@ -673,6 +677,13 @@ window.__vcComponents = function (vc) {
         pill.textContent = `${n}/${items.length}`;
         pill.className = n === items.length ? "vc-pill solid" : "vc-pill";
       });
+    }
+    // The larger rows only as far as the parent's width allows (down to the scene's own
+    // `size`): a scene without a fitting slot must not push the card out of the frame.
+    const room = parent.clientWidth * 0.96;
+    if (room > 0 && root.offsetWidth > room) {
+      const k = Math.max(1 / LIST, room / root.offsetWidth);
+      for (const row of rows) row.style.fontSize = fz(size * LIST * k);
     }
     const t = first(p.enter, p.at, items[0].at - 0.2);
     return life(root, "checklist", p, t, times, rows);

@@ -35,13 +35,13 @@ def test_backdrop_range_measures_the_frost_and_caches_it(tmp_path):
     job = tmp_path / "job"
     (job / "work").mkdir(parents=True)
     rng = _glass.backdrop_range(job, src, probe(src, need_audio=False))
-    assert rng is not None and 0 <= rng[0] <= rng[1] < 0.05  # a dark grey picture
+    assert rng is not None and 0 <= rng[0] <= rng[2] <= rng[1] < 0.05  # a dark grey picture
     doc = json.loads((job / _glass.CACHE).read_text())
     assert doc["range"] == rng and doc["frames"] >= 1
     assert _glass.backdrop_range(job, src, probe(src, need_audio=False)) == rng  # from the cache
 
 
-PARAMS = {"sigma": 34.6, "saturation": 1.5, "brightness": -0.04}
+PARAMS = {"sigma": 34.6, "saturation": 1.5, "contrast": 0.55, "brightness": -0.04}
 
 
 def test_overlay_composite_frosts_through_the_mask():
@@ -51,7 +51,7 @@ def test_overlay_composite_frosts_through_the_mask():
     text = render.composite_graph(4, 30, (540, 960), glass=glass)
     assert "[5:v]setpts=PTS-STARTPTS,fps=30,settb=1/30,setpts=N+0," in text
     assert "scale=135:240:flags=area,gblur=sigma=4.33," in text  # quarter size, sigma * 0.5 / 4
-    assert "eq=saturation=1.5:brightness=-0.04" in text
+    assert "eq=contrast=0.55:saturation=1.5:brightness=-0.04" in text
     assert "[gfz][gmk]alphamerge[gfg]" in text and text.rstrip().endswith("[vo]")
     # the frost goes under the overlay, the overlay on top
     assert text.index("[gbase][gfg]overlay") < text.index("[base][ov]overlay")

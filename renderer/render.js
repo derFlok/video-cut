@@ -273,17 +273,38 @@ function pageMain(spec) {
   // and saturated as `render` does it in FFmpeg) through the glass mask, the overlay on
   // top. For the brand sheet, which has no video.
   let frosted = null;
+  // the frost of this material at this frame size (polarity and backdrop from the tokens)
+  function frostParams() {
+    const m = material.resolve(tokens);
+    return G.frost(Math.min(size[0], size[1]), m.theme, tokens.glass_backdrop);
+  }
   function over(r, back) {
     const out = mk(size[0], size[1]);
     const c = out.getContext("2d");
     c.drawImage(back, 0, 0);
     if (r.mask) {
       if (!frosted) {
-        const fr = G.frost(Math.min(size[0], size[1]), material.resolve(tokens).dark ? "dark" : "light");
+        const fr = frostParams();
         frosted = mk(size[0], size[1]);
         const f = frosted.getContext("2d");
-        f.filter = `blur(${fr.sigma}px) saturate(${fr.saturation}) brightness(${1 + fr.brightness})`;
+        // like FFmpeg's eq: contrast pivots on mid-grey, brightness is added
+        f.filter = `blur(${fr.sigma}px) saturate(${fr.saturation}) contrast(${fr.contrast})`;
         f.drawImage(back, 0, 0);
+        f.filter = "none";
+        const v = Math.round(Math.abs(fr.brightness) * 255);
+        f.globalCompositeOperation = fr.brightness >= 0 ? "lighter" : "difference";
+        if (fr.brightness < 0) {
+          // subtract: invert, add, invert back
+          f.fillStyle = G.hex([255, 255, 255]);
+          f.fillRect(0, 0, size[0], size[1]);
+          f.globalCompositeOperation = "lighter";
+          f.fillStyle = G.hex([v, v, v]);
+          f.fillRect(0, 0, size[0], size[1]);
+          f.globalCompositeOperation = "difference";
+          f.fillStyle = G.hex([255, 255, 255]);
+        } else f.fillStyle = G.hex([v, v, v]);
+        f.fillRect(0, 0, size[0], size[1]);
+        f.globalCompositeOperation = "source-over";
       }
       const g = mk(size[0], size[1]);
       const gc = g.getContext("2d");
@@ -323,7 +344,7 @@ function pageMain(spec) {
     return { png: r.canvas.toDataURL("image/png"), boxes: r.boxes, mask: r.mask ? r.mask.toDataURL("image/png") : null };
   };
   window.glass = glassOn
-    ? { ...G.frost(Math.min(size[0], size[1]), material.resolve(tokens).dark ? "dark" : "light"), material: material.report(tokens) }
+    ? { ...frostParams(), material: material.report(tokens) }
     : null;
 
   // `opt.labels` (one per time) replaces the time label, `opt.background` (a colour)

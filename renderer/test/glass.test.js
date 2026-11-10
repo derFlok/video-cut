@@ -57,6 +57,48 @@ test("frost: sigma follows the short side", () => {
   assert.ok(G.frost(1080, "light").brightness > 0 && G.frost(1080, "dark").brightness < 0);
 });
 
+test("polarity: a bright backdrop makes light glass, a dark one dark glass, the brand theme decides without one", () => {
+  assert.equal(G.polarity([0.05, 0.9, 0.55], "dark"), "light");
+  assert.equal(G.polarity([0.01, 0.4, 0.06], "light"), "dark");
+  assert.equal(G.polarity(null, "light"), "light");
+  assert.equal(G.polarity(null, "dark"), "dark");
+});
+
+test("frost: the luminance is compressed towards the backdrop's mean and lifted (light) or lowered (dark)", () => {
+  const range = [0.03, 0.85, 0.5];
+  const light = G.frost(1080, "light", range);
+  const fr = G.frostRange(range, light);
+  assert.ok(fr[1] - fr[0] < range[1] - range[0]); // calmer
+  assert.ok(fr[0] > range[0]); // dark hair under light glass is lifted
+  const dark = G.frost(1080, "dark", [0.01, 0.3, 0.05]);
+  assert.ok(G.frostRange([0.01, 0.3, 0.05], dark)[1] < 0.3);
+  // without a measurement the frost still cannot reach black and white
+  const none = G.frostRange(null, G.frost(1080, "light"));
+  assert.ok(none[0] > 0 && none[1] <= 1);
+});
+
+test("material: over a bright picture a dark brand gets light glass with its dark colour as ink, no densifying", () => {
+  const m = material.resolve(TOK("glass", { glass_backdrop: [0.04, 0.86, 0.52] }));
+  assert.equal(m.theme, "light");
+  assert.ok(G.lum(G.chan(m.fill)) > 0.8 && G.lum(G.chan(m.text)) < 0.02);
+  assert.equal(m.tint.densified, false);
+  assert.ok(m.tint.contrast >= 4.5);
+  assert.ok(m.tint.alpha <= 0.45);
+  const style = require("../lib/style");
+  assert.equal(style.captionColors(TOK("glass", { glass_backdrop: [0.04, 0.86, 0.52] })).text, m.text);
+});
+
+test("glass plates draw continuous-curvature corners (capsules stay round)", () => {
+  const ops = [];
+  const ctx = new Proxy({}, { get: (_, p) => (p === "getTransform" ? () => null : (...a) => ops.push(p)) });
+  const env = { tokens: TOK("glass", { glass_backdrop: [0.05, 0.6, 0.3] }), size: [1080, 1920] };
+  material.plate(ctx, env, (c) => { c.beginPath(); c.roundRect(10, 10, 400, 200, 40); }, { px: 40 });
+  assert.ok(ops.includes("bezierCurveTo") && !ops.includes("roundRect"));
+  ops.length = 0;
+  material.plate(ctx, env, (c) => { c.beginPath(); c.roundRect(10, 10, 400, 80, 40); }, { px: 40 });
+  assert.ok(ops.includes("roundRect"));
+});
+
 const TOK = (depth, extra = {}) => ({
   colors: { bg: "#0E1116", surface: "#1A1F27", text: "#F2F4F7", muted: "#9AA3AF", accent: "#5B8CFF" },
   caption_colors: { box: "#1A1F27", text: "#F2F4F7", highlight: "#5B8CFF" },
@@ -71,7 +113,7 @@ test("material: depth defaults to glow on a dark plate and soft on a light one; 
   assert.equal(material.resolve(light).depth, "soft");
   const g = material.resolve(TOK("glass", { glass_backdrop: [0.05, 0.5] }));
   assert.equal(g.depth, "glass");
-  assert.ok(g.tint.alpha >= G.TINT.dark);
+  assert.ok(g.tint.alpha >= G.TINT[g.theme]);
   assert.deepEqual(material.report(TOK("glass", { glass_backdrop: [0.05, 0.5] })).backdrop, [0.05, 0.5]);
 });
 
@@ -143,7 +185,7 @@ test("motion renderer: the mask pass shows only glass surfaces, frame for frame 
   const s = JSON.parse(out.trim().split("\n").pop());
   assert.ok(s.ok, JSON.stringify(s));
   assert.equal(s.style.depth, "glass");
-  assert.ok(s.glass.tint_alpha >= 0.48 && s.glass.sigma > 0);
+  assert.ok(s.glass.tint_alpha >= G.TINT.dark && s.glass.sigma > 0 && s.glass.theme === "dark");
   assert.equal(probeFrames(path.join(dir, "g.mkv")), s.frames);
   assert.ok(meanAt(path.join(dir, "g.mkv"), 9) > meanAt(path.join(dir, "g.mkv"), 0));
 });
