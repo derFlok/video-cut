@@ -461,7 +461,8 @@ measured frost's median luminance is ≥ 0.25 the glass is light (white with 8 %
 brand surface's hue at a 0.36 tint, the brand's darkest colour as ink), else dark (the
 brand's darkest colour at 0.42, its lightest as ink). A dark tint over a bright wall read
 as mud. The brand keeps the hue of the tint, the ink and the accent; without a
-measurement the brand theme decides.
+measurement the brand theme decides. Captions without a box (`plain`, `outline`) are not
+on glass: they keep the brand caption colours and their halo or outline.
 
 **Vibrancy guard.** `_glass.backdrop_range` measures the luminance the frost can have in
 this job: the source's keyframes, tonemapped like the render, shrunk to 96 px wide and

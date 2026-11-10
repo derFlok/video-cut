@@ -20,6 +20,10 @@
   lifted, so hair or a face under a panel reads as a calm material; the tint densifies only
   as a last resort. Glass plates get continuous-curvature corners, a soft inner top light,
   a crisp 1 px rim without a bottom outline and a large, very soft shadow.
+- Captions without a box (`plain`, `outline`) keep the brand caption colours and their
+  halo/outline on a glass brand: they lie on the video, not on glass, so the glass
+  polarity says nothing about what is under them. Only `box` captions and cards take the
+  glass pair.
 - Larger type on a phone: motion labels and pills ~1.23x, checklist rows 1.22x; captions
   try finer size steps, so a caption between face and safe zone keeps more of its size.
 - Every depth: soft/glow shadows on the canvas plates (they were flat), size-specific

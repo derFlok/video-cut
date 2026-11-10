@@ -6,14 +6,16 @@ const { step, brandSpring } = require("./spring");
 
 // Caption colours that already pass WCAG AA (resolved by the brand loader); the raw
 // brand colours are only a stand-in for tokens that were not resolved.
-// On glass the highlight is the accent lifted to keep its contrast over the frost
-// (lib/material.js).
 function captionColors(tokens) {
   const c = tokens.caption_colors || {};
   const raw = tokens.colors || {};
   const m = require("./material").resolve(tokens);
-  // on glass the material decides the pair (light glass takes the brand's dark ink)
-  if (m.depth === "glass") return { text: m.text, box: m.fill, highlight: m.accent };
+  // On glass the material decides the pair (light glass takes the brand's dark ink), but
+  // only where the caption sits ON glass (style box). Plain and outline captions have no
+  // box: they lie on the video itself, whose brightness under them the glass polarity
+  // (the median under the panels) says nothing about, so they keep the brand's caption
+  // colours and their halo/outline.
+  if (m.depth === "glass" && captionSettings(tokens).style === "box") return { text: m.text, box: m.fill, highlight: m.accent };
   return {
     text: c.text || raw.text,
     box: c.box || raw.surface || raw.bg,

@@ -27,11 +27,14 @@ function palette(tokens) {
   const c = style.captionColors(tokens);
   const raw = tokens.colors || {};
   const m = material.resolve(tokens);
+  // a card is always a plate: on glass it takes the material's pair whatever the caption
+  // style
+  if (m.depth === "glass") return { fill: m.fill, text: m.text, accent: m.accent, muted: m.muted, sparing: !/frei|free/i.test(String(raw.accent_usage || "")) };
   return {
     fill: c.box,
     text: c.text,
     accent: c.highlight,
-    muted: m.depth === "glass" ? m.muted : raw.muted || c.text,
+    muted: raw.muted || c.text,
     sparing: !/frei|free/i.test(String(raw.accent_usage || "")),
   };
 }

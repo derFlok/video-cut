@@ -189,3 +189,48 @@ test("motion renderer: the mask pass shows only glass surfaces, frame for frame 
   assert.equal(probeFrames(path.join(dir, "g.mkv")), s.frames);
   assert.ok(meanAt(path.join(dir, "g.mkv"), 9) > meanAt(path.join(dir, "g.mkv"), 0));
 });
+
+test("plain captions on a glass brand keep the brand caption colours (not the glass pair); cards still take it", () => {
+  const style = require("../lib/style");
+  const bright = { glass_backdrop: [0.04, 0.86, 0.52] }; // light glass for the panels
+  const plain = { ...TOK("glass", bright), captions: { style: "plain" } };
+  const box = { ...TOK("glass", bright), captions: { style: "box" } };
+  const m = material.resolve(plain);
+  assert.equal(m.theme, "light");
+  assert.equal(style.captionColors(plain).text, "#F2F4F7"); // the brand caption text
+  assert.equal(style.captionColors(plain).box, "#1A1F27"); // its halo colour
+  assert.equal(style.captionColors(box).text, material.resolve(box).text); // on glass: the material
+  const card = require("../lib/card");
+  assert.equal(card.palette(plain).text, m.text); // a card is always a glass plate
+  assert.equal(card.palette(plain).fill, m.fill);
+});
+
+test("a glass brand's plain caption over a dark picture keeps 4.5:1 with its halo (real renderer)", { skip: !haveBrowser && "no browser" }, () => {
+  const dir = tmp();
+  const spec = {
+    size: [360, 640], fps: 10, duration: 1.2, safe: {}, face: [],
+    tokens: { ...TOK("glass", { glass_backdrop: [0.04, 0.86, 0.52] }), fonts: { weights: [400, 700], files: {} }, captions: { style: "plain" } },
+    captions: [{ t0: 0.1, t1: 1.1, words: [{ w: "Dunkles", t0: 0.1, t1: 0.5 }, { w: "Hemd", t0: 0.5, t1: 1.0 }] }],
+    overlays: [],
+  };
+  fs.writeFileSync(path.join(dir, "o.json"), JSON.stringify(spec));
+  execFileSync(process.execPath, [path.join(ROOT, "render.js"), path.join(dir, "o.json"), "--still", "0.9", path.join(dir, "s.png"), "--boxes", path.join(dir, "b.json")], {
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: BROWSERS }, encoding: "utf8",
+  });
+  // over a dark grey picture (a dark shirt): the text's luminance against the darkest
+  // drawn surround (the halo or the picture itself)
+  const raw = execFileSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=c=0x262626:s=360x640:d=1", "-i", path.join(dir, "s.png"),
+    "-filter_complex", "[0:v][1:v]overlay=format=auto", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]);
+  const boxes = JSON.parse(fs.readFileSync(path.join(dir, "b.json"), "utf8"));
+  const cap = (Array.isArray(boxes) ? boxes : boxes.boxes).find((b) => b.scene === "caption").box;
+  const ls = [];
+  for (let y = Math.max(0, cap[1]); y < Math.min(640, cap[3]); y++)
+    for (let x = Math.max(0, cap[0]); x < Math.min(360, cap[2]); x++) {
+      const i = (y * 360 + x) * 3;
+      ls.push(G.lum([raw[i], raw[i + 1], raw[i + 2]]));
+    }
+  ls.sort((a, b) => a - b);
+  const text = ls[Math.floor(ls.length * 0.99)];
+  const around = ls[Math.floor(ls.length * 0.5)];
+  assert.ok((text + 0.05) / (around + 0.05) >= 4.5, `text ${text} vs ${around}`);
+});
