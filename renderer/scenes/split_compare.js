@@ -5,6 +5,7 @@
 
 const style = require("../lib/style");
 const card = require("../lib/card");
+const material = require("../lib/material");
 const { union } = require("../lib/boxes");
 
 const name = "split_compare";
@@ -60,10 +61,12 @@ function draw(ctx, t, item, env) {
     if (a.p <= 0) return null;
     c.save();
     const drawn = style.enter(c, tokens, a, L.px, [x, y, x + cw, L.box[3]]);
-    c.fillStyle = pal.fill;
-    c.beginPath();
-    c.roundRect(x, y, cw, L.box[3] - L.box[1], r);
-    c.fill();
+    const h = L.box[3] - L.box[1];
+    material.plate(c, env, (k) => {
+      k.beginPath();
+      k.roundRect(x, y, cw, h, r);
+    }, { box: [x, y, x + cw, y + h], px: L.px, color: pal.fill });
+    material.vibrancy(c, env, L.px);
     let ty = y + L.pad;
     if (col.title) {
       card.drawRun(c, env, col.title, x + L.pad, ty, "left", titleColor);

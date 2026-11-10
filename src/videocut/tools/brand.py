@@ -149,7 +149,14 @@ def sheet_spec(tokens: dict, scenes: list[str], size: tuple[int, int] = SHEET_SI
         "face": [],
         "captions": captions,
         "overlays": overlays,
-        "sheet": {"times": times, "labels": slots, "background": tokens["colors"]["bg"]},
+        # every tile over a neutral generated picture (renderer lib/glass.js backdrop), so
+        # shadows and the glass material show as they would over video
+        "sheet": {
+            "times": times,
+            "labels": slots,
+            "background": tokens["colors"]["bg"],
+            "backdrop": True,
+        },  # fmt: skip
     }
 
 
@@ -216,7 +223,8 @@ def motion_row(tokens: dict, sheet: Path) -> dict:
     spec = _motion_sheet.motion_spec(tokens, size=size, region=region, duration=moments * slot)
     times = [round(i * slot + 1.6, 3) for i in range(moments)]
     with tempfile.TemporaryDirectory(prefix="videocut-motion-sheet-") as tmp:
-        pngs = _motion_sheet.stills(spec, src, Path(tmp) / "run", times)
+        # over the generated backdrop, so the material (shadows, glass) shows
+        pngs = _motion_sheet.stills(spec, src, Path(tmp) / "run", times, ["--backdrop"])
         width = _image_width(sheet)
         row = _motion_sheet.contact_sheet(
             pngs, Path(tmp) / "row.jpg", cols=moments, background=tokens["colors"]["bg"],

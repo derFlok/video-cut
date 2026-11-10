@@ -1,5 +1,6 @@
-// Screenshot frame: an image from the job folder (props.file) fitted into a rounded,
-// device-less frame; optional animated zoom to props.focus ([x0, y0, x1, y1], 0..1 of
+// Screenshot frame: an image from the job folder (props.file) in a frame: a phone (even
+// bezel, concentric radii, camera island) for a portrait image, a window (title bar with
+// three dots) for any other; optional animated zoom to props.focus ([x0, y0, x1, y1], 0..1 of
 // the image) and redaction boxes (props.redact: [[x0, y0, x1, y1], ...]) drawn as
 // props.redact_style: "block" (solid, the default) or "blur" (pixelated into cells at
 // least the UI text height, then smoothed back up: the box keeps its colours, no text
@@ -11,6 +12,7 @@
 
 const style = require("../lib/style");
 const card = require("../lib/card");
+const material = require("../lib/material");
 
 const name = "screenshot_frame";
 
@@ -155,16 +157,20 @@ function layout(ctx, item, env) {
       item,
       (k) => {
         const px = f.unit * 0.05 * k;
-        const pad = Math.round(px * 0.3);
+        // a portrait screenshot sits in a phone (an even bezel, a large radius); any other
+        // in a window (a title bar with three dots above the picture)
+        const pad = Math.round(px * (portrait ? 0.42 : 0.3));
+        const bar = portrait ? 0 : Math.round(px * 0.85);
         const reach = style.bleed(px);
-        const maxH = wideFrame
-          ? usableH - reserve - 2 * pad - 2 * reach
-          : portrait
-            ? usableH * (1 - CAPTION_ROOM) - 2 * pad - 2 * reach
-            : usableH * LANDSCAPE_H;
+        const maxH =
+          (wideFrame
+            ? usableH - reserve - 2 * pad - 2 * reach
+            : portrait
+              ? usableH * (1 - CAPTION_ROOM) - 2 * pad - 2 * reach
+              : usableH * LANDSCAPE_H) - bar;
         const room = wideFrame ? f.w - 2 * ((safe && safe.side) || 0) - 2 * reach - 2 * pad : card.maxCardWidth(env, px, pad);
         const iw = Math.min(room, maxH * ar) * k;
-        return { px, pad, iw, ih: iw / ar, w: iw + 2 * pad, h: iw / ar + 2 * pad };
+        return { px, pad, bar, phone: portrait, iw, ih: iw / ar, w: iw + 2 * pad, h: iw / ar + 2 * pad + bar };
       },
       {
         stage,
@@ -183,21 +189,59 @@ function draw(ctx, t, item, env) {
   const dur = item.t1 - item.t0;
   const p = item.props || {};
   const zoomAt = Number.isFinite(p.zoom_at) ? p.zoom_at : Math.min(1.2, dur * 0.3);
-  return card.drawCard(ctx, env, L, t, dur, (c, box) => {
-    const x = box[0] + L.pad;
-    const y = box[1] + L.pad;
-    let sr = [0, 0, L.src.w, L.src.h];
-    if (L.focus) {
-      const k = card.settle(tokens, t - zoomAt);
-      sr = sr.map((v, i) => v + (L.focus[i] - v) * k);
-    }
-    c.save();
-    c.beginPath();
-    c.roundRect(x, y, L.iw, L.ih, Math.max(0, style.radius(tokens, L.px) - L.pad));
-    c.clip();
-    c.drawImage(L.src.canvas, sr[0], sr[1], sr[2], sr[3], x, y, L.iw, L.ih);
-    c.restore();
-  });
+  const pal = card.palette(tokens);
+  // phone: the radius follows the device (a share of its width), the screen's radius is
+  // concentric with it; window: the brand radius, the picture's lower corners concentric
+  const outer = L.phone ? Math.round(L.iw * 0.13 + L.pad) : style.radius(tokens, L.px);
+  const inner = Math.max(0, outer - L.pad);
+  return card.drawCard(
+    ctx,
+    env,
+    L,
+    t,
+    dur,
+    (c, box) => {
+      const x = box[0] + L.pad;
+      const y = box[1] + L.pad + L.bar;
+      if (L.bar) {
+        // three dots in the title bar, the text colour at a low alpha
+        const base = c.globalAlpha;
+        const dr = L.px * 0.13;
+        c.globalAlpha = base * 0.3;
+        c.fillStyle = pal.text;
+        for (let i = 0; i < 3; i++) {
+          c.beginPath();
+          c.arc(x + dr + i * dr * 3.2 + L.px * 0.1, box[1] + L.pad + L.bar / 2 - L.pad * 0.15, dr, 0, Math.PI * 2);
+          c.fill();
+        }
+        c.globalAlpha = base;
+      }
+      let sr = [0, 0, L.src.w, L.src.h];
+      if (L.focus) {
+        const k = card.settle(tokens, t - zoomAt);
+        sr = sr.map((v, i) => v + (L.focus[i] - v) * k);
+      }
+      c.save();
+      c.beginPath();
+      const small = Math.max(2, Math.round(L.px * 0.12));
+      c.roundRect(x, y, L.iw, L.ih, L.bar ? [small, small, inner, inner] : inner);
+      c.clip();
+      c.shadowBlur = 0;
+      c.drawImage(L.src.canvas, sr[0], sr[1], sr[2], sr[3], x, y, L.iw, L.ih);
+      if (L.phone) {
+        // the camera island at the top of the screen, in the brand's darkest colour
+        const m = material.resolve(tokens);
+        const iw = L.iw * 0.27;
+        const ih = Math.max(6, L.px * 0.42);
+        c.fillStyle = m.shade;
+        c.beginPath();
+        c.roundRect(x + (L.iw - iw) / 2, y + L.px * 0.3, iw, ih, ih / 2);
+        c.fill();
+      }
+      c.restore();
+    },
+    { radius: outer },
+  );
 }
 
 module.exports = { name, assets, layout, layoutFirst, draw, focusRect, blurCell, redacted, normBox, STYLES };

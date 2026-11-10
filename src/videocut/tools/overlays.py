@@ -70,7 +70,7 @@ from .. import brand
 from ..edl import EdlError, is_broll, is_screen, is_slide, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
 from ..redaction import asset_boxes, same_asset
-from . import _ai_label, _layouts, _plates, _redact_style
+from . import _ai_label, _glass, _layouts, _plates, _redact_style
 from . import _render_plan as plan_mod
 from ._geometry import face_track, framed, map_box, safe_zones, sized
 from .common import (
@@ -90,6 +90,8 @@ SPEAKER_STEP_S = 0.25
 FOCUS_MAX = 0.5  # a zoom target this share of the screen view or more is not kept clear
 MIN_ITEM_S = 0.5  # an overlay item cut by a slide to less than this is dropped
 RECORDED = ("work/overlay.mov", "work/overlay_boxes.json", "work/overlays.json")
+# written only for a glass brand; recorded (as absent or as their hash) all the same
+GLASS = ("work/overlay_glass.mkv", "work/overlay_glass.mkv.json")
 
 
 def brand_tokens(ref) -> dict:
@@ -138,6 +140,8 @@ def build(job: Path) -> dict:
     use_layouts = any(lay != "face" for lay in layouts)
     plan = plan_mod.build(edl, src_size, edl.size, layouts if use_layouts else None)
     tokens = brand_tokens(read_job(job).get("brand") or DEFAULT_BRAND)
+    if _glass.is_glass(tokens):  # the frost this video can have (vibrancy guard)
+        tokens["glass_backdrop"] = _glass.backdrop_range(job, src, info)
     views = _views(plan, _layouts.plan_all(job, edl, plan, src_size, face, edl.size)["segs"], face,
                    src_size) if any(is_screen(lay) for lay in layouts) else []  # fmt: skip
     if any(is_slide(lay) for lay in layouts):
@@ -396,8 +400,10 @@ def _sha256(path: Path) -> str | None:
 
 
 def file_hashes(job: Path) -> dict:
-    """sha256 of the recorded files (None for a missing one)."""
-    return {rel: _sha256(job / rel) for rel in RECORDED}
+    """sha256 of the recorded files (None for a missing one); the glass files only when
+    they exist."""
+    out = {rel: _sha256(job / rel) for rel in RECORDED}
+    return out | {rel: _sha256(job / rel) for rel in GLASS if (job / rel).is_file()}
 
 
 def write_record(job: Path) -> None:
@@ -418,6 +424,7 @@ def check_record(job: Path) -> str | None:
     want = rec.get("sha256") if isinstance(rec.get("sha256"), dict) else {}
     have = file_hashes(job)
     changed = [rel for rel in RECORDED if want.get(rel) is None or want.get(rel) != have[rel]]
+    changed += [rel for rel in GLASS if want.get(rel) != have.get(rel)]
     if changed:
         return "changed since `videocut tool overlays` wrote them: " + ", ".join(changed)
     return None
@@ -452,6 +459,8 @@ def render_overlay(job: Path, doc_path: Path) -> dict:
             str(work / "overlay.mov"),
             "--boxes",
             str(work / "overlay_boxes.json"),
+            "--glass",
+            str(work / "overlay_glass.mkv"),
         ],
         job,
     )

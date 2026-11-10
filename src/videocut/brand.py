@@ -38,7 +38,7 @@ ENUMS = {
     "motion.character": ("ruhig", "federnd", "knackig"),
     "motion.transitions": ("blur", "slide", "cut"),
     "motion.theme": ("dark", "light", "auto"),
-    "motion.depth": ("flat", "soft", "glow"),
+    "motion.depth": ("flat", "soft", "glow", "glass"),
     "motion.energy": ("calm", "normal", "punchy"),
     "voice.address": ("du", "sie"),
     "redaction.style": ("auto", "blur", "crop", "block"),

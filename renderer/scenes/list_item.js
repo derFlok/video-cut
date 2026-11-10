@@ -74,9 +74,9 @@ function draw(ctx, t, item, env) {
     c.translate(-bx, -by);
     c.fillStyle = pal.accent;
     c.beginPath();
-    c.roundRect(x0, by - L.badge / 2, L.badge, L.badge, style.radius(tokens, L.badge * 0.5));
+    c.roundRect(x0, by - L.badge / 2, L.badge, L.badge, L.badge / 2);
     c.fill();
-    card.drawRun(c, env, L.num, bx, by - L.num.height / 2, "center", pal.fill);
+    card.drawTabular(c, env, L.num, L.num.rows.map((r) => r.text).join(" "), bx, by - L.num.height / 2, "center", pal.fill);
     c.restore();
     const tx = x0 + L.badge + L.gap;
     const bodyH = L.text.height + (L.pips ? L.pips.top + 2 * L.pips.r : 0);

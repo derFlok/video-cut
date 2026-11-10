@@ -10,6 +10,7 @@
 
 const style = require("../lib/style");
 const { overlapArea } = require("../lib/layout");
+const material = require("../lib/material");
 
 const name = "ai_badge";
 const top = true;
@@ -79,20 +80,14 @@ function draw(ctx, t, item, env) {
   const [x0, y0, x1, y1] = L.box;
   const c = colors(env.tokens);
   const r = (y1 - y0) / 2;
-  ctx.beginPath();
-  ctx.moveTo(x0 + r, y0);
-  ctx.arcTo(x1, y0, x1, y1, r);
-  ctx.arcTo(x1, y1, x0, y1, r);
-  ctx.arcTo(x0, y1, x0, y0, r);
-  ctx.arcTo(x0, y0, x1, y0, r);
-  ctx.closePath();
-  ctx.globalAlpha = 0.92;
-  ctx.fillStyle = c.fill;
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  ctx.lineWidth = Math.max(1, Math.round(L.px * 0.06));
-  ctx.strokeStyle = c.edge;
-  ctx.stroke();
+  const pill = (k) => {
+    k.beginPath();
+    k.roundRect(x0, y0, x1 - x0, y1 - y0, r);
+  };
+  // a solid pill in the brand's material (never glass: the legal label must read on any
+  // picture), with a fine edge in the muted colour
+  material.plate(ctx, env, pill, { box: L.box, px: L.px, color: c.fill, solid: true });
+  material.edge(ctx, pill, c.edge, L.px * 0.9);
   ctx.font = style.font(env, L.px, L.weight);
   ctx.fillStyle = c.text;
   ctx.textBaseline = "middle";

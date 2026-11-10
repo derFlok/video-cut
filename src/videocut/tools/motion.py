@@ -411,9 +411,15 @@ def views(spans: list[dict]) -> list[dict]:
 
 
 def brand_tokens(job: Path) -> dict:
+    from . import _glass
+    from .ingest import probe
     from .slides import brand_tokens as tokens_of
 
-    return tokens_of(job)
+    tokens = tokens_of(job)
+    if _glass.is_glass(tokens):  # the frost this video can have (vibrancy guard)
+        src = job / read_job(job)["source"]
+        tokens["glass_backdrop"] = _glass.backdrop_range(job, src, probe(src))
+    return tokens
 
 
 def stage_region(region: list[int], unit: int) -> list[int]:
@@ -504,8 +510,12 @@ def _write_record(job: Path, spans: dict) -> None:
     write_json(rec, {"job": str(job.resolve()), "spans": spans})
 
 
+# the glass mask and its frost parameters exist only for a glass brand (absent: None)
+GLASS_FILES = ("glass.mkv", "glass.mkv.json")
+
+
 def _files(sid: str) -> dict[str, str]:
-    return {k: f"{DIR}/{sid}/{k}" for k in ("clip.mov", "events.json", "clip.json")}
+    return {k: f"{DIR}/{sid}/{k}" for k in ("clip.mov", "events.json", "clip.json", *GLASS_FILES)}
 
 
 def status(job: Path, span: dict, meta: dict, tokens: dict, rec: dict | None = None) -> str:
@@ -561,10 +571,11 @@ def _render_one(job: Path, span: dict, meta: dict, tokens: dict) -> dict:
     doc = spec(span, meta, tokens)
     spf = d / "motion.json"
     write_json(spf, doc)
-    for f in ("clip.mov", "events.json", "clip.json"):
+    for f in ("clip.mov", "events.json", "clip.json", *GLASS_FILES):
         (d / f).unlink(missing_ok=True)
     res = _run_renderer([str(spf), "--region-only", "--out", str(d / "clip.mov"),
-                         "--events", str(d / "events.json")], job)  # fmt: skip
+                         "--events", str(d / "events.json"), "--mask", str(d / "glass.mkv")],
+                        job)  # fmt: skip
     if not (d / "clip.mov").is_file():
         raise ToolError(f"motion {span['id']}: the renderer wrote no clip.mov")
     if not (d / "events.json").is_file():
@@ -574,7 +585,7 @@ def _render_one(job: Path, span: dict, meta: dict, tokens: dict) -> dict:
         "place_at": res.get("place_at") or [0, 0], "out_size": res.get("out_size") or meta["size"],
         "frames": res.get("frames"), "fps": meta["fps"], "render_seconds": res.get("seconds"),
         "frames_per_second": res.get("frames_per_second"), "beats": res.get("beats"),
-        "spec_sha256": spec_sha(doc, job),
+        "spec_sha256": spec_sha(doc, job), "glass": res.get("glass"),
     }  # fmt: skip
     write_json(d / "clip.json", report)
     return report
@@ -634,7 +645,9 @@ def ensure_clips(job: Path, force: bool = False, ids: list[str] | None = None,
         rep = json.loads((job / DIR / s["id"] / "clip.json").read_text())
         clips.append({
             "id": s["id"], "t0": s["t0"], "t1": s["t1"], "clip": job / DIR / s["id"] / "clip.mov",
-            "place_at": rep["place_at"], "size": rep["out_size"],
+            "place_at": rep["place_at"], "size": rep["out_size"], "frames": rep.get("frames"),
+            "mask": job / DIR / s["id"] / "glass.mkv"
+            if (job / DIR / s["id"] / "glass.mkv").is_file() else None,
             "events": f"{DIR}/{s['id']}/events.json", "render_seconds": rep.get("render_seconds"),
         })  # fmt: skip
     return {
@@ -648,27 +661,65 @@ def composite_graph(clips: list[dict], first_index: int, fps, scale: float,
                     v_in: str, matrix: str = "bt709") -> tuple[str, str]:  # fmt: skip
     """Filter lines laying each motion clip over `v_in` at its offset and place: on the
     output frame grid (pts = frame number, first frame at round(t0 * fps)), BT.709 →
-    `matrix`, alpha blended in 4:4:4. Returns (graph text, output label)."""
+    `matrix`, alpha blended in 4:4:4. A clip with a glass mask (`mask`, its input right
+    after the clip's) first frosts the picture under it through the mask, only for the
+    clip's own frames (_glass). Returns (graph text, output label); the inputs are the
+    clips in order, each followed by its mask when it has one (`inputs(clips)`)."""
     from fractions import Fraction
+
+    from . import _glass
 
     fr = Fraction(fps).limit_denominator(1001)
     tb = f"{fr.denominator}/{fr.numerator}"
-    text, cur = "", v_in
+    text, cur, idx = "", v_in, first_index
     for k, c in enumerate(clips):
         f0 = round(c["t0"] * fr)
         w, h = (max(2, round(v * scale) // 2 * 2) for v in c["size"])
         x, y = (round(v * scale) for v in c["place_at"])
         lab = f"[mo{k}]"
+        ci = idx
+        idx += 1
         text += (
-            f";\n[{first_index + k}:v]setpts=PTS-STARTPTS,fps={fps},settb={tb},setpts=N+{f0},"
+            f";\n[{ci}:v]setpts=PTS-STARTPTS,fps={fps},settb={tb},setpts=N+{f0},"
             f"scale={w}:{h}:flags=lanczos:in_color_matrix=bt709:in_range=tv:"
             f"out_color_matrix={matrix}:out_range=tv,format=yuva444p[mc{k}];\n"
-            f"{cur}settb={tb},format=yuv444p[mb{k}];\n"
-            f"[mb{k}][mc{k}]overlay={x}:{y}:format=yuv444:eof_action=pass:shortest=0,"
-            f"format=yuv420p{lab}"
         )
+        params = _glass.read_params(c["mask"]) if c.get("mask") and c.get("frames") else None
+        if params:
+            mi = idx
+            idx += 1
+            n = int(c["frames"])
+            text += (
+                f"{cur}settb={tb},format=yuv444p,split[mb{k}][ms{k}];\n"
+                f"[ms{k}]trim=start_frame={f0}:end_frame={f0 + n},crop={w}:{h}:{x}:{y},"
+                f"{_glass.frost_chain(w, h, params, scale)}[mz{k}];\n"
+                + _glass.mask_input(mi, fps, w, h, f0, f"mm{k}")
+                + ";\n"
+                f"[mz{k}][mm{k}]alphamerge[mg{k}];\n"
+                f"[mb{k}][mg{k}]overlay={x}:{y}:format=yuv444:eof_action=pass:shortest=0[mf{k}];\n"
+                f"[mf{k}][mc{k}]overlay={x}:{y}:format=yuv444:eof_action=pass:shortest=0,"
+                f"format=yuv420p{lab}"
+            )
+        else:
+            text += (
+                f"{cur}settb={tb},format=yuv444p[mb{k}];\n"
+                f"[mb{k}][mc{k}]overlay={x}:{y}:format=yuv444:eof_action=pass:shortest=0,"
+                f"format=yuv420p{lab}"
+            )
         cur = lab
     return text + ("\n" if text else ""), cur
+
+
+def inputs(clips: list[dict]) -> list[str]:
+    """ffmpeg -i arguments in the order composite_graph expects them."""
+    from . import _glass
+
+    out: list[str] = []
+    for c in clips:
+        out += ["-i", str(c["clip"])]
+        if c.get("mask") and c.get("frames") and _glass.read_params(c["mask"]):
+            out += ["-i", str(c["mask"])]
+    return out
 
 
 # --- stills -------------------------------------------------------------------------------

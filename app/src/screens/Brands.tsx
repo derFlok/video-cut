@@ -404,7 +404,7 @@ export function BrandEditor({ id }: { id: string }) {
                   <label htmlFor="m-depth">{t("brands.motion.depth")}</label>
                   <select id="m-depth" value={String(brand.motion?.depth ?? "")} onChange={(e) => set("motion.depth", e.target.value || undefined)}>
                     <option value="">{t("brands.motion.auto")}</option>
-                    {(["flat", "soft", "glow"] as const).map((v) => (
+                    {(["flat", "soft", "glow", "glass"] as const).map((v) => (
                       <option key={v} value={v}>
                         {t(`brands.motion.depth.${v}`)}
                       </option>

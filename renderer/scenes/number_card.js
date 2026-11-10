@@ -52,9 +52,11 @@ function layout(ctx, item, env) {
       const maxW = card.maxCardWidth(env, px, pad);
       const big = card.textRun(ctx, env, style.setCase(tokens, value), { px: px * 4, role: "display", maxWidth: maxW, maxLines: 1, minPx: px * 2 });
       const label = labelOf(item)
-        ? card.textRun(ctx, env, labelOf(item), { px, role: "body", maxWidth: maxW, maxLines: 2 })
+        ? card.textRun(ctx, env, labelOf(item), { px, role: "label", maxWidth: maxW, maxLines: 2 })
         : null;
-      const gap = label ? Math.round(px * 0.2) : 0;
+      const gap = label ? Math.round(px * 0.35) : 0;
+      // the figure is drawn with tabular digits (wider than proportional ones)
+      big.width = Math.max(big.width, card.tabularWidth(ctx, env, big, style.setCase(tokens, value)).w);
       return {
         px,
         pad,
@@ -79,8 +81,7 @@ function draw(ctx, t, item, env) {
     // Count up after the card has arrived, never past the target.
     const k = card.settle(tokens, t - card.reachTime(tokens) * 0.5);
     const shown = n ? formatNumber(n, n.value * k) : valueOf(item);
-    const big = { ...L.big, rows: [{ text: style.setCase(tokens, shown), width: L.big.width }] };
-    card.drawRun(c, env, big, cx, box[1] + L.pad, "center", pal.accent);
+    card.drawTabular(c, env, L.big, style.setCase(tokens, shown), cx, box[1] + L.pad, "center", pal.accent);
     if (L.label) card.drawRun(c, env, L.label, cx, box[1] + L.pad + L.big.height + L.gap, "center", pal.text);
   });
 }
