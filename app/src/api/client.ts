@@ -10,6 +10,9 @@ import type {
   CutStyleChoice,
   Disclosure,
   RedactStyle,
+  SfxKind,
+  SfxLevel,
+  SfxSettings,
   Format,
   FormatChoice,
   JobDetail,
@@ -219,6 +222,17 @@ export const api = {
   labelSettings: () => call<LabelSettings>("GET", "/api/settings/labels"),
   saveLabelSettings: (s: LabelSettings) => call<LabelSettings>("PUT", "/api/settings/labels", s),
   disclosure: (id: string) => call<Disclosure>("GET", `${J(id)}/disclosure`),
+  sfxSettings: () => call<SfxSettings>("GET", "/api/settings/sfx"),
+  saveSfxDefault: (sfx_default: SfxLevel) => call<SfxSettings>("PUT", "/api/settings/sfx", { sfx_default }),
+  fetchSfx: (kind?: SfxKind) => call<SfxSettings>("POST", "/api/settings/sfx/fetch", kind ? { kind } : {}),
+  uploadSfx: (kind: SfxKind, file: File, title?: string) => {
+    const form = new FormData();
+    form.append("sound", file);
+    if (title) form.append("title", title);
+    return call<SfxSettings>("POST", `/api/settings/sfx/${kind}`, form);
+  },
+  deleteSfx: (kind: SfxKind, id: string) => call<SfxSettings>("DELETE", `/api/settings/sfx/${kind}/${id}`),
+  sfxAudioUrl: (kind: SfxKind, id: string) => `/api/settings/sfx/${kind}/${id}/audio`,
 
   jobs: () => call<JobSummary[]>("GET", "/api/jobs"),
   job: (id: string) => call<JobDetail>("GET", J(id)),
@@ -298,6 +312,8 @@ export const api = {
     call<unknown>("POST", `${J(id)}/approve`, redaction ? { plan_sha, redaction } : { plan_sha }),
   setCutStyle: (id: string, cut_style: CutStyleChoice) => call<JobDetail>("PUT", `${J(id)}/cut-style`, { cut_style }),
   /** How personal data is hidden; a reel that hid it otherwise goes stale (recut). */
+  setJobSfx: (id: string, sfx: SfxLevel | "default") =>
+    call<{ sfx: SfxLevel | null; sfx_resolved: SfxLevel; cut_stale: boolean }>("PUT", `${J(id)}/sfx`, { sfx }),
   setRedactStyle: (id: string, redact_style: RedactStyle) =>
     call<{ redact_style: RedactStyle; cut_stale: boolean }>("PUT", `${J(id)}/redact-style`, { redact_style }),
   recut: (id: string) => call<unknown>("POST", `${J(id)}/recut`),

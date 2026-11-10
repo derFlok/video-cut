@@ -33,6 +33,11 @@ Numbers per cut
     blink    flag `blink_at_cut` when one of the two output frames on either side of the cut
              shows a blink: the frames are mapped to source time via the EDL and looked up
              in the blink intervals of a current work/face.json
+Sound effects (render.json "sfx", _sfx_mix): check `sfx` with the flags `sfx_masks_speech`
+(a hit leaves the voice's speech band less than _sfx_mix.MASK_DB above it while it speaks;
+render already lowered such hits, so what is left is real) and `sfx_clipping` (the mix
+before the limiter or the SFX bus too hot in a hit).
+
 Speech (_verify_audio.py): check `speech_clipped` (a hard failure) lists every cut of the
 OUTPUT audio where a word is cut off mid-phoneme (level and spectral flux within +-60 ms of
 the cut, on the frame grid render cut at); the cut gets the flag `speech_clipped` too, with
@@ -104,6 +109,7 @@ from ..paths import tool_env
 from . import _image as im
 from . import (
     _plates,
+    _sfx_mix,
     _verify_ai,
     _verify_audio,
     _verify_broll,
@@ -658,6 +664,24 @@ def _speech(audio: np.ndarray, render: dict, edl: Edl | None) -> dict:
     return _verify_audio.check(audio, RATE, cuts, joins, oks)
 
 
+def _sfx_check(render: dict) -> dict | None:
+    """Check `sfx` (render.json "sfx", _sfx_mix): flags `sfx_masks_speech` (a hit leaves the
+    voice's speech band less than _sfx_mix.MASK_DB above it while it speaks) and
+    `sfx_clipping` (the mix before the limiter or the SFX bus too hot in a hit). The reel's
+    own peak is the `true_peak` check. None when render mixed no sound effects."""
+    rep = render.get("sfx")
+    if not isinstance(rep, dict) or not rep.get("mixed"):
+        return None
+    flags = _sfx_mix.flags(rep)
+    a = rep.get("analysis") or {}
+    return _check(
+        not flags, flags=flags, level=rep.get("level"), hits=rep.get("hits"),
+        min_margin_db=a.get("min_margin_db"), masked=a.get("masked") or [],
+        clipped=a.get("clipped") or [], voice_lufs=a.get("voice_lufs"),
+        sfx_lufs=a.get("sfx_lufs"), hit_vs_voice_db=a.get("hit_vs_voice_db"),
+    )  # fmt: skip
+
+
 def _check(ok: bool, **fields) -> dict:
     return {"ok": bool(ok), **fields}
 
@@ -843,6 +867,9 @@ def verify(args) -> dict:
             not any(d["flags"] for d in broll_docs),
             flagged=[d for d in broll_docs if d["flags"]],
         )
+    sfx_doc = _sfx_check(render)
+    if sfx_doc is not None:
+        checks["sfx"] = sfx_doc
     if "error" in demo:
         checks["screen_layouts"] = _check(False, error=demo["error"])
     elif "overlap" in demo:

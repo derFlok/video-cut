@@ -30,6 +30,23 @@
   main component, headline on a card, an event every 0.5 s, hand over, brand style) and
   writes `work/motion_report.md`. The overlay run fails when it changes work/plan.json.
 
+### Added — Motion: sound effects from the motion events (`videocut tool sfx`)
+- `sfx build`: every span's `work/motion/<span>/events.json` → `work/sfx.wav` (48 kHz) +
+  `work/sfx.json`: one seeded sound per kind and job, slight pitch/gain/pan variation per
+  hit, strength → gain, per-kind spacing, one big transition sound per moment
+  (whoosh/swoosh_out/impact), at most 6 hits a second, never in the first frame of a word
+  onset (moved 30 ms ahead).
+- Sound library `$VIDEOCUT_HOME/sfx/<kind>/`: own uploads first, then Openverse audio
+  (`sfx fetch`, CC0/PDM only, key-less, credit sidecar), then sounds generated locally with
+  numpy (offline, tests, CI). Every file is decoded, trimmed, length-capped and normalised.
+- Render mixes the track under the voice (EQ dip, look-ahead sidechain ducking, limiter),
+  measures speech-band margin per hit before the encode and lowers hits that would cover
+  speech; render.json `"sfx"` reports levels and LUFS. Verify flags `sfx_masks_speech` and
+  `sfx_clipping`. The disclosure lists the sounds.
+- Job level `sfx: off|subtle|normal` (`job sfx`, `PUT /api/jobs/{id}/sfx`, default from
+  settings `sfx_default`, subtle); a changed level makes the reel stale. Settings API for
+  the library (list, upload, remove, fetch, preview audio); i18n keys `sfx.*`, `flag.sfx_*`.
+
 ### Added — Spike: Claude-authored motion scenes (branch only, see docs/spikes/motion.md)
 - `renderer/motion.js`: renders a scene module written per span (HTML/SVG/CSS on an
   anime.js 4.5.0 timeline, MIT) in a sandboxed page (own origin, request filter, CSP

@@ -11,6 +11,9 @@ EDL (_ai_label.on_screen), never by the agent:
        licence and its link; it is printed with the source link instead of the short one),
      "platforms": [{"id": "youtube"|"meta"|"tiktok", "label", "status": "required"|"not needed",
        "why"}],
+     "sounds": [{"kind", "id", "origin": "openverse"|"upload"|"procedural", "title", "author",
+       "licence", "licence_url", "source_url", "attribution"}] (the sound effects mixed in;
+       Openverse ones are CC0/PDM, credited as a courtesy),
      "snippet": description text in the job language (AI note + attributions; "" when there
        is nothing to disclose),
      "comment": the container comment render wrote (or null), "c2pa": render's c2pa result}
@@ -50,7 +53,10 @@ SNIPPET = {
     "ai": {"de": "Hinweis: Dieses Video enthält KI-generiertes Bildmaterial ({models}).",
            "en": "Note: this video contains AI-generated imagery ({models})."},
     "stock": {"de": "Bildnachweise: {items}.", "en": "Credits: {items}."},
+    "sounds": {"de": "Soundeffekte: {items}.", "en": "Sound effects: {items}."},
 }  # fmt: skip
+SOUND_KEYS = ("kind", "id", "origin", "title", "author", "licence", "licence_url", "source_url",
+              "attribution")  # fmt: skip
 COMMENT = "Contains AI-generated material: {models}"
 STOCK_KEYS = ("source", "author", "licence", "attribution", "attribution_full", "licence_url",
               "source_url")  # fmt: skip
@@ -76,7 +82,8 @@ def comment(items: list[dict]) -> str | None:
     return COMMENT.format(models=", ".join(models)) if models else None
 
 
-def build(items: list[dict], lang: str, provenance: dict | None = None) -> dict:
+def build(items: list[dict], lang: str, provenance: dict | None = None,
+          sounds: list[dict] | None = None) -> dict:  # fmt: skip
     """The disclosure document for the material items the cut shows (_ai_label.on_screen)."""
     ai, stock, seen = [], [], set()
     for i in items:
@@ -107,12 +114,18 @@ def build(items: list[dict], lang: str, provenance: dict | None = None) -> dict:
     credits = [str(c) for c in credits if c]
     if credits:
         parts.append(_t(SNIPPET["stock"], lang).format(items="; ".join(credits)))
+    snd = [{k: s.get(k) for k in SOUND_KEYS} for s in sounds or []]
+    snd_credits = [str(s["attribution"]) for s in snd
+                   if s["origin"] == "openverse" and s.get("attribution")]  # fmt: skip
+    if snd_credits:
+        parts.append(_t(SNIPPET["sounds"], lang).format(items="; ".join(snd_credits)))
     prov = provenance or {}
     return {
         "version": 1,
         "lang": lang,
         "ai": ai,
         "stock": stock,
+        "sounds": snd,
         "platforms": platforms,
         "snippet": "\n".join(parts),
         "comment": prov.get("comment"),
@@ -134,14 +147,20 @@ MD = {
     "ai": {"de": "KI-generiertes Material", "en": "AI-generated material"},
     "stock": {"de": "Stock-Material", "en": "Stock material"},
     "prompt": {"de": "Prompt", "en": "Prompt"},
+    "sounds": {"de": "Soundeffekte", "en": "Sound effects"},
+    "origin": {"openverse": {"de": "Openverse", "en": "Openverse"},
+               "upload": {"de": "eigener Sound", "en": "own sound"},
+               "procedural": {"de": "lokal erzeugt", "en": "generated locally"}},
 }  # fmt: skip
 
 
 def markdown(doc: dict) -> str:
     lang = doc["lang"]
     out = [f"# {_t(MD['title'], lang)}", ""]
+    sounds = doc.get("sounds") or []
     if not doc["ai"] and not doc["stock"]:
-        return "\n".join([*out, _t(MD["nothing"], lang), ""])
+        out.append(_t(MD["nothing"], lang))
+        return "\n".join([*out, *_sound_lines(sounds, lang), ""])
     out += [f"## {_t(MD['platforms'], lang)}", ""]
     for p in doc["platforms"]:
         out.append(f"- [{'x' if p['status'] == 'required' else ' '}] {p['label']}: "
@@ -162,12 +181,26 @@ def markdown(doc: dict) -> str:
             line = s["attribution"] or s["author"] or s["source"]
             out.append(f"- {line}" + (f" ({s['licence']})" if s["licence"] else "")
                        + (f" {s['source_url']}" if s["source_url"] else ""))  # fmt: skip
-    return "\n".join([*out, ""])
+    return "\n".join([*out, *_sound_lines(sounds, lang), ""])
 
 
-def write(job: Path, edl: Edl, raw: dict, lang: str, provenance: dict | None = None) -> dict:
+def _sound_lines(sounds: list[dict], lang: str) -> list[str]:
+    if not sounds:
+        return []
+    out = ["", f"## {_t(MD['sounds'], lang)}", ""]
+    for s in sounds:
+        origin = _t(MD["origin"].get(s.get("origin"), {"en": str(s.get("origin"))}), lang)
+        line = s.get("attribution") or s.get("title") or s.get("id")
+        extra = f", {s['licence']}" if s.get("licence") and s.get("origin") == "openverse" else ""
+        url = f" {s['source_url']}" if s.get("source_url") else ""
+        out.append(f"- {s.get('kind')}: {line} ({origin}{extra}){url}")
+    return out
+
+
+def write(job: Path, edl: Edl, raw: dict, lang: str, provenance: dict | None = None,
+          sounds: list[dict] | None = None) -> dict:  # fmt: skip
     """Write work/disclosure.json and work/disclosure.md; returns the document."""
-    doc = build(_ai_label.on_screen(job, edl, raw), lang, provenance)
+    doc = build(_ai_label.on_screen(job, edl, raw), lang, provenance, sounds)
     write_json(job / "work" / "disclosure.json", doc)
     (job / "work" / "disclosure.md").write_text(markdown(doc))
     return doc

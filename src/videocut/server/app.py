@@ -53,6 +53,7 @@ from ..tools.job import (
 )
 from . import brands, disclosure, models, setup, state, theme
 from . import material as material_api
+from . import sfx as sfx_api
 from .runs import Busy, Runs
 from .security import Guard
 from .uploads import (
@@ -889,6 +890,7 @@ def create_app(
         return FileResponse(p, media_type="video/mp4", filename=filename)
 
     material_api.register(app, job_or_404, submit, not_running, decision)
+    sfx_api.register(app, job_or_404, not_running, decision)
     app.include_router(theme.router)  # before brands: /api/brands/{id}/theme and /assets
     app.include_router(brands.router)
     app.include_router(disclosure.router)

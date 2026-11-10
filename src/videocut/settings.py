@@ -21,7 +21,8 @@ KEYCHAIN_ACCOUNT = "anthropic-api-key"
 # get the visible AI label too (realistic AI material always does: EU AI Act Art. 50).
 # Material (tools/material.py): the new-job form's default mode, the image generator
 # (image_provider: a name from tools/_material_providers, "none" for no generated stills),
-# the stock sources and the cost limit per job for generated images.
+# the stock sources and the cost limit per job for generated images. sfx_default: the
+# sound-effect level of a job without its own "sfx" (tools/sfx.LEVELS: off|subtle|normal).
 DEFAULTS = {
     "auth": "local",
     "model": None,
@@ -32,6 +33,7 @@ DEFAULTS = {
     "stock_providers": ["pixabay", "pexels", "coverr", "openverse"],
     "material_budget_usd": 1.0,
     "ai_label_illustrations": True,
+    "sfx_default": "subtle",
 }
 # Keychain accounts a key may be stored under (the Anthropic key and the material providers').
 SECRET_ACCOUNTS = (

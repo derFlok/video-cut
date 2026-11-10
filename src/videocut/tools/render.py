@@ -47,6 +47,12 @@
              Personal data: every candidate of work/redaction.json the human did not
              mark as demo data (no decision: all) is added as a redact block to the
              screen segments it overlaps (render.json "redaction")
+    sfx      when the job has motion events (work/motion/<span>/events.json) and job.json
+             "sfx" is not off: work/sfx.wav (`videocut tool sfx build`, run here when the
+             events changed) is mixed under the normalised voice, ducked against it and
+             limited (_sfx_mix); an audio-only second pass measures the mix (speech-band
+             margin per hit, peaks, LUFS) into render.json "sfx"; the sounds' sources go
+             into the disclosure
     encode   H.264 high yuv420p + AAC 48 kHz 192k, +faststart, constant EDL fps (also
              from variable-frame-rate phone recordings)
     provenance (full render only) AI-generated material on screen (work/material.json,
@@ -88,10 +94,12 @@ from . import (
     _plates,
     _redact_blur,
     _redact_style,
+    _sfx_mix,
     _snap,
 )
 from . import _render_plan as plan_mod
 from . import motion as motion_mod
+from . import sfx as sfx_mod
 from . import slides as slides_mod
 from ._color import is_hdr, output_tags, to_sdr
 from ._geometry import framed, sized
@@ -424,7 +432,20 @@ def render(args) -> dict:
                 f"segment {c['segment']}: screen zoom {c['zoom']}x at {c['t']} s would be"
                 f" blurry; clamped to {c['max_zoom']}x"
             )
-    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off)
+    # Motion clips first: their events.json feed the sound effects (_sfx_prepare).
+    motion_docs, mres = [], None
+    if _job_motion.stored(read_job(job))["mode"] != "off":
+        try:
+            mres = motion_mod.ensure_clips(job)
+        except ToolError as e:
+            warnings.append(f"motion scenes left out: {e}")
+        if mres:
+            warnings += [f"motion {d['id']} dropped: {d['why']}" for d in mres["dropped"]]
+            warnings += [f"motion {i}: no scene yet" for i in mres["no_scene"]]
+    sfx_use = _sfx_prepare(job, plan.duration, warnings)
+    mixed = bool(sfx_use and sfx_use["mixed"])
+    graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off,
+                           "vo_voice" if mixed else "a")  # fmt: skip
     if use_overlay:
         graph += composite_graph(inputs.count("-i"), plan.fps, (ow, oh), overlay_matrix(info))
         inputs += ["-i", str(overlay)]
@@ -439,28 +460,28 @@ def render(args) -> dict:
             "the EDL has captions/overlays but there is no work/overlay.mov; run "
             "`videocut tool overlays` first"
         )
-    motion_docs = []
-    if _job_motion.stored(read_job(job))["mode"] != "off":
-        try:
-            mres = motion_mod.ensure_clips(job)
-        except ToolError as e:
-            mres = None
-            warnings.append(f"motion scenes left out: {e}")
-        if mres:
-            warnings += [f"motion {d['id']} dropped: {d['why']}" for d in mres["dropped"]]
-            warnings += [f"motion {i}: no scene yet" for i in mres["no_scene"]]
-            if mres["clips"]:
-                text, v_out = motion_mod.composite_graph(
-                    mres["clips"], inputs.count("-i"), plan.fps, ow / edl.size[0], v_out,
-                    overlay_matrix(info),
-                )  # fmt: skip
-                graph = graph.rstrip("\n") + text
-                for c in mres["clips"]:
-                    inputs += ["-i", str(c["clip"])]
-                motion_docs = [
-                    {k: c[k] for k in ("id", "t0", "t1", "place_at", "size", "events")}
-                    for c in mres["clips"]
-                ]
+    if mres and mres["clips"]:
+        text, v_out = motion_mod.composite_graph(
+            mres["clips"], inputs.count("-i"), plan.fps, ow / edl.size[0], v_out,
+            overlay_matrix(info),
+        )  # fmt: skip
+        graph = graph.rstrip("\n") + text
+        for c in mres["clips"]:
+            inputs += ["-i", str(c["clip"])]
+        motion_docs = [
+            {k: c[k] for k in ("id", "t0", "t1", "place_at", "size", "events")}
+            for c in mres["clips"]
+        ]
+    if mixed:
+        graph += ";\n" + "\n".join(_sfx_mix.mix_lines(
+            "vo_voice", inputs.count("-i"), sfx_use["gain_db"], float(plan.duration)
+        )) + "\n"  # fmt: skip
+        inputs += ["-i", str(work / "sfx.wav")]
+    sfx_report = None
+    if sfx_use:  # measured (and fitted) before the encode: sfx.wav may change here
+        sfx_report = _sfx_fit(job, sfx_use, plan, measured, audio_in, a_off,
+                              ["-i", str(src), *audio_args])  # fmt: skip
+        warnings += [f"sound effects: {f}" for f in _sfx_mix.flags(sfx_report)]
     graph_file = work / "render_filter.txt"
     _write_graph(graph_file, graph)
 
@@ -563,6 +584,8 @@ def render(args) -> dict:
             "source": red_source, "candidates": [c["id"] for c in cands],
             "style": redact_style, "blocks": styles,
         }  # fmt: skip
+    if sfx_report:
+        report["sfx"] = sfx_report
     if plan.tail:
         report["tail_s"] = round(float(plan.tail / plan.fps), 3)
     if provenance:
@@ -570,7 +593,8 @@ def render(args) -> dict:
         report["provenance"] = provenance
         report["disclosure"] = "work/disclosure.json"
         _disclosure.write(job, edl, data, job_lang(read_job(job)),
-                          {"comment": ai_comment, "c2pa": report["c2pa"]})  # fmt: skip
+                          {"comment": ai_comment, "c2pa": report["c2pa"]},
+                          _sfx_sounds(job) if mixed else [])  # fmt: skip
     if loud["integrated_lufs"] is None:
         warnings.append("the reel is silent")
     elif abs(off := loud["integrated_lufs"] - plan_mod.TARGET_I) > 1:
@@ -609,8 +633,106 @@ def render(args) -> dict:
         "redaction": report.get("redaction"),
         "snap": report.get("snap"),
         "c2pa": report.get("c2pa"),
+        "sfx": _sfx_summary(sfx_report),
         "warnings": warnings,
     }
+
+
+# ------------------------------------------------------------------ sound effects
+
+
+def _sfx_prepare(job: Path, duration: float, warnings: list[str]) -> dict | None:
+    """What render does with sound effects: None when the job has no motion events,
+    {"level": "off", "mixed": False} when they are switched off, else the level, its gain
+    and work/sfx.json (built again by `sfx build` when the events changed). An invalid
+    job.json "sfx" refuses the render (ToolError, fail closed)."""
+    lvl = sfx_mod.level(read_job(job))
+    if not sfx_mod.event_files(job):
+        return None
+    if lvl == "off":
+        return {"level": "off", "mixed": False}
+    doc = sfx_mod.read(job)
+    if (
+        not sfx_mod.is_current(job)
+        or doc is None
+        or abs(float(doc.get("duration_s") or 0) - duration) > 0.5
+    ):
+        doc = sfx_mod.build(job)
+    if not doc["hits"]:
+        return {"level": lvl, "mixed": False, "hits": 0}
+    warnings += [f"sfx: {w}" for w in doc.get("warnings", [])]
+    return {"level": lvl, "mixed": True, "gain_db": _sfx_mix.LEVEL_DB[lvl], "doc": doc}
+
+
+def _sfx_report(job: Path, use: dict, plan, measured, audio_in: str, a_off: float,
+                inputs: list[str]) -> dict:  # fmt: skip
+    """render.json "sfx": the level, the hits and the measured mix (_sfx_mix.analyse, an
+    audio-only pass with the same graph)."""
+    if not use["mixed"]:
+        return {k: v for k, v in use.items() if k != "doc"}
+    doc = use["doc"]
+    work = job / "work"
+    g = work / "render_sfx_measure.txt"
+    lines = _sfx_mix.mix_lines("vo_voice", inputs.count("-i"), use["gain_db"],
+                               float(plan.duration), extra_out=True)  # fmt: skip
+    _write_graph(g, plan_mod.audio_graph(plan, measured, audio_in, a_off, "vo_voice")
+                 + ";\n" + "\n".join(lines) + "\n")  # fmt: skip
+    try:
+        analysis = _sfx_mix.analyse([*inputs, "-i", str(work / "sfx.wav")], g, work, doc["hits"],
+                                    _sfx_mix.sound_lengths(doc), measure)  # fmt: skip
+    finally:
+        g.unlink(missing_ok=True)
+    return {
+        "level": use["level"], "mixed": True, "gain_db": use["gain_db"],
+        "hits": len(doc["hits"]), "counts": doc.get("counts", {}),
+        "sounds": {k: {"id": s.get("id"), "origin": s.get("origin"), "licence": s.get("licence")}
+                   for k, s in (doc.get("sounds") or {}).items()},
+        "sfx_sha256": doc.get("wav_sha256"), "duck": _sfx_mix.DUCK,
+        "limit_dbfs": _sfx_mix.LIMIT_DBFS, "mask_db": _sfx_mix.MASK_DB,
+        "analysis": analysis,
+    }  # fmt: skip
+
+
+FIT_ROUNDS = 2  # analysis passes that may lower hits which would cover speech
+
+
+def _sfx_fit(job: Path, use: dict, plan, measured, audio_in: str, a_off: float,
+             inputs: list[str]) -> dict:  # fmt: skip
+    """_sfx_report, after lowering every hit that would cover speech (margin below
+    _sfx_mix.MASK_DB) to FIT_MARGIN_DB above it and building the track again (at most
+    FIT_ROUNDS times). What is still flagged after that stays flagged (verify)."""
+    report = _sfx_report(job, use, plan, measured, audio_in, a_off, inputs)
+    if not use["mixed"]:
+        return report
+    for _ in range(FIT_ROUNDS):
+        masked = (report.get("analysis") or {}).get("masked") or []
+        if not masked:
+            break
+        fit = dict(use["doc"].get("fit") or {})
+        for m in masked:
+            key = sfx_mod.hit_key(m)
+            fit[key] = fit.get(key, 0.0) - (_sfx_mix.FIT_TO_DB - m["margin_db"])
+        use["doc"] = sfx_mod.build(job, fit=fit)
+        report = _sfx_report(job, use, plan, measured, audio_in, a_off, inputs)
+    report["fitted"] = len(use["doc"].get("fit") or {})
+    return report
+
+
+def _sfx_sounds(job: Path) -> list[dict]:
+    """The library sounds the mixed track used (work/sfx.json), for the disclosure."""
+    doc = sfx_mod.read(job) or {}
+    return [s for s in (doc.get("sounds") or {}).values() if isinstance(s, dict)]
+
+
+def _sfx_summary(report: dict | None) -> dict | None:
+    if not report:
+        return None
+    a = report.get("analysis") or {}
+    return {k: v for k, v in {
+        "level": report.get("level"), "mixed": report.get("mixed"), "hits": report.get("hits"),
+        "voice_lufs": a.get("voice_lufs"), "sfx_lufs": a.get("sfx_lufs"),
+        "min_margin_db": a.get("min_margin_db"), "flags": _sfx_mix.flags(report),
+    }.items() if v is not None}  # fmt: skip
 
 
 def _provenance(dst: Path, shown: list[dict], ai_comment: str | None) -> dict:

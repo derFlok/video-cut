@@ -539,6 +539,8 @@ def cut_done(job: Path) -> bool:
             and rec.get("redact_style", drawn_now := _redact_style_used(job)) == drawn_now
             # (a record from before material: it had none)
             and rec.get("material_sha256", mat_now := material_tool.choices_sha(job)) == mat_now
+            # (a record from before sound effects: it had none)
+            and rec.get("sfx", sfx_now := _sfx_used(job)) == sfx_now
         )
     vfile = job / "out" / "verify.json"
     try:
@@ -569,6 +571,17 @@ def _check_redact_style(value: str) -> None:
         _redact_style.parse(value)
     except ToolError as e:
         raise RunError(str(e)) from None
+
+
+def _sfx_used(job: Path) -> str | None:
+    """The sound-effect level the reel is mixed with (tools/sfx.level), None when the job
+    has no motion events: a changed level means a new render only then."""
+    from .tools import sfx as sfx_tool
+
+    try:
+        return sfx_tool.level(read_job(job)) if sfx_tool.event_files(job) else None
+    except ToolError:
+        return "invalid"
 
 
 def _redact_style_used(job: Path) -> str | None:
@@ -603,6 +616,7 @@ def record_cut(job: Path, approved_sha: str) -> None:
             "cut_style": resolved_style(read_job(job)),
             "target_s": read_job(job).get("target_s"),
             "redact_style": _redact_style_used(job),
+            "sfx": _sfx_used(job),
             "material_sha256": material_tool.choices_sha(job),
             "verify_ok": bool(verify.get("ok")),
         },

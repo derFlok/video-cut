@@ -40,7 +40,7 @@
 
 | Command | Module |
 |---|---|
-| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list`, `job slides [job] [--mode] [--wish]`, `job slides-import <job> FILE… [--replace]` | `job.py`, `_job_slides.py` |
+| `job new <video> [--type] [--brief] [--brand] [--screen FILE] [--asset FILE…] [--cut-style] [--lang de\|en] [--id]`, `job show [job]`, `job approve [job]`, `job redaction [job] --all-demo\|--redact-all\|--redact IDS`, `job brand <id>`, `job screen <file>`, `job format [job] <fmt>`, `job cut-style [job] <calm\|standard\|tight\|auto>`, `job redact-style [job] <auto\|blur\|crop\|block>`, `job sfx [job] <off\|subtle\|normal\|default>`, `job duplicate [job] [--title T] [--keep-approval]`, `job title [job] <title>`, `job vocab <job> add\|remove\|list`, `job slides [job] [--mode] [--wish]`, `job slides-import <job> FILE… [--replace]` | `job.py`, `_job_slides.py` |
 | `brand list`, `brand check <id>`, `brand show <id>`, `brand sheet <id> [--out]`, `brand vocab <id> add\|remove\|list` | `brand.py` |
 | `vocab show [job]`, `vocab apply [job]`, `vocab suggest [job] [--all]` | `vocab.py` |
 | `transcript show [job] [--from t --to t]`, `transcript edit <job> <i> <text>`, `transcript undo <job>` | `transcript.py` |
@@ -58,6 +58,7 @@
 | `slides check [job]`, `slides stills [job] [--id]`, `slides render [job] [--force]` | `slides.py` |
 | `material fetch [job] [--wish N --query/--prompt]`, `material generate`, `material choose <job> <n> <id\|none>`, `material show [job]`, `job material [job] [--mode] [--wish]` | `material.py`, `_material_providers/`, `_job_material.py` |
 | `motion spans\|stills [--id] [--at]\|render [--id] [--force] [--jobs N]\|show\|catalogue\|plan-stills`, `job motion [job] [--mode off\|auto\|wish] [--wish]` | `motion.py`, `_job_motion.py` |
+| `sfx build [job]`, `sfx fetch [--kind K] [--per-kind N]`, `sfx list [--kind K]`, `sfx add <kind> <file> [--title]`, `sfx remove <kind> <id>` | `sfx.py`, `_sfx_library.py`, `_sfx_synth.py`, `_sfx_mix.py` |
 | `render [--preview]` | `render.py` |
 | `verify` | `verify.py` |
 
@@ -83,6 +84,8 @@ job.json   id, created, source (relative), type, brief, status, approval, brand,
            redact_style (optional auto|blur|crop|block; absent = the brand's
            redaction.style, default auto),
            material (optional {mode, wish}; plan_material: what the plan was made for),
+           sfx (optional off|subtle|normal: sound effects of the motion scenes; absent =
+           settings "sfx_default", default subtle),
            cut / overlays (what `videocut run` finished: plan and segments hashes, brand,
            format, cut style and chosen material of the cut)
 input/     source recording, screen recording and assets (screenshots), hard-linked or copied
@@ -1124,6 +1127,51 @@ segment counts as showing no camera for `blink_at_cut`. `videocut tool sheet mat
 the candidates' thumbs on `work/sheets/material_NN.jpg`, labelled `<wish>/<id>` (+ "AI").
 The cut skill uses only chosen material, only inside its wish's span, never over the hook's
 first 2 s, at most 40 % of the reel.
+
+## Sound effects of the motion scenes (`tools/sfx.py`)
+
+Input: only `work/motion/<span>/events.json` `[{t (output s), kind, component, strength}]`
+(motion contract interface 2), span ids from `work/motion/spans.json` (else every
+`events.json` there). Kinds: `pop whoosh tick check strike type count impact swoosh_out`.
+
+**Library** (`_sfx_library.py`, `$VIDEOCUT_HOME/sfx/<kind>/<id>.wav + .json`): three origins,
+preferred in this order per kind: `upload` (the person's own, Settings or `sfx add`),
+`openverse` (`sfx fetch`: `api.openverse.org/v1/audio/`, `license=cc0,pdm` only, key-less,
+3.1 s between searches for the 20/min limit, files from the source CDN, at most 10 MB, no
+longer than the kind's `search_max_s`), `procedural` (`_sfx_synth.py`: numpy, 3 variants per
+kind, never stored; the offline, test and CI default). Nothing is bundled. Every file is
+decoded by ffmpeg (file protocol only, at most 30 s), high-passed at 30 Hz, trimmed of
+silence (-45 dB under its peak), cut to the kind's `max_s` with a fade, normalised to -20
+dBFS RMS over its active part with the peak at most -1 dBFS; the sidecar keeps origin,
+title, author, licence, source link, attribution and the wav's sha256 (a changed file is
+not used: the build falls back to a generated sound with a warning).
+
+**Track** (`sfx build`, run by render when the events changed): one sound per kind per job
+(seeded by the job id), per hit ±0.6 semitone, ±1.5 dB and a small pan (seeded). Placement
+(`plan_hits`, pure): gain from `strength` (none under 0.05); per-kind spacing, whoosh /
+swoosh_out / impact as one "air" family (one big sound per moment); any two hits ≥ 40 ms;
+at most 6 hits in any second, the lower-priority kinds dropped first; a hit in the first
+frame of a word onset (word times from words.json through the EDL) moves 30 ms before it.
+Writes `work/sfx.wav` (48 kHz stereo 16-bit, output time, peak ≤ -8 dBFS) and
+`work/sfx.json` (events' sha256, sounds, hits with gain/pitch/pan/shift, skipped with
+reason, counts, `fit`).
+
+**Mix** (`_sfx_mix.py`, render): after the voice's loudnorm, `sfx.wav` at the job level
+(subtle +10 dB, normal +15 dB over the track), an EQ dip at 2.2 kHz, `sidechaincompress`
+against the voice (threshold 0.008, ratio 4, attack 5 ms, release 200 ms, 25 ms look-ahead
+on the sidechain), `amix` without normalising, `alimiter` at -1.2 dBFS. Before the encode an
+audio-only pass with the same graph writes the voice, the ducked SFX bus and the
+pre-limiter mix and measures per hit the speech-band (300–4000 Hz) margin of the voice
+over the SFX while the voice speaks; a hit under 6 dB is lowered to 9 dB and the track built
+again (at most 2 rounds). render.json `"sfx"`: level, hits, counts, sounds, duck/limit
+settings and `analysis` (per hit margin/peak/loudness, min/median margin, voice and SFX LUFS,
+hit loudness vs voice, bus and pre-limiter peaks, `masked`, `clipped`), `fitted`. Verify:
+check `sfx` with flags `sfx_masks_speech` and `sfx_clipping`. The disclosure lists the
+sounds (`sounds`; Openverse credits in the snippet). A changed level makes the reel stale
+(`run.cut_done`, cut record `"sfx"`). API: `GET/PUT /api/settings/sfx`, `POST
+/api/settings/sfx/{kind}` (upload), `DELETE /api/settings/sfx/{kind}/{id}`, `POST
+/api/settings/sfx/fetch`, `GET /api/settings/sfx/{kind}/{id}/audio`, `PUT /api/jobs/{id}/sfx`;
+the job view has `sfx`, `sfx_resolved`, `sfx_events`.
 
 ## Revision runs (`run.revise`, skill `revise`)
 

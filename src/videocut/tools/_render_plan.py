@@ -305,18 +305,30 @@ def graph(
     to_sdr: str = "",
     video: list[str] | None = None,
     audio_offset: float = 0.0,
+    audio_label: str = "a",
 ) -> str:
     """Full render graph: [v] video, [a] normalised audio (+ the silent tail). `video`
-    replaces the face-only video lines (a render with layouts, _layouts.video_chain)."""
-    pad = f",apad=whole_dur={_t(plan.duration)}" if plan.tail else ""
+    replaces the face-only video lines (a render with layouts, _layouts.video_chain).
+    `audio_label`: the normalised audio's label (another one when more audio is mixed in
+    after it, _sfx_mix)."""
     lines = [
         *(video if video is not None else video_chain(plan, video_in, to_sdr)),
         ";",
-        *audio_chain(plan, audio_in, audio_offset),
-        ";",
-        f"[cut]{loudnorm(measured)}{pad}[a]",
+        audio_graph(plan, measured, audio_in, audio_offset, audio_label),
     ]
     return "\n".join(lines) + "\n"
+
+
+def audio_graph(plan: Plan, measured: dict | str | None, audio_in: str,
+                audio_offset: float = 0.0, label: str = "a") -> str:  # fmt: skip
+    """The audio lines of `graph` alone: cut, crossfaded, normalised (+ the tail) as [label]."""
+    pad = f",apad=whole_dur={_t(plan.duration)}" if plan.tail else ""
+    lines = [
+        *audio_chain(plan, audio_in, audio_offset),
+        ";",
+        f"[cut]{loudnorm(measured)}{pad}[{label}]",
+    ]
+    return "\n".join(lines)
 
 
 def measure_graph(plan: Plan, audio_in: str, audio_offset: float = 0.0) -> str:

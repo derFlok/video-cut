@@ -31,6 +31,7 @@ MODULES = [
     "transcript",
     "material",
     "motion",
+    "sfx",
 ]
 
 
