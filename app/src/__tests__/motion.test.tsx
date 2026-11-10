@@ -82,9 +82,9 @@ describe("motion flags in the result", () => {
     const S = STRINGS;
     const tt = ((k: string, v?: Record<string, string | number>) =>
       Object.entries(v ?? {}).reduce((s, [a, b]) => s.replace(`{${a}}`, String(b)), S.en[k as keyof (typeof S)["en"]])) as never;
-    const lines = verifyLines({ ok: false, motion_flagged: [{ id: "m1", t0: 4, flags: ["motion_invented"], invented: ["balearen"] }] } as never, tt);
+    const lines = verifyLines({ ok: false, motion_flagged: [{ id: "m1", t0: 4, flags: ["motion_invented"], invented: ["lummerland"] }] } as never, tt);
     expect(lines[0]).toContain(S.en["flag.motion_invented"]);
-    expect(lines[0]).toContain("balearen");
+    expect(lines[0]).toContain("lummerland");
   });
 });
 

@@ -300,8 +300,8 @@ def test_invented_band_text():
     from videocut.tools._verify_motion import invented, said_tokens
 
     allowed = said_tokens("Die drei Schritte zum ersten Termin, 45 Minuten") | said_tokens("Ablauf")
-    band = said_tokens("Schritten 45 Minuten Empfehlung Balearen entdecken 3")
-    assert invented(band, allowed) == {"empfehlung", "balearen", "entdecken"}
+    band = said_tokens("Schritten 45 Minuten Empfehlung Lummerland entdecken 3")
+    assert invented(band, allowed) == {"empfehlung", "lummerland", "entdecken"}
     assert said_tokens("4,8 von 5") == {"von"}
 
 
