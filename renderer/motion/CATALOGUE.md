@@ -94,18 +94,24 @@ percent, spark, quote. Drawn for this project (Apache-2.0, no third-party artwor
 ## Brand → look (interface 1)
 
 The brand profile's `motion` section: `theme` (dark | light | auto from the background
-luminance), `depth` (flat | soft | glow; default glow on dark, soft on light), `radius` (share of
+luminance), `depth` (flat | soft | glow | glass; default glow on dark, soft on light; glass is
+frosted glass over the video: the panel is a tint, the frost comes from the glass mask the
+renderer captures of every `.vc-card` and `.vc-chip`), `radius` (share of
 the unit, 0–0.12, default 0.028), `energy` (calm | normal | punchy; default from
 `motion.character`), `type_scale` (0.6–1.6). The runtime resolves them into `vc.style` and
 CSS custom properties components use: `--vc-panel`, `--vc-panel-2`, `--vc-ink`, `--vc-ink-muted`,
 `--vc-line`, `--vc-hi` (accent fill), `--vc-on-hi`, `--vc-hi-text` (accent as text, ≥ 4.5:1 on the
 panel), `--vc-hi-soft`, `--vc-glow`, `--vc-glow-soft`, `--vc-shadow`, `--vc-shadow-lg`,
-`--vc-text-glow`, `--vc-radius`, `--vc-radius-sm`, `--vc-ts`, `--vc-sheen` (plus the spike's
+`--vc-text-glow`, `--vc-radius`, `--vc-radius-sm`, `--vc-ts`, `--vc-sheen`, with glass also
+`--vc-glass` (the tint) (plus the spike's
 `--vc-bg/surface/text/muted/accent/...`). A dark theme on a light brand uses the brand's
 `colors.dark`/`dark_text`, or text and surface swapped. Contrast guard: ink ≥ 7:1 on the panel,
 accent text ≥ 4.5:1, text on the accent ≥ 4.5:1, muted ≥ 3:1 (a colour that misses is moved
-toward black or white until it passes). Energy scales durations (calm 1.2x, punchy 0.8x),
-spring overshoot and the micro-event beat.
+toward black or white until it passes); on glass the ink keeps 4.5:1 over the frost
+measured in the job's video (a denser tint when needed) and the accent text is lifted to
+3:1. Build glass surfaces from `.vc-card` (or `.vc-chip`): only those are frosted. Energy
+scales durations (calm 1.2x, punchy 0.8x),
+spring overshoot (calm: none, critically damped) and the micro-event beat.
 
 ## Numbers
 

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added — Design: glass material and premium scene polish
+- Brand option `motion.depth: "glass"` (brand.py, app brand editor, de/en): frosted glass
+  over the video for every card scene, the caption box and the motion components. The
+  renderers write a glass mask next to each clip (`work/overlay_glass.mkv`,
+  `work/motion/<id>/glass.mkv`, gray FFV1, plus `<mask>.json` with the frost parameters);
+  `render` blurs and saturates the picture through it at a quarter of the size and lays
+  the overlay (tint, sheen, grain, outside shadow, specular edge) on top. Recorded in the
+  overlay and motion trust records.
+- Vibrancy guard: the frost range is measured in the job's own video
+  (`work/glass_backdrop.json`); the tint gets denser until text keeps 4.5:1 over the
+  darkest and lightest frost, the accent text is lifted to 3:1; both reported.
+- Every depth: soft/glow shadows on the canvas plates (they were flat), size-specific
+  tracking, tabular figures, rounder radii, rounded bars on a track with a gradient,
+  `screenshot_frame` as a window or a phone, the end card's logo lock-up, chat bubble and
+  tail as one shape, calm energy without spring overshoot. `_example` keeps its neutral
+  look (soft); without `depth` the defaults stay glow on dark and soft on light.
+- `brand sheet`: every tile and the motion row over a neutral generated picture, so
+  shadows and glass are visible.
+- Plate shadows are drawn once per shape into a cached sprite (a per-frame Gaussian
+  `shadowBlur` made the soft plates 75 % slower); text on glass has no halo (the guard holds
+  the contrast; a per-glyph shadow tripled the overlay time). A fading soft plate is no
+  longer filled twice (its opacity was compounded during fades).
+- Cost per 20 s of a 9:16 reel (M3 Pro, before → after): without glass unchanged
+  (overlays 27 → 29 s, render 32 → 29 s); with glass overlays 24 → 40 s, render 29 → 35 s
+  (peak 2.1 → 2.4 GB), a motion clip 33 → 66 s (mask capture 42 ms/frame).
+
 ### Added — Motion: animated scenes in the pipeline (tool, plan gate, verify, render, app)
 - `videocut tool motion spans|stills|render|show|catalogue|plan-stills` (tools/motion.py,
   replaces `scripts/motion_spike.py`): spans (`work/motion/spans.json`) only from the

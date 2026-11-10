@@ -418,7 +418,7 @@ def brand_tokens(job: Path) -> dict:
     tokens = tokens_of(job)
     if _glass.is_glass(tokens):  # the frost this video can have (vibrancy guard)
         src = job / read_job(job)["source"]
-        tokens["glass_backdrop"] = _glass.backdrop_range(job, src, probe(src))
+        tokens["glass_backdrop"] = _glass.backdrop_range(job, src, probe(src, need_audio=False))
     return tokens
 
 

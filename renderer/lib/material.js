@@ -30,17 +30,15 @@ function resolve(tokens) {
   const text = cap.text || raw.text;
   const accent = cap.highlight || raw.accent || raw.text;
   // (on glass `accent` becomes the lifted accent text, see below)
-  const dark = G.rgb(fill) ? G.lum(G.rgb(fill)) < 0.18 : false;
+  const dark = G.chan(fill) ? G.lum(G.chan(fill)) < 0.18 : false;
   const depth = pick(tokens.motion && tokens.motion.depth, DEPTHS) || (dark ? "glow" : "soft");
   // The brand's darkest base colour carries the shadows.
-  const cands = [raw.text, raw.bg, raw.surface, text, fill].filter((c) => G.rgb(c));
-  const shade = cands.reduce((a, b) => (G.lum(G.rgb(b)) < G.lum(G.rgb(a)) ? b : a), cands[0]);
+  const cands = [raw.text, raw.bg, raw.surface, text, fill].filter((c) => G.chan(c));
+  const shade = cands.reduce((a, b) => (G.lum(G.chan(b)) < G.lum(G.chan(a)) ? b : a), cands[0]);
   const m = { depth, dark, fill, text, accent, muted: raw.muted || text, shade, white: G.hex([255, 255, 255]) };
   if (depth === "glass") {
     const base = G.TINT[dark ? "dark" : "light"];
     const range = G.span(tokens.glass_backdrop);
-    // text needs 4.5:1 on the glass; the accent (the highlight word, big figures: large
-    // text) 3:1
     // text needs 4.5:1 on the glass (a denser tint when the material's own misses); the
     // accent (the highlight word, figures: large text) is lifted to 3:1 instead
     m.tint = G.tint(fill, text, base, G.MIN_CONTRAST, range);
@@ -84,39 +82,39 @@ function plate(ctx, env, shape, opt = {}) {
     return;
   }
   if (kind === "soft" || kind === "glow") {
-    ctx.save();
-    shape(ctx);
-    ctx.fillStyle = color;
-    ctx.shadowColor = kind === "glow" ? G.withAlpha(m.accent, 0.38) : G.withAlpha(m.shade, m.dark ? 0.5 : 0.2);
-    ctx.shadowBlur = px * (kind === "glow" ? 0.9 : 0.8);
-    ctx.shadowOffsetY = kind === "glow" ? 0 : px * 0.16;
-    ctx.fill();
-    // a tighter contact shadow under the soft one
-    ctx.shadowColor = G.withAlpha(m.shade, m.dark ? 0.35 : 0.1);
-    ctx.shadowBlur = px * 0.12;
-    ctx.shadowOffsetY = px * 0.03;
-    ctx.fill();
-    ctx.restore();
+    sprite(ctx, env, shape, box, px, `${kind}|${color}`, (c) => {
+      shape(c);
+      c.fillStyle = color;
+      c.shadowColor = kind === "glow" ? G.withAlpha(m.accent, 0.38) : G.withAlpha(m.shade, m.dark ? 0.5 : 0.2);
+      c.shadowBlur = px * (kind === "glow" ? 0.9 : 0.8);
+      c.shadowOffsetY = kind === "glow" ? 0 : px * 0.16;
+      c.fill();
+      // a tighter contact shadow under the soft one
+      c.shadowColor = G.withAlpha(m.shade, m.dark ? 0.35 : 0.1);
+      c.shadowBlur = px * 0.12;
+      c.shadowOffsetY = px * 0.03;
+      c.fill();
+    });
     if (kind === "glow" || m.dark) edge(ctx, shape, kind === "glow" ? G.withAlpha(m.accent, 0.42) : G.withAlpha(m.white, 0.08), px);
     return;
   }
   // glass
   const a = m.tint.alpha;
-  ctx.save();
   // shadow outside the shape only (the frost shows through the tint, a shadow under it
   // would muddy it): clip to everything but the shape, fill with a shadow
-  ctx.beginPath();
-  const big = 1e5;
-  ctx.rect(-big, -big, 2 * big, 2 * big);
-  shapeInto(ctx, shape);
-  ctx.clip("evenodd");
-  shape(ctx);
-  ctx.fillStyle = color;
-  ctx.shadowColor = G.withAlpha(m.shade, m.dark ? 0.42 : 0.2);
-  ctx.shadowBlur = px * 1.1;
-  ctx.shadowOffsetY = px * 0.22;
-  ctx.fill();
-  ctx.restore();
+  sprite(ctx, env, shape, box, px, `glass|${color}`, (c) => {
+    c.beginPath();
+    const big = 1e5;
+    c.rect(-big, -big, 2 * big, 2 * big);
+    shapeInto(c, shape);
+    c.clip("evenodd");
+    shape(c);
+    c.fillStyle = color;
+    c.shadowColor = G.withAlpha(m.shade, m.dark ? 0.42 : 0.2);
+    c.shadowBlur = px * 1.1;
+    c.shadowOffsetY = px * 0.22;
+    c.fill();
+  });
   // tint
   ctx.save();
   shape(ctx);
@@ -171,6 +169,40 @@ function plate(ctx, env, shape, opt = {}) {
   }
 }
 
+// Shadowed fills are the costly part of a plate (a Gaussian blur of the whole shape every
+// frame). `draw(c)` is drawn once into a sprite canvas per shape, size and material and
+// reused while the plate stays the same (the entrance transform, alpha and filter of ctx
+// apply to the sprite as they would to the fill). Without a box or a canvas factory
+// (tests with a fake context) it draws straight into ctx.
+const SPRITES = 48;
+function sprite(ctx, env, shape, box, px, key, draw) {
+  if (!box || !env.canvas) {
+    ctx.save();
+    draw(ctx);
+    ctx.restore();
+    return;
+  }
+  const ops = [];
+  const rec = new Proxy({}, { get: (_, prop) => (...args) => ops.push(prop, ...args.map((v) => (typeof v === "number" ? Math.round(v * 100) / 100 : v))) });
+  shape(rec);
+  const id = `${key}|${Math.round(px * 100)}|${ops.join(",")}`;
+  const store = env.__sprites || (env.__sprites = new Map());
+  let s = store.get(id);
+  if (!s) {
+    const pad = Math.ceil(px * 3.5);
+    const x = Math.floor(box[0]) - pad;
+    const y = Math.floor(box[1]) - pad;
+    const cv = env.canvas(Math.ceil(box[2]) + pad - x, Math.ceil(box[3]) + pad - y);
+    const c = cv.getContext("2d");
+    c.translate(-x, -y);
+    draw(c);
+    if (store.size >= SPRITES) store.delete(store.keys().next().value);
+    s = { cv, x, y };
+    store.set(id, s);
+  }
+  ctx.drawImage(s.cv, s.x, s.y);
+}
+
 // Append the shape's path to the current path (shape() starts with beginPath, so replay
 // it on a Path2D-like recorder): we call shape on a proxy that ignores beginPath.
 function shapeInto(ctx, shape) {
@@ -196,14 +228,11 @@ function edge(ctx, shape, stroke, px) {
   ctx.restore();
 }
 
-// Ink colours on the material: on glass the text keeps a faint halo in the tint colour
-// (vibrancy: text stays crisp over any frost).
-function vibrancy(ctx, env, px) {
-  const m = resolve(env.tokens);
-  if (m.depth !== "glass") return;
-  ctx.shadowColor = G.withAlpha(m.fill, 0.55);
-  ctx.shadowBlur = px * 0.18;
-}
+// Text on the material. No halo or text shadow: the tint is already dense enough for 4.5:1
+// (ink) and 3:1 (lifted accent) over the worst frost of the job (lib/glass.js), and a
+// per-glyph canvas shadow tripled the overlay render time. Kept as the one place a
+// future vibrancy treatment would go.
+function vibrancy(_ctx, _env, _px) {}
 
 // Report of the material for the renderer summary.
 function report(tokens) {

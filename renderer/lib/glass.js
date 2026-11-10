@@ -34,7 +34,7 @@
   const LARGE_CONTRAST = 3; // WCAG AA for large text: the accent words and figures
 
 
-  function rgb(hex) {
+  function chan(hex) {
     const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || "").trim());
     if (!m) return null;
     const h = m[1].length === 3 ? m[1].replace(/./g, (c) => c + c) : m[1];
@@ -42,7 +42,7 @@
   }
   const hex = (c) => "#" + c.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
   // `hexColor` at alpha `a` as #rrggbbaa.
-  const withAlpha = (hexColor, a) => hex(rgb(hexColor)) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  const withAlpha = (hexColor, a) => hex(chan(hexColor)) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
   function lum(c) {
     const l = c.map((v) => v / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
     return 0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2];
@@ -70,8 +70,8 @@
   // What the ink sits on at tint alpha `a` over the worst backdrop in `range` (luminance
   // [lmin, lmax] of the frost under the panel; black and white without one) and its ratio.
   function worst(tintHex, inkHex, a, range) {
-    const t = rgb(tintHex);
-    const ink = rgb(inkHex);
+    const t = chan(tintHex);
+    const ink = chan(inkHex);
     const [lo, hi] = span(range);
     const cands = [grey(lo), grey(hi)].map((b) => over(t, a, b));
     const r = cands.map((c) => ratio(ink, c));
@@ -94,8 +94,8 @@
   // variant of it that does (vibrancy: an accent on glass is lifted, not the glass made
   // opaque).
   function lift(fgHex, bgHex, min) {
-    const bg = rgb(bgHex);
-    const fg = rgb(fgHex);
+    const bg = chan(bgHex);
+    const fg = chan(fgHex);
     if (ratio(fg, bg) >= min) return hex(fg);
     const target = ratio([0, 0, 0], bg) >= ratio([255, 255, 255], bg) ? [0, 0, 0] : [255, 255, 255];
     for (let k = 1; k <= 100; k++) {
@@ -108,7 +108,7 @@
   // The accent as text on glass at tint alpha `a`: lifted until it keeps 3:1 (large text)
   // over the worst frost in `range`.
   function accentOn(tintHex, accentHex, a, range) {
-    let c = hex(rgb(accentHex));
+    let c = hex(chan(accentHex));
     for (let i = 0; i < 3; i++) c = lift(c, worst(tintHex, c, a, range).bg, LARGE_CONTRAST);
     return c;
   }
@@ -213,5 +213,5 @@
     };
   }
 
-  return { LARGE_CONTRAST, grey, span, FROST_SIGMA, FROST_SATURATION, FROST_BRIGHTNESS, TINT, MIN_CONTRAST, rgb, hex, withAlpha, lum, ratio, over, worst, tint, lift, accentOn, hash, grain, backdrop, backdropRange, frost };
+  return { LARGE_CONTRAST, grey, span, FROST_SIGMA, FROST_SATURATION, FROST_BRIGHTNESS, TINT, MIN_CONTRAST, chan, hex, withAlpha, lum, ratio, over, worst, tint, lift, accentOn, hash, grain, backdrop, backdropRange, frost };
 });
