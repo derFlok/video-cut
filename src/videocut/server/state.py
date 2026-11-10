@@ -178,6 +178,22 @@ def _cut_style(data: dict) -> tuple[str, str | None]:
     return data.get("cut_style") or "auto", resolved
 
 
+def _sfx(job: Path, data: dict) -> dict:
+    """Sound effects: sfx (job.json value, null: the settings default), sfx_resolved (null
+    when job.json has an invalid value) and sfx_events (the job has motion events)."""
+    from ..tools import sfx as sfx_tool
+
+    try:
+        resolved = sfx_tool.level(data)
+    except ToolError:
+        resolved = None
+    try:
+        has = bool(sfx_tool.event_files(job))
+    except ToolError:
+        has = False
+    return {"sfx": data.get("sfx"), "sfx_resolved": resolved, "sfx_events": has}
+
+
 def _redact_style(data: dict) -> dict:
     """How personal data is hidden: redact_style (the resolved one, null when job.json has
     an invalid value) and whether it is the brand's default."""
@@ -340,6 +356,7 @@ def detail(job: Path, ch: Channel | None) -> dict:
         "captions_stale": captions_stale(job),
         **_target(job, data),
         **_redact_style(data),
+        **_sfx(job, data),
         "source_duration_s": source_duration(job),
         "lang": job_lang(data),
         "title": title(job, data),

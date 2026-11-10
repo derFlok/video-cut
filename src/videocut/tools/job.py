@@ -1,10 +1,10 @@
 """`videocut tool job new|show|approve|redaction|brand|screen|format|cut-style|target|duplicate|
-title|redact-style|vocab|slides|slides-import|material`: create a job folder, inspect it,
+title|redact-style|sfx|vocab|slides|slides-import|material`: create a job folder, inspect it,
 approve its plan, decide which personal-data candidates are demo data (human only,
 src/videocut/redaction.py), set its brand, its screen recording, its output format, its cut
 style, its target length or how personal data is hidden, duplicate it, give it a display
 title, edit its transcript vocabulary, set its slides and import the human's own pages, or
-set its material (stock video and generated stills).
+set its material (stock video and generated stills) or its sound-effect level.
 
 Layout of $VIDEOCUT_HOME/jobs/<id>/:
     job.json   id, created, source, type, brief, status (new -> ingested -> approved),
@@ -990,6 +990,7 @@ def register(subparsers) -> None:
     ti.set_defaults(handler=run_tool("job title", title_cmd))
     vocab.register_job(sub)
     _register_redact_style(sub)
+    _register_sfx(sub)
     _job_slides.register(sub, job_parent)
     _job_material.register(sub, job_parent)
 
@@ -1038,6 +1039,49 @@ def set_redact_style(job: Path, value: str, say=print) -> dict:
         )
     return {"job": str(job), "id": job.name, "redact_style": new_style, "previous": old,
             "stale": stale}  # fmt: skip
+
+
+def set_sfx(job: Path, value: str, say=print) -> dict:
+    """Set the sound-effect level of the reel (tools/sfx.LEVELS: off|subtle|normal; "default"
+    removes it, so the settings default applies). A reel mixed at another level goes stale
+    (run.cut_done compares the cut record's "sfx"); approval and plan stay."""
+    from . import sfx as sfx_tool
+
+    data = read_job(job)
+    try:
+        old = sfx_tool.level(data)
+    except ToolError:  # an invalid value is what this command repairs
+        old = None
+    if isinstance(value, str) and value.strip().lower() == "default":
+        data.pop("sfx", None)
+    else:
+        data["sfx"] = sfx_tool.parse_level(value)
+    rec = data.get("cut")
+    if isinstance(rec, dict) and "sfx" not in rec and sfx_tool.event_files(job):
+        # a cut from before this field: it was mixed at the level in force then
+        data["cut"] = {**rec, "sfx": old}
+    write_json(job / JOB_FILE, data)
+    new = sfx_tool.level(data)
+    say(f"{job.name}: sound effects {new}")
+    return {"job": str(job), "id": job.name, "sfx": data.get("sfx"), "sfx_resolved": new,
+            "previous": old}  # fmt: skip
+
+
+def sfx_cmd(args) -> dict:
+    if os.environ.get(AGENT_ENV):
+        raise ToolError("only a human sets the sound-effect level (not inside an agent run)")
+    return set_sfx(resolve_job(args.job_ref or args.job), args.level)
+
+
+def _register_sfx(sub) -> None:
+    p = sub.add_parser(
+        "sfx",
+        help="sound-effect level: off|subtle|normal|default; a finished reel goes stale",
+        parents=[job_parent()],
+    )
+    p.add_argument("job_ref", nargs="?", metavar="job", help="job folder or id")
+    p.add_argument("level", help="off, subtle, normal or default (the settings default)")
+    p.set_defaults(handler=run_tool("job sfx", sfx_cmd))
 
 
 def redact_style_cmd(args) -> dict:
