@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import clips
+import pytest
 from test_brand import make_brand
 
 from videocut import brand
@@ -22,6 +23,7 @@ def test_glass_is_a_depth_and_stays_opt_in(videocut_home):
     assert _glass.is_glass(brand.load("g")) and not _glass.is_glass(brand.load("n"))
 
 
+@pytest.mark.media
 def test_backdrop_range_measures_the_frost_and_caches_it(tmp_path):
     src = tmp_path / "v.mp4"
     subprocess.run(
