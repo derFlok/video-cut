@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added — Motion design: brand-driven motion style, 23 components, cues, 3D (branch only)
+- Brand profile `motion` section gains `theme` (dark | light | auto from the background),
+  `depth` (flat | soft | glow), `radius`, `energy` (calm | normal | punchy) and `type_scale`;
+  validated in `brand.py`, missing fields derived from the other tokens (`motion_style()`),
+  `_example` has a neutral section, i18n keys `brands.motion.*` for the brand editor. The
+  page runtime resolves them into `vc.style` and `--vc-*` properties (theme palette from the
+  brand's own colours, accent glow and layered shadows, contrast guard for text on panel and
+  accent, energy scaling durations, spring overshoot and the micro-event beat).
+- `renderer/motion/components.js` rebuilt: entrances with blur + scale + spring, hand-over
+  morphs (`after`), micro-events every `vc.style.beat` s, fit-to-band slots, big heavy type.
+  The five spike components reworked; new: stat (unit change, source line), bar chart, line /
+  area chart, comparison, steps, table, rebuilt UI frames (browser, window, phone, terminal)
+  with chat, file list and app card, meter (bar / ring), chips, quote, pointer, image frame
+  with parallax, tilted plane (CSS 3D), and with Three.js 0.186.1 (MIT) a point field and an
+  extruded number. A generic line-icon set drawn for the project. `CATALOGUE.md` documents
+  every component (props, cues, durations).
+- Cues: `vc.cue(kind, t, {component, strength})` in the runtime and every component;
+  `motion.js --events <file>` writes `[{t, kind, component, strength}]` in output seconds
+  (`offset` in motion.json). `--gpu swiftshader|metal` picks the WebGL backend.
+- `brand sheet` appends a motion row (four moments in the brand's motion style);
+  `scripts/motion_gallery.py` renders the component gallery in any brand's look.
+
 ### Added — Spike: Claude-authored motion scenes (branch only, see docs/spikes/motion.md)
 - `renderer/motion.js`: renders a scene module written per span (HTML/SVG/CSS on an
   anime.js 4.5.0 timeline, MIT) in a sandboxed page (own origin, request filter, CSP

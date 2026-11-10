@@ -4,12 +4,19 @@
 // page, as ProRes 4444 with alpha.
 //
 //   node motion.js <motion.json> [--out <scene.mov>] [--stills <dir> <t,t,...>]
-//                  [--frame-timeout <ms>] [--region-only]
+//                  [--frame-timeout <ms>] [--region-only] [--events <events.json>]
+//                  [--gpu swiftshader|metal]
 //
 // motion.json: {"mode": "motion", "size": [w, h], "fps", "duration" (s), "unit" (short
 // side), "region": [x0, y0, x1, y1] (where the stage sits), "tokens" (resolved brand
 // tokens), "words": [{w, t0, t1}] (scene seconds), "beats": {id: {word, n?, offset?, edge?}},
-// "scene": path of the module inside the job folder, "seed"}.
+// "scene": path of the module inside the job folder, "seed", "offset" (s, optional: the
+// span's start in output-video seconds)}.
+//
+// --events writes the scene's cues (vc.cue) as [{t, kind, component, strength}] sorted by t,
+// t in output-video seconds (scene t + offset); the sound-effects track reads only that file.
+// --gpu picks the WebGL backend: swiftshader (software, the default: deterministic
+// everywhere) or metal (ANGLE on the Mac GPU).
 //
 // Sandbox: the scene is untrusted (agent-written). The page lives on a private origin;
 // every request is answered by this process (the runtime, the brand fonts, files inside
@@ -56,8 +63,18 @@ const CSP = [
 
 class UsageError extends Error {}
 
+// The pinned headless shell renders WebGL on SwiftShader by default (software, the same on
+// every machine); "metal" switches ANGLE to the Mac GPU. Explicit SwiftShader flags made the
+// first frame capture hang, so the default path passes none.
+const GPU_ARGS = {
+  swiftshader: [],
+  metal: ["--use-angle=metal", "--enable-gpu", "--ignore-gpu-blocklist"],
+};
+// Three.js (MIT, pinned in package-lock.json): the ES module build, served to the page.
+const THREE_DIR = path.join(__dirname, "node_modules", "three", "build");
+
 function parseArgs(argv) {
-  const a = { frameTimeout: 2000 };
+  const a = { frameTimeout: 2000, gpu: "swiftshader" };
   const rest = argv.slice();
   while (rest.length) {
     const arg = rest.shift();
@@ -68,12 +85,17 @@ function parseArgs(argv) {
       if (!a.stillTimes.length || !a.stillTimes.every(Number.isFinite)) throw new UsageError("--stills needs <dir> <t,t,...>");
     } else if (arg === "--frame-timeout") a.frameTimeout = Number(rest.shift());
     else if (arg === "--region-only") a.regionOnly = true;
+    else if (arg === "--events") a.events = rest.shift();
+    else if (arg === "--gpu") {
+      a.gpu = rest.shift();
+      if (!GPU_ARGS[a.gpu]) throw new UsageError(`--gpu must be one of ${Object.keys(GPU_ARGS).join(", ")}`);
+    }
     else if (arg.startsWith("--")) throw new UsageError(`unknown option ${arg}`);
     else if (!a.input) a.input = arg;
     else throw new UsageError(`unexpected argument ${arg}`);
   }
   if (!a.input) throw new UsageError("missing <motion.json>");
-  if (!a.out && !a.stillsDir) throw new UsageError("nothing to do: pass --out or --stills");
+  if (!a.out && !a.stillsDir && !a.events) throw new UsageError("nothing to do: pass --out, --stills or --events");
   return a;
 }
 
@@ -107,6 +129,7 @@ function validate(spec) {
   if (!(Array.isArray(spec.size) && spec.size.length === 2 && spec.size.every((v) => Number.isInteger(v) && v > 0))) errs.push("size must be [w, h]");
   if (!(spec.fps > 0)) errs.push("fps must be > 0");
   if (!(spec.duration > 0 && spec.duration <= 120)) errs.push("duration must be 0 < s <= 120");
+  if (spec.offset != null && !(Number.isFinite(spec.offset) && spec.offset >= 0)) errs.push("offset must be a number >= 0 (s)");
   if (!okBox(spec.region)) errs.push("region must be [x0, y0, x1, y1]");
   if (!spec.tokens || typeof spec.tokens !== "object") errs.push("tokens missing");
   if (typeof spec.scene !== "string") errs.push("scene (module path inside the job folder) missing");
@@ -166,6 +189,8 @@ async function main() {
   if (lit.length) throw new Error(`scene ${spec.scene}: brand tokens only (${lit.join("; ")})`);
 
   const beats = resolveBeats(spec.beats, spec.words);
+  // Three.js is loaded only for a scene that uses it (vc.THREE or a *3d component).
+  const uses3d = /\bTHREE\b|3d\s*\(/.test(sceneSrc);
   const fonts = fontFiles(spec.tokens);
   const fontFamily = fonts.length ? `"${FONT_FAMILY}", system-ui, sans-serif` : "system-ui, sans-serif";
   const pageSpec = {
@@ -187,13 +212,16 @@ async function main() {
     "/rt/components.js": { body: rt("components.js"), type: MIME[".js"] },
     "/rt/runtime.js": { body: rt("runtime.js"), type: MIME[".js"] },
   };
+  for (const f of fs.readdirSync(THREE_DIR).filter((f) => /^three\.(module|core)\.js$/.test(f)))
+    files[`/rt/three/${f}`] = { body: fs.readFileSync(path.join(THREE_DIR, f), "utf8"), type: MIME[".js"] };
   for (const f of fonts) files[`/rt/font/${f.weight}`] = { body: fs.readFileSync(f.file), type: MIME[path.extname(f.file)] || "font/woff2" };
 
   const blocked = [];
   const served = { runtime: 0, job: 0 };
   const summary = { tool: TOOL, ok: true, size: spec.size, fps: spec.fps, duration: spec.duration, beats };
   const tStart = process.hrtime.bigint();
-  const browser = await chromium.launch({ args: ["--host-resolver-rules=MAP * ~NOTFOUND", "--disable-background-networking"] });
+  const browser = await chromium.launch({ args: ["--host-resolver-rules=MAP * ~NOTFOUND", "--disable-background-networking", ...GPU_ARGS[args.gpu]] });
+  summary.gpu = args.gpu;
   let ff = null;
   try {
     const context = await browser.newContext({
@@ -247,12 +275,13 @@ async function main() {
     }
     const rel = path.relative(fs.realpathSync(jobDir), sceneFile).split(path.sep).map(encodeURIComponent).join("/");
     const info = await withTimeout(
-      page.evaluate((u) => window.__vc.load(u), `/job/${rel}`),
+      page.evaluate(([u, three]) => window.__vc.load(u, three), [`/job/${rel}`, uses3d ? "/rt/three/three.module.js" : null]),
       10000,
       "scene setup",
     );
     blocked.push(...info.blocked);
     summary.timeline_ms = info.duration_ms;
+    summary.style = { theme: info.style.theme, depth: info.style.depth, energy: info.style.energy, contrast: info.style.contrast };
     const cdp = await context.newCDPSession(page);
     await cdp.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
 
@@ -327,6 +356,13 @@ async function main() {
       ms_per_frame: { draw_and_capture: Math.round(drawMs / n), encode_wait: Math.round(encMs / n) },
     });
     if (args.out) Object.assign(summary, { out: args.out, out_size: outSize, place_at: clip ? [clip.x, clip.y] : [0, 0] });
+    if (args.events) {
+      const offset = Number.isFinite(spec.offset) ? spec.offset : 0;
+      const cues = (await page.evaluate(() => window.__vc.cues())).map((c) => ({ ...c, t: Math.round((c.t + offset) * 1000) / 1000 }));
+      fs.mkdirSync(path.dirname(path.resolve(args.events)), { recursive: true });
+      fs.writeFileSync(args.events, JSON.stringify(cues, null, 1) + "\n");
+      Object.assign(summary, { events: args.events, cues: cues.length });
+    }
     summary.requests = { ...served, blocked: blocked.length };
   } finally {
     if (ff) ff.kill();
@@ -348,4 +384,4 @@ if (require.main === module)
       process.exit(1);
     });
 
-module.exports = { resolveBeats, CSP };
+module.exports = { resolveBeats, CSP, GPU_ARGS };

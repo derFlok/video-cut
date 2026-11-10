@@ -24,7 +24,7 @@ function run(jobDir, spec, extra) {
       env: { ...process.env, VIDEOCUT_JOB_DIR: jobDir, PLAYWRIGHT_BROWSERS_PATH: BROWSERS },
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 60000,
+      timeout: 240000,
     });
   } catch (e) {
     out = e.stdout;
@@ -115,4 +115,94 @@ test("the gallery renders an alpha ProRes clip", { skip: !haveBrowser && "no bro
   assert.ok(r.ok, JSON.stringify(r));
   assert.equal(r.frames, 15);
   assert.ok(fs.statSync(out).size > 1000);
+});
+
+// --- motion design: brand style, cues, 3D -----------------------------------------------
+
+const DARK = {
+  colors: { bg: "#0B0C10", surface: "#151821", text: "#F2F4F8", muted: "#8A93A6", accent: "#20242C" },
+  fonts: { weights: [400, 800], files: {} },
+  motion: { spring: { w: 14, z: 0.8 }, theme: "auto", energy: "punchy" },
+  caption_colors: { box: "#151821", text: "#F2F4F8", highlight: "#F2F4F8" },
+};
+
+test("cues: --events writes sorted cues in output seconds (scene t + offset)", { skip: !haveBrowser && "no browser" }, () => {
+  const dir = job(fs.readFileSync(path.join(FIX, "gallery.js"), "utf8"));
+  const ev = path.join(dir, "events.json");
+  const r = run(dir, { ...base(), scene: "scene.js", offset: 10 }, ["--events", ev]);
+  assert.ok(r.ok, JSON.stringify(r));
+  const cues = JSON.parse(fs.readFileSync(ev, "utf8"));
+  assert.ok(cues.length >= 10);
+  const kinds = new Set(["pop", "whoosh", "tick", "check", "strike", "type", "count", "impact", "swoosh_out"]);
+  for (const c of cues) {
+    assert.deepEqual(Object.keys(c).sort(), ["component", "kind", "strength", "t"]);
+    assert.ok(kinds.has(c.kind), c.kind);
+    assert.ok(c.t >= 10 && c.t <= 13, `t ${c.t} in output seconds`);
+    assert.ok(c.strength >= 0 && c.strength <= 1);
+  }
+  assert.deepEqual(cues.map((c) => c.t), cues.map((c) => c.t).slice().sort((a, b) => a - b));
+  assert.ok(cues.some((c) => c.kind === "check") && cues.some((c) => c.kind === "strike") && cues.some((c) => c.kind === "count"));
+});
+
+test("cues: an unknown cue kind fails the render", { skip: !haveBrowser && "no browser" }, () => {
+  const dir = job(`export default function scene(vc) { vc.cue("boom", 0.5); }\n`);
+  const r = run(dir, { ...base(), scene: "scene.js", duration: 0.2 }, ["--stills", path.join(dir, "s"), "0.1"]);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /cue kind/);
+});
+
+test("style: theme auto follows the brand background, depth and contrast are derived", { skip: !haveBrowser && "no browser" }, () => {
+  const dir = job(`export default function scene(vc) { vc.c.stat(vc.c.slot(vc.stage), { value: 3, at: 0.1 }); }\n`);
+  const dark = run(dir, { ...base(), scene: "scene.js", duration: 0.2, tokens: DARK }, ["--stills", path.join(dir, "d"), "0.1"]);
+  assert.ok(dark.ok, JSON.stringify(dark));
+  assert.equal(dark.style.theme, "dark");
+  assert.equal(dark.style.depth, "glow");
+  assert.equal(dark.style.energy, "punchy");
+  // the accent is nearly the panel colour: accent text and text on the accent are guarded
+  assert.ok(dark.style.contrast.accent_text_on_panel >= 4.5, JSON.stringify(dark.style));
+  assert.ok(dark.style.contrast.on_accent >= 4.5, JSON.stringify(dark.style));
+  assert.ok(dark.style.contrast.ink_on_panel >= 7);
+  const light = run(dir, { ...base(), scene: "scene.js", duration: 0.2 }, ["--stills", path.join(dir, "l"), "0.1"]);
+  assert.equal(light.style.theme, "light");
+  assert.equal(light.style.depth, "soft");
+  const forced = run(dir, { ...base(), scene: "scene.js", duration: 0.2, tokens: { ...base().tokens, motion: { theme: "dark", depth: "flat" } } }, ["--stills", path.join(dir, "f"), "0.1"]);
+  assert.equal(forced.style.theme, "dark");
+  assert.equal(forced.style.depth, "flat");
+});
+
+test("3D: a Three.js field and an extruded number render through onSeek (no rAF)", { skip: !haveBrowser && "no browser" }, () => {
+  const dir = job(`export default function scene(vc) {
+  vc.c.field3d(vc.c.slot(vc.stage, { fit: false }), { at: 0, kind: "particles", count: 300 });
+  vc.c.number3d(vc.c.slot(vc.stage, { fit: false }), { text: "7", at: 0.05 });
+}\n`);
+  const r = run(dir, { ...base(), scene: "scene.js", duration: 0.4, region: [60, 200, 1020, 800] }, ["--stills", path.join(dir, "s"), "0.3", "--out", path.join(dir, "a.mov")]);
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.equal(r.requests.blocked, 0);
+  const png = fs.readFileSync(path.join(dir, "s", "t000.30.png"));
+  assert.ok(png.length > 5000, "the WebGL canvas drew something");
+  const r2 = run(dir, { ...base(), scene: "scene.js", duration: 0.4, region: [60, 200, 1020, 800] }, ["--out", path.join(dir, "b.mov")]);
+  assert.ok(r2.ok);
+  const md5 = (f) => execFileSync("ffmpeg", ["-loglevel", "error", "-i", f, "-f", "framemd5", "-"], { encoding: "utf8" }).replace(/^#.*\n/gm, "");
+  assert.equal(md5(path.join(dir, "a.mov")), md5(path.join(dir, "b.mov")), "SwiftShader 3D frames are deterministic");
+});
+
+test("the component gallery and the brand-sheet scene use brand tokens only and render", { skip: !haveBrowser && "no browser" }, () => {
+  for (const f of [path.join(FIX, "gallery_full.js"), path.join(ROOT, "motion", "sheet_scene.js")])
+    assert.deepEqual(literalErrors(fs.readFileSync(f, "utf8")), [], f);
+  const dir = job(fs.readFileSync(path.join(FIX, "gallery_full.js"), "utf8"));
+  // the first 8 slots (3D field, stat, charts, comparison, steps, table, browser frame)
+  const times = Array.from({ length: 8 }, (_, i) => (i * 2.6 + 2.2).toFixed(2)).join(",");
+  const r = run(dir, { ...base(), scene: "scene.js", duration: 20.8, region: [40, 200, 1040, 900], tokens: DARK }, ["--region-only", "--stills", path.join(dir, "s"), times, "--events", path.join(dir, "e.json")]);
+  assert.ok(r.ok, JSON.stringify(r));
+  assert.equal(r.stills.length, 8);
+  assert.ok(r.cues > 40, String(r.cues));
+});
+
+test("every component in CATALOGUE.md exists, and every component is in the catalogue", () => {
+  const cat = fs.readFileSync(path.join(ROOT, "motion", "CATALOGUE.md"), "utf8");
+  const listed = [...cat.slice(cat.indexOf("## Components")).matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]);
+  const src = fs.readFileSync(path.join(ROOT, "motion", "components.js"), "utf8");
+  const ret = src.slice(src.lastIndexOf("return {"));
+  const exported = ret.slice(ret.indexOf("// components") + 13).match(/\w+/g);
+  assert.deepEqual(listed.slice().sort(), exported.slice().sort());
 });
