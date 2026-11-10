@@ -319,6 +319,15 @@ export interface Brand {
   logo: { light?: string | null; dark?: string | null; placement?: string; [k: string]: unknown };
   captions: { pace?: string; style?: string; [k: string]: unknown };
   voice: { address?: string; [k: string]: unknown };
+  /** Motion-scene style (all optional: depth and energy follow the theme and character). */
+  motion?: {
+    theme?: "dark" | "light" | "auto";
+    depth?: "flat" | "soft" | "glow";
+    radius?: number;
+    energy?: "calm" | "normal" | "punchy";
+    type_scale?: number;
+    [k: string]: unknown;
+  };
   /** Transcript vocabulary: canonical spellings and their known misspellings. */
   vocabulary?: VocabEntry[];
   files?: string[];
@@ -438,6 +447,7 @@ export interface VerifySummary {
   flagged?: { cut: number; t: number; flags: string[] }[];
   overlay_flagged?: { scene: string | null; t0: number; t1: number; flags: string[] }[];
   screen_flagged?: { flags: string[]; [k: string]: unknown }[];
+  motion_flagged?: { id: string; t0?: number; t1?: number; flags: string[]; invented?: string[] }[];
   warnings?: string[];
   [k: string]: unknown;
 }

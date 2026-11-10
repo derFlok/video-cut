@@ -18,7 +18,9 @@ the first kept word of its moment and ends TAIL_S after the last one (never over
 next span, inside the reel). The words of the span (scene time, 0 = span start) are mapped
 through the EDL exactly like the captions. Its region (the band) runs over the frame width
 inside the side safe zone, from the top safe zone down to the highest face top over the
-span plus FOREHEAD_SHARE of the face height (hair and forehead may be covered, eyes not).
+span plus BAND_FACE_SHARE of the face height: the eye line (EYE_LINE_SHARE of the landmark
+box, measured) minus EYE_CLEAR of the face height stays free, so hair and the upper forehead
+may be covered, brows-to-eyes not. Components fit the band (`c.slot`), they shrink instead.
 A moment whose words were cut, that falls on a slide layout, or that has no room above the
 face is dropped and listed (verify `motion_dropped`).
 
@@ -58,8 +60,13 @@ DIR = "work/motion"
 SPANS = f"{DIR}/spans.json"
 LEAD_S = 0.15  # a span starts this long before its first word
 TAIL_S = 0.45  # ... and ends this long after its last one
-FOREHEAD_SHARE = 0.2  # the band may reach this far into the face box (hair, forehead)
+# Upper eyelids at 26 % of the face-landmark box (demo clip, 132 frames, 5-95 %: 24.7-28.5 %;
+# brows at 15.5 %). The eye line plus EYE_CLEAR of the face height above it stays free.
+EYE_LINE_SHARE = 0.26
+EYE_CLEAR = 0.08
+BAND_FACE_SHARE = EYE_LINE_SHARE - EYE_CLEAR  # the band may reach this far into the face box
 CAPTION_FACE_SHARE = 0.72  # during a span, captions may cover the face below this share
+CAPTURE_MARGIN = 0.06  # renderer/motion.js --region-only margin (share of the unit)
 MIN_BAND_SHARE = 0.12  # a band lower than this share of the frame height is no band
 MIN_SPAN_S, MAX_SPAN_S = 1.5, 60.0
 STILL_AFTER_S = 0.3  # a beat still is taken this long after the beat
@@ -67,6 +74,7 @@ MOTION_JOBS = max(1, int(os.environ.get("VIDEOCUT_MOTION_JOBS", "2")))
 ID_RE = re.compile(r"m[0-9]{1,3}")
 EDGES = ("start", "end")
 MAX_BEATS = 80
+MAX_LABELS, MAX_LABEL_LEN = 8, 40  # neutral band labels the plan names (verify motion_invented)
 FALLBACK_COMPONENTS = ("headline", "checklist", "counter", "strikeCard", "terminal")
 CODE = ("motion.js", "lib/literals.js", "lib/ffmpeg.js")
 RECORD_NAME = "motion_render.json"
@@ -76,13 +84,16 @@ RECORD_NAME = "motion_render.json"
 
 
 def components() -> tuple[str, ...]:
-    """Component names of renderer/motion/CATALOGUE.md (headings "## `name`"), else the
-    spike's five."""
+    """Component names of renderer/motion/CATALOGUE.md (the first column of the table under
+    "## Components", rows "| `name` | ..."), else the spike's five."""
     cat = RENDERER / "motion" / "CATALOGUE.md"
     try:
-        names = re.findall(r"^#{2,3}\s+`?([A-Za-z][A-Za-z0-9_]*)`?", cat.read_text(), re.M)
+        text = cat.read_text()
     except OSError:
-        names = []
+        text = ""
+    part = text.split("\n## Components", 1)[1] if "\n## Components" in text else ""
+    part = part.split("\n## ", 1)[0]
+    names = re.findall(r"^\|\s*`([A-Za-z][A-Za-z0-9_]*)`\s*\|", part, re.M)
     return tuple(dict.fromkeys(names)) or FALLBACK_COMPONENTS
 
 
@@ -178,6 +189,12 @@ def plan_errors(data: dict, mode: str | None, words: list[dict] | None,
                     errs.append(f"{p}.beats.{k}: {e}")
         if "still" in it and not isinstance(it["still"], str | None):
             errs.append(f"{p}.still: must be a path")
+        labels = it.get("labels", [])
+        if not (
+            isinstance(labels, list) and len(labels) <= MAX_LABELS
+            and all(isinstance(x, str) and 0 < len(x.strip()) <= MAX_LABEL_LEN for x in labels)
+        ):  # fmt: skip
+            errs.append(f"{p}.labels: at most {MAX_LABELS} short texts (≤ {MAX_LABEL_LEN} chars)")
     spans.sort()
     for (_, a1, pa), (b0, _, pb) in zip(spans, spans[1:], strict=False):
         if b0 < a1:
@@ -292,11 +309,11 @@ def slide_spans(edl, fps) -> list[tuple[float, float]]:
 
 def band_region(track: list[dict], t0: float, t1: float, size: tuple[int, int]) -> list[int]:
     """[x0, y0, x1, y1] of the band over [t0, t1]: side and top safe zones, down to the
-    highest face top + FOREHEAD_SHARE of its height (a third of the frame without a face)."""
+    highest face top + BAND_FACE_SHARE of its height (a third of the frame without a face)."""
     w, h = size
     safe = safe_zones(size)
     faces = [f["box"] for f in track if t0 <= f["t"] <= t1]
-    limit = min((b[1] + FOREHEAD_SHARE * (b[3] - b[1]) for b in faces), default=h / 3)
+    limit = min((b[1] + BAND_FACE_SHARE * (b[3] - b[1]) for b in faces), default=h / 3)
     return [int(safe["side"]), int(safe["top"]), int(w - safe["side"]), int(limit)]
 
 
@@ -357,6 +374,7 @@ def build_spans(job: Path, ctx=None) -> tuple[list[dict], list[dict], dict]:
             "scene": f"{DIR}/{m['id']}/scene.js", "beats": m["beats"],
             "beat_times": beat_times, "words": scene_words,
             "components": m.get("components"), "shows": m.get("shows"),
+            "labels": [x for x in m.get("labels") or [] if isinstance(x, str)],
         })  # fmt: skip
         prev_end = t1
     return spans, dropped, {"size": list(size), "fps": edl.fps, "duration": duration}
@@ -394,13 +412,26 @@ def brand_tokens(job: Path) -> dict:
     return tokens_of(job)
 
 
+def stage_region(region: list[int], unit: int) -> list[int]:
+    """The renderer's stage inside the band: `--region-only` captures the stage plus
+    CAPTURE_MARGIN of the unit on every side (shadows, glow, overshoot), so the stage ends
+    that margin above the band's bottom edge and nothing drawn reaches below it (the eyes).
+    Measured: a stat card's glow and pulse on a full-band stage reached 65 px below the band
+    and covered 9 % of the face box."""
+    x0, y0, x1, y1 = region
+    m = round(unit * CAPTURE_MARGIN)
+    return [x0, y0, x1, max(y0 + 2, y1 - m)]
+
+
 def spec(span: dict, meta: dict, tokens: dict) -> dict:
     """renderer/motion.js spec of one span."""
     w, h = meta["size"]
+    unit = min(w, h)
     return {
         "mode": "motion", "id": span["id"], "size": [w, h], "fps": meta["fps"],
         "duration": round(span["t1"] - span["t0"], 3), "offset": span["t0"],
-        "unit": min(w, h), "region": span["region"], "scene": span["scene"], "seed": 1,
+        "unit": unit, "region": stage_region(span["region"], unit), "scene": span["scene"],
+        "seed": 1,
         "words": span["words"], "beats": span["beats"], "tokens": tokens,
     }  # fmt: skip
 
@@ -731,9 +762,9 @@ def plan_stills(job: Path) -> dict:
         # band in output px -> crop px (scale k)
         k = cw / ow
         safe = safe_zones((ow, oh))
-        top_face = min(((b[1] * sh - y) / k for b in near), default=oh / 3 / (1 + FOREHEAD_SHARE))
+        top_face = min(((b[1] * sh - y) / k for b in near), default=oh / 3 / (1 + BAND_FACE_SHARE))
         hgt = min(((b[3] - b[1]) * sh / k for b in near), default=0)
-        bottom = top_face + FOREHEAD_SHARE * hgt
+        bottom = top_face + BAND_FACE_SHARE * hgt
         bx0, by0, bx1 = safe["side"] * k, safe["top"] * k, (ow - safe["side"]) * k
         by1 = max(by0 + 4, bottom * k)
         dst = out_dir / f"motion_{m['id']}.jpg"

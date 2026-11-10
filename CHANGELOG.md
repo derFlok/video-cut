@@ -6,7 +6,7 @@
 - `videocut tool motion spans|stills|render|show|catalogue|plan-stills` (tools/motion.py,
   replaces `scripts/motion_spike.py`): spans (`work/motion/spans.json`) only from the
   approved plan.json `motion` moments, mapped through the EDL; the band from the face track
-  (top safe zone to face top + 20 %); the job's brand profile as the only design source;
+  (top safe zone down to 8 % of the face height above the eye line); the job's brand profile as the only design source;
   `--region-only` clips + `events.json` per span, several pages at once (default 2:
   3 spans / 18.6 s rendered in 12.8 s instead of 26.7 s on one page), a trust record
   outside the job folder (`state/<job>/motion_render.json`), reuse while spec, scene, fonts
@@ -23,7 +23,15 @@
 - Verify: `motion_dropped`, `motion_missing`, `motion_untrusted`, `motion_stale`,
   `motion_not_composited`, `motion_static` (> 0.6 s without change, freezedetect −50 dB),
   `motion_repeats_caption` (band text read locally vs the captions around it),
-  `overlay_on_face` (drawn band box), `motion_caption_overlap`.
+  `overlay_on_face` (drawn band box below the band limit: the eye line, measured at 26 %
+  of the landmark box, and 8 % of the face height above it stay free),
+  `motion_caption_overlap`, `motion_invented` (band text read locally that nobody said:
+  not in the transcript ±3 s, the approved `shows`/`labels` or the wish). plan.json
+  moments may name neutral `labels` (≤ 8) for the human to approve. The renderer's stage
+  ends one capture margin (6 % of the unit) above the band edge: a card's glow and pulse
+  had reached 65 px below the band (9 % of the face box, e2e). The Result screen
+  lists motion flags; the brand editor edits the motion style (theme, depth, energy,
+  corner radius, type size).
 - Render composites every span's clip at its offset and place (render.json `motion`).
 - Skills: the plan proposes moments (show, never repeat; beat sheet); the overlays skill
   writes one scene per span, inspects beat stills (max 3 rounds), follows the rules (one

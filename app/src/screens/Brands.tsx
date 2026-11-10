@@ -385,6 +385,78 @@ export function BrandEditor({ id }: { id: string }) {
               </div>
             </div>
 
+            <fieldset className="stack-sm" data-testid="brand-motion">
+              <legend className="h3">{t("brands.motion")}</legend>
+              <p className="hint">{t("brands.motion.hint")}</p>
+              <div className="grid-2">
+                <div className="field">
+                  <label htmlFor="m-theme">{t("brands.motion.theme")}</label>
+                  <select id="m-theme" value={String(brand.motion?.theme ?? "auto")} onChange={(e) => set("motion.theme", e.target.value)}>
+                    {(["auto", "dark", "light"] as const).map((v) => (
+                      <option key={v} value={v}>
+                        {t(`brands.motion.theme.${v}`)}
+                      </option>
+                    ))}
+                  </select>
+                  {fe("motion.theme")}
+                </div>
+                <div className="field">
+                  <label htmlFor="m-depth">{t("brands.motion.depth")}</label>
+                  <select id="m-depth" value={String(brand.motion?.depth ?? "")} onChange={(e) => set("motion.depth", e.target.value || undefined)}>
+                    <option value="">{t("brands.motion.auto")}</option>
+                    {(["flat", "soft", "glow"] as const).map((v) => (
+                      <option key={v} value={v}>
+                        {t(`brands.motion.depth.${v}`)}
+                      </option>
+                    ))}
+                  </select>
+                  {fe("motion.depth")}
+                </div>
+                <div className="field">
+                  <label htmlFor="m-energy">{t("brands.motion.energy")}</label>
+                  <select id="m-energy" value={String(brand.motion?.energy ?? "")} onChange={(e) => set("motion.energy", e.target.value || undefined)}>
+                    <option value="">{t("brands.motion.auto")}</option>
+                    {(["calm", "normal", "punchy"] as const).map((v) => (
+                      <option key={v} value={v}>
+                        {t(`brands.motion.energy.${v}`)}
+                      </option>
+                    ))}
+                  </select>
+                  {fe("motion.energy")}
+                </div>
+                <div className="field">
+                  <label htmlFor="m-radius">
+                    {t("brands.motion.radius")} <span className="muted">{(brand.motion?.radius ?? 0.028).toFixed(3)}</span>
+                  </label>
+                  <input
+                    id="m-radius"
+                    type="range"
+                    min={0}
+                    max={0.12}
+                    step={0.004}
+                    value={brand.motion?.radius ?? 0.028}
+                    onChange={(e) => set("motion.radius", Number(e.target.value))}
+                  />
+                  {fe("motion.radius")}
+                </div>
+                <div className="field">
+                  <label htmlFor="m-type">
+                    {t("brands.motion.type_scale")} <span className="muted">{(brand.motion?.type_scale ?? 1).toFixed(2)}×</span>
+                  </label>
+                  <input
+                    id="m-type"
+                    type="range"
+                    min={0.6}
+                    max={1.6}
+                    step={0.05}
+                    value={brand.motion?.type_scale ?? 1}
+                    onChange={(e) => set("motion.type_scale", Number(e.target.value))}
+                  />
+                  {fe("motion.type_scale")}
+                </div>
+              </div>
+            </fieldset>
+
             <fieldset className="stack-sm">
               <legend className="h3">{t("vocab.brand.title")}</legend>
               <VocabEditor

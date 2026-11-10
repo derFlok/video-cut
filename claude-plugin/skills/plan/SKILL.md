@@ -269,8 +269,11 @@ them with the plan; nothing outside the approved moments is ever animated.
   start (default) or end, `offset` seconds (−2..2). Copy the words exactly as
   `takes_packed.md` writes them (`plan check` resolves every beat and fails on a word that
   is not spoken inside `src`). Give a beat for every item, number and turn (≥ 1 per 1.5 s).
-- **Content — never invent.** Every number, item and label comes from what is said (or
-  the wish), shortened.
+- **Content — never invent.** Every number, item, label, rating, place and button text
+  comes from what is said (or the wish), shortened. A neutral label the band needs that
+  is not spoken word for word ("Step", "Result", "Before / After") goes in `labels`
+  (≤ 8, ≤ 40 characters each) so the human approves it; verify flags any other band word
+  nobody said (`motion_invented`).
 
 Write the *Motion* section in project.md and the same moments in `plan.json` `motion`.
 
@@ -500,7 +503,7 @@ The same plan as data, for the app (it must say exactly what project.md says):
              "t0": 31.20, "t1": 36.80, "layout": "slide", "source": "auto",
              "why": "the three steps"}],
  "motion": [{"id": "m1", "src": [31.20, 36.80], "components": ["checklist"],
-             "shows": "the three steps ticking off",
+             "shows": "the three steps ticking off", "labels": ["Steps"],
              "beats": {"a1": {"word": "anmelden"}, "a2": {"word": "auswählen"},
                        "a3": {"word": "fertig", "edge": "end"}},
              "why": "the steps are the message"}],

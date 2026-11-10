@@ -925,11 +925,13 @@ only (nothing when it changed since the approval or motion is off), maps the tra
 through the EDL like the captions, and per moment (in output order) keeps its own words:
 `t0` = first word − 0.15 s (never before the previous span's end), `t1` = last word +
 0.45 s (never after the next moment's start − 0.15 s, nor the reel's end). The region is
-`[side, top safe zone, w − side, min over the span of (face top + 20 % of the face height)]`
-from the same face track overlays use (a third of the height without a face). Dropped,
+`[side, top safe zone, w − side, min over the span of (face top + 18 % of the face height)]` (the eye line, 26 % of the landmark box, measured, and 8 % of the face
+height above it stay free), from the same face track overlays use (a third of the height without a face). Dropped,
 with the reason: words cut, shorter than 1.5 s, longer than 60 s, on a slide layout, band
 lower than 12 % of the frame, a beat not spoken. `work/motion/spans.json` = `[{id, t0, t1,
-region, scene, beats}]`; per span `motion.json` = the renderer spec with `offset` = t0,
+region, scene, beats}]`; per span `motion.json` = the renderer spec with `offset` = t0, the
+stage = the band minus the renderer's capture margin (6 % of the unit) at the bottom, so
+shadows and glow end at the band edge,
 the span's words in scene time and the resolved tokens of the job's brand (the only
 design source).
 
@@ -960,10 +962,14 @@ not repeat them instead.
 `motion_not_composited`; `motion_static`: ffmpeg `freezedetect=n=-50dB:d=0.6` over the clip
 laid on grey, ignoring the first and last 0.3 s; from 4 RGBA samples per second: the drawn
 box (alpha bounding box, output px) → `overlay_on_face` (> 2 % of the face box below the
-brow line) and `motion_caption_overlap` (> 10 % of the smaller box with a caption on
+band limit, 8 % of the face height above the eye line) and `motion_caption_overlap` (> 10 % of the smaller box with a caption on
 screen); twice per second the band's text read locally (Vision) →
 `motion_repeats_caption` when ≥ 3 of its words (≥ 3 letters) and ≥ 60 % of them are
-caption words within ±1.5 s. Without text recognition this is a warning, not a pass.
+caption words within ±1.5 s, and `motion_invented` when a band word (≥ 3 letters) or
+number (≥ 2 digits) is neither in the transcript within ±3 s of the span, nor in the
+approved moment's `shows` / `labels`, nor in the motion wish, in ≥ 2 samples (5-letter
+prefix match for inflection and OCR). Without text recognition this is a warning, not a
+pass.
 
 **Skills.** The plan skill proposes moments (*Motion*: show, never repeat; when; beats).
 The overlays skill writes `work/motion/<id>/scene.js`, renders beat stills and reads one

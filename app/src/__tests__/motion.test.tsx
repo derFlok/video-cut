@@ -75,3 +75,35 @@ describe("motion moments at the plan gate", () => {
     expect(lastCall(mock, "/api/jobs/job-approval/plan/feedback")!.body).toEqual({ text: "Entferne die Animation m1." });
   });
 });
+
+describe("motion flags in the result", () => {
+  it("names each flagged moment with its words in plain language", async () => {
+    const { verifyLines } = await import("../screens/Result");
+    const S = STRINGS;
+    const tt = ((k: string, v?: Record<string, string | number>) =>
+      Object.entries(v ?? {}).reduce((s, [a, b]) => s.replace(`{${a}}`, String(b)), S.en[k as keyof (typeof S)["en"]])) as never;
+    const lines = verifyLines({ ok: false, motion_flagged: [{ id: "m1", t0: 4, flags: ["motion_invented"], invented: ["balearen"] }] } as never, tt);
+    expect(lines[0]).toContain(S.en["flag.motion_invented"]);
+    expect(lines[0]).toContain("balearen");
+  });
+});
+
+describe("motion style in the brand editor", () => {
+  it("edits theme, depth, energy and sizes and saves them with the brand", async () => {
+    const { BrandEditor } = await import("../screens/Brands");
+    const mock = installMock({ step: 0 });
+    const user = userEvent.setup();
+    wrap(<BrandEditor id="dark" />);
+    const box = await screen.findByTestId("brand-motion");
+    expect(within(box).getByLabelText(t("brands.motion.theme"))).toHaveValue("auto");
+    expect(within(box).getByLabelText(t("brands.motion.depth"))).toHaveValue("");
+    await user.selectOptions(within(box).getByLabelText(t("brands.motion.theme")), "light");
+    await user.selectOptions(within(box).getByLabelText(t("brands.motion.depth")), "flat");
+    await user.selectOptions(within(box).getByLabelText(t("brands.motion.energy")), "punchy");
+    await user.click(screen.getByRole("button", { name: t("common.save") }));
+    await screen.findByText(t("brands.saved"));
+    const put = [...mock.state.calls].reverse().find((c) => c.method === "PUT" && c.path === "/api/brands/dark")!;
+    const m = (put.body as { motion: Record<string, unknown> }).motion;
+    expect(m).toMatchObject({ theme: "light", depth: "flat", energy: "punchy", character: "ruhig" });
+  });
+});

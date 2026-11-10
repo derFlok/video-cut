@@ -159,10 +159,16 @@ scene module per moment; you never add, move or drop a moment, and never edit
    ```js
    export default function scene(vc) {
      const { c, beat: b, stage } = vc;   // components, beat times, the band
-     const list = c.checklist(stage, { label: "…", items: [{ text: "…", at: b("a1"), check: b("a1") + 0.35 }] });
-     vc.tl.add(list, { scale: [{ to: 1.04 }, { to: 1 }] }, vc.ms(b("a3")));   // a micro-event
+     const list = c.checklist(c.slot(stage), { items: [{ text: "…", at: b("a1"), check: b("a1") + 0.35 }] });
+     c.stat(c.slot(stage), { value: 3, at: b("a4"), after: list });   // hands over: morphs out of the list
    }
    ```
+   Every component goes in its own `c.slot(stage)`: the slot fits it to the band (it
+   shrinks, it never grows past the band). The next component takes over with `after:
+   <previous root>`. Components fill the time between their own events with micro-events
+   (`vc.style.beat`: 0.5 / 0.4 / 0.3 s by the brand's energy); you still give each item,
+   count and check its spoken word. 3D (`field3d`, `number3d`, `tilt`) is an option for one
+   opening card or one hero number, not a default: it costs about twice the render time.
    `vc.at(word, n)` / `vc.end(word, n)` give further word times, `vc.duration` the span
    length, `vc.onSeek(t => …)` a pure function of t for digits and text. Scene time 0 is
    the span start.
@@ -181,12 +187,20 @@ scene module per moment; you never add, move or drop a moment, and never edit
      the brand (the components read them); never a colour, font or size literal (the
      renderer refuses the scene). Stay inside the band: never below its bottom edge (the
      eyes; verify: `overlay_on_face`).
-   - Words, numbers and names only as spoken (or in the human's motion wish).
+   - **Never invent.** Every text, number, name, rating, place and icon meaning in the band
+     comes from what is said in the span (or just around it), the approved moment (`shows`,
+     `labels`) or the human's motion wish. No star rating, "recommended", place name, price
+     or button text ("discover", "book now") nobody said; decorative UI chrome (dots, an
+     address bar, a frame) only without a claim in it. Verify flags `motion_invented` with
+     the words it found; replace them by what was said, or drop the element.
+   - **Eyes stay free.** The band ends 8 % of the face height above the eye line; in a
+     close-up that band is low — keep the component small (the slot fits it), never let it
+     reach the brows (verify: `overlay_on_face`).
 4. **Render, inspect, fix — at most 3 rounds per span:** `videocut tool motion stills --id
    <id>` (one still 0.3 s after every beat) → read `work/motion/<id>/stills/sheet.jpg`
    (one image per span and round; these are extra to the image budget above) → fix the
    scene. Check: readable at phone size, nothing cut off, one thing at a time, the right
-   item on each beat, nothing that repeats the captions.
+   item on each beat, nothing that repeats the captions, nothing nobody said, the eyes free.
 5. `videocut tool motion render` (all spans; clips that did not change are kept), then
    continue with step 4 below; `videocut tool overlays` keeps captions and cards off every
    band by itself (captions may sit lower, on the chin, while a band runs).
@@ -202,8 +216,9 @@ scene module per moment; you never add, move or drop a moment, and never edit
 
 Motion flags in `videocut tool verify` (`motion_flagged`): `motion_static` → add
 micro-events between the beats; `motion_repeats_caption` → replace the repeated words by
-what they mean (a number, an icon list, a chart); `overlay_on_face` → smaller or higher,
-inside the band; `motion_caption_overlap` → keep inside the band; `motion_missing` /
+what they mean (a number, an icon list, a chart); `motion_invented` → remove the invented
+words (listed in `invented`) or replace them by spoken ones; `overlay_on_face` → put the
+component in `c.slot(stage)` and keep it inside the band (smaller, never lower); `motion_caption_overlap` → keep inside the band; `motion_missing` /
 `motion_stale` / `motion_untrusted` → `videocut tool motion render` again;
 `motion_dropped` → note it in the report (the human decides).
 

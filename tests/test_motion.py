@@ -278,3 +278,36 @@ def test_repeat_tokens():
     from videocut.tools._verify_motion import tokens
 
     assert tokens("Drei Jahre, 3 % hier!") == {"drei", "jahre", "hier"}
+
+
+def test_plan_labels_are_short_texts():
+    keep = [[0.0, 1.5], [2.0, 3.5]]
+    ok = {**M1, "labels": ["Schritt", "Ergebnis"]}
+    assert motion.plan_errors({"motion": [ok]}, "auto", WORDS, keep) == []
+    bad = {**M1, "labels": ["x" * 41]}
+    assert any(".labels" in e for e in motion.plan_errors({"motion": [bad]}, "auto", WORDS, keep))
+
+
+def test_band_keeps_the_eye_line_free():
+    # face box (output px) from y 400 to 800: eyes at 400 + 0.26 * 400 = 504 px
+    track = [{"t": 1.0, "box": [180, 400, 420, 800]}]
+    region = motion.band_region(track, 0.0, 2.0, (600, 1000))
+    eye = 400 + motion.EYE_LINE_SHARE * 400
+    assert region[3] == int(eye - motion.EYE_CLEAR * 400) == 472
+
+
+def test_invented_band_text():
+    from videocut.tools._verify_motion import invented, said_tokens
+
+    allowed = said_tokens("Die drei Schritte zum ersten Termin, 45 Minuten") | said_tokens("Ablauf")
+    band = said_tokens("Schritten 45 Minuten Empfehlung Balearen entdecken 3")
+    assert invented(band, allowed) == {"empfehlung", "balearen", "entdecken"}
+    assert said_tokens("4,8 von 5") == {"von"}
+
+
+def test_stage_ends_one_capture_margin_above_the_band():
+    js = (motion.RENDERER / "motion.js").read_text()
+    assert f"pageSpec.unit * {motion.CAPTURE_MARGIN}" in js  # the renderer's capture margin
+    band = [65, 250, 1015, 641]
+    stage = motion.stage_region(band, 1080)
+    assert stage[:3] == band[:3] and stage[3] + round(1080 * motion.CAPTURE_MARGIN) == band[3]
