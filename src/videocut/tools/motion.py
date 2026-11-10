@@ -311,7 +311,6 @@ def off_face_spans(edl) -> list[tuple[float, float, str]]:
     return out
 
 
-
 def band_region(track: list[dict], t0: float, t1: float, size: tuple[int, int]) -> list[int]:
     """[x0, y0, x1, y1] of the band over [t0, t1]: side and top safe zones, down to the
     highest face top + BAND_FACE_SHARE of its height (a third of the frame without a face)."""
@@ -367,8 +366,7 @@ def build_spans(job: Path, ctx=None) -> tuple[list[dict], list[dict], dict]:
             dropped.append({"id": m["id"], "why": "no room above the face for a band"})
             continue
         scene_words = [  # the moment's own words only: beats resolve on them
-            {"w": w["w"], "t0": round(w["t0"] - t0, 3), "t1": round(w["t1"] - t0, 3)}
-            for w in ws
+            {"w": w["w"], "t0": round(w["t0"] - t0, 3), "t1": round(w["t1"] - t0, 3)} for w in ws
         ]
         try:
             beat_times = resolve_beats(m["beats"], scene_words)

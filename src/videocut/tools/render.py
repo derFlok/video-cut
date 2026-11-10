@@ -668,8 +668,13 @@ def _sfx_prepare(job: Path, duration: float, warnings: list[str],
     if not doc["hits"]:
         return {"level": lvl, "mixed": False, "hits": 0}
     warnings += [f"sfx: {w}" for w in doc.get("warnings", [])]
-    return {"level": lvl, "mixed": True, "gain_db": _sfx_mix.LEVEL_DB[lvl], "doc": doc,
-            "only": shown}
+    return {
+        "level": lvl,
+        "mixed": True,
+        "gain_db": _sfx_mix.LEVEL_DB[lvl],
+        "doc": doc,
+        "only": shown,
+    }
 
 
 def _sfx_report(job: Path, use: dict, plan, measured, audio_in: str, a_off: float,
