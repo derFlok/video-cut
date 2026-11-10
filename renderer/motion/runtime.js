@@ -12,7 +12,8 @@
   const spec = window.__vcSpec;
   const A = window.anime;
   const blocked = [];
-  window.__vcBlocked = blocked;
+  // read-only for the scene: it can neither empty nor replace the list the renderer reads
+  Object.defineProperty(window, "__vcBlocked", { get: () => blocked.slice(), configurable: false });
 
   // --- determinism -------------------------------------------------------------------
   let now = 0;
@@ -33,7 +34,8 @@
       blocked.push(name);
       throw new Error(`sandbox: ${name} is not available in a motion scene`);
     };
-  for (const name of "fetch XMLHttpRequest WebSocket EventSource Worker SharedWorker WebTransport RTCPeerConnection".split(" "))
+  for (const name of ("fetch XMLHttpRequest WebSocket EventSource Worker SharedWorker WebTransport " +
+    "RTCPeerConnection webkitRTCPeerConnection RTCDataChannel RTCSessionDescription RTCIceCandidate").split(" "))
     Object.defineProperty(window, name, { value: deny(name), writable: false, configurable: false });
   Object.defineProperty(navigator, "sendBeacon", { value: deny("sendBeacon") });
   document.addEventListener("securitypolicyviolation", (e) => blocked.push(`csp:${e.violatedDirective}:${e.blockedURI}`));

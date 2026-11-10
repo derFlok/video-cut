@@ -94,8 +94,10 @@ def motion_dir(job: Path) -> Path:
     return job / "work" / "motion"
 
 
-def event_files(job: Path) -> list[Path]:
-    """The events.json of every span (spans.json order), else every one found."""
+def event_files(job: Path, only: set[str] | None = None) -> list[Path]:
+    """The events.json of every span (spans.json order), else every one found. `only`: just
+    these span ids (render passes the clips it composites, so a sound never plays for a
+    band that is not on screen)."""
     d = motion_dir(job)
     spans = d / "spans.json"
     if spans.is_file():
@@ -105,13 +107,16 @@ def event_files(job: Path) -> list[Path]:
             raise ToolError("work/motion/spans.json is malformed") from None
         files = []
         for sid in ids:
+            if only is not None and sid not in only:
+                continue
             p = (d / sid / "events.json").resolve()
             if not p.is_relative_to(d.resolve()):
                 raise ToolError(f"span id {sid!r} leaves work/motion/")
             if p.is_file():
                 files.append(p)
         return files
-    return sorted(d.glob("*/events.json")) if d.is_dir() else []
+    found = sorted(d.glob("*/events.json")) if d.is_dir() else []
+    return [p for p in found if only is None or p.parent.name in only]
 
 
 def events_sha(files: list[Path]) -> list[dict]:
@@ -271,7 +276,8 @@ def hit_key(h: dict) -> str:
     return f"{h['t']:.4f}:{h['kind']}"
 
 
-def build(job: Path, say=print, fit: dict[str, float] | None = None) -> dict:
+def build(job: Path, say=print, fit: dict[str, float] | None = None,
+          only: set[str] | None = None) -> dict:  # fmt: skip
     """work/sfx.wav + work/sfx.json from the spans' events (module docstring). `fit`
     {hit_key: dB}: extra gain per hit (render lowers hits that would cover speech); kept in
     sfx.json "fit" and in each hit's "fit_db"."""
@@ -283,7 +289,7 @@ def build(job: Path, say=print, fit: dict[str, float] | None = None) -> dict:
     except (EdlError, OSError, ValueError) as e:
         raise ToolError(f"work/edl.json cannot be read: {e}") from None
     duration = edl.output_duration()
-    files = event_files(job)
+    files = event_files(job, only)
     events, warnings = read_events(files, duration)
     words = _words(job, edl)
     seed = _seed("sfx", job.name)
@@ -333,7 +339,7 @@ def build(job: Path, say=print, fit: dict[str, float] | None = None) -> dict:
     return doc
 
 
-def is_current(job: Path) -> bool:
+def is_current(job: Path, only: set[str] | None = None) -> bool:
     """work/sfx.wav + sfx.json match today's events (same files, same hashes)."""
     work = job / "work"
     try:
@@ -344,7 +350,7 @@ def is_current(job: Path) -> bool:
     if not isinstance(doc, dict) or doc.get("version") != VERSION or not wav.is_file():
         return False
     try:
-        return doc.get("events") == events_sha(event_files(job)) and doc.get(
+        return doc.get("events") == events_sha(event_files(job, only)) and doc.get(
             "wav_sha256"
         ) == lib.sha256_file(wav)
     except ToolError:

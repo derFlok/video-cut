@@ -58,6 +58,8 @@ hostile("imports a module over http", `import("http://example.com/m.js").catch((
 hostile("loads an image over https", `const i = document.createElement("img"); i.src = "https://example.com/p.png"; document.body.appendChild(i);`);
 hostile("loads a stylesheet background over https", `const d = document.createElement("div"); d.style.backgroundImage = "url(https://example.com/p.png)"; d.style.width = "10px"; d.style.height = "10px"; document.body.appendChild(d);`);
 hostile("reads a file outside the job folder", `const i = document.createElement("img"); i.src = "/job/../../etc/hosts"; document.body.appendChild(i);`);
+hostile("opens a WebRTC connection by its legacy name", `new window.webkitRTCPeerConnection({ iceServers: [{ urls: "turn:192.0.2.1", username: "x", credential: "y" }] });`);
+hostile("hides what it tried by emptying the blocked list", `try { fetch("https://example.com"); } catch (e) {} window.__vcBlocked.length = 0; window.__vcBlocked = [];`);
 hostile("never returns from a frame", `vc.onSeek((t) => { if (t > 0.05) for (;;) {} });`);
 
 test("sandbox: a scene module outside the job folder is refused", { skip: !haveBrowser && "no browser" }, () => {

@@ -29,7 +29,13 @@
   not in the transcript ±3 s, the approved `shows`/`labels` or the wish). plan.json
   moments may name neutral `labels` (≤ 8) for the human to approve. The renderer's stage
   ends one capture margin (6 % of the unit) above the band edge: a card's glow and pulse
-  had reached 65 px below the band (9 % of the face box, e2e). The Result screen
+  had reached 65 px below the band (9 % of the face box, e2e).
+- Review fixes: the scene sandbox also denies `webkitRTCPeerConnection` and other WebRTC
+  names and turns off non-proxied WebRTC UDP; the blocked list is read-only for the scene.
+  Sounds play only for clips that are composited (no sound for a failed, missing or
+  switched-off scene). Moments on any layout without the face (screen, pip, split,
+  b-roll, slides) are dropped. Sound uploads run off the server's event loop. The motion
+  renderer has a timeout; the pinned renderer packages are part of the clip hash. The Result screen
   lists motion flags; the brand editor edits the motion style (theme, depth, energy,
   corner radius, type size).
 - Render composites every span's clip at its offset and place (render.json `motion`).

@@ -21,8 +21,9 @@ inside the side safe zone, from the top safe zone down to the highest face top o
 span plus BAND_FACE_SHARE of the face height: the eye line (EYE_LINE_SHARE of the landmark
 box, measured) minus EYE_CLEAR of the face height stays free, so hair and the upper forehead
 may be covered, brows-to-eyes not. Components fit the band (`c.slot`), they shrink instead.
-A moment whose words were cut, that falls on a slide layout, or that has no room above the
-face is dropped and listed (verify `motion_dropped`).
+A moment whose words were cut, that falls on a layout without the speaker's face (slide,
+screen, picture-in-picture, split, b-roll: the band needs the face below it), or that has
+no room above the face is dropped and listed (verify `motion_dropped`).
 
 The design is always the job's brand profile (job.json "brand", resolved tokens); there is
 no other source. `motion render` renders every span whose scene exists with
@@ -40,7 +41,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from ..edl import EdlError, is_slide, load, read_sync
+from ..edl import EdlError, load, read_sync
 from ..paths import RENDERER, state_dir, tool_env
 from . import _job_motion
 from . import _render_plan as plan_mod
@@ -66,6 +67,7 @@ EYE_LINE_SHARE = 0.26
 EYE_CLEAR = 0.08
 BAND_FACE_SHARE = EYE_LINE_SHARE - EYE_CLEAR  # the band may reach this far into the face box
 CAPTION_FACE_SHARE = 0.72  # during a span, captions may cover the face below this share
+RENDER_TIMEOUT_S = 900  # one span (≤ 60 s) takes ~2 s per second on SwiftShader, 3D ~4 s
 CAPTURE_MARGIN = 0.06  # renderer/motion.js --region-only margin (share of the unit)
 MIN_BAND_SHARE = 0.12  # a band lower than this share of the frame height is no band
 MIN_SPAN_S, MAX_SPAN_S = 1.5, 60.0
@@ -298,13 +300,16 @@ def _edl_ctx(job: Path):
     return edl, plan, size, face
 
 
-def slide_spans(edl, fps) -> list[tuple[float, float]]:
+def off_face_spans(edl) -> list[tuple[float, float, str]]:
+    """(t0, t1, layout) in output time of every segment that does not show the speaker
+    full frame (layout other than face)."""
     out, t = [], 0.0
     for s in edl.segments:
-        if is_slide(s.layout):
-            out.append((t, t + s.duration))
+        if (s.layout or "face") != "face":
+            out.append((t, t + s.duration, s.layout))
         t += s.duration
     return out
+
 
 
 def band_region(track: list[dict], t0: float, t1: float, size: tuple[int, int]) -> list[int]:
@@ -329,7 +334,7 @@ def build_spans(job: Path, ctx=None) -> tuple[list[dict], list[dict], dict]:
     words = map_words(_job_words(job), edl.segments, edl.fps)
     track = face_track(plan, face, src_size)
     duration = float(plan.duration)
-    slides = slide_spans(edl, edl.fps)
+    off_face = off_face_spans(edl)
     size = tuple(edl.size)
     spans, dropped = [], []
     # the kept words of each moment, in output order (the cut may reorder source ranges)
@@ -353,8 +358,9 @@ def build_spans(job: Path, ctx=None) -> tuple[list[dict], list[dict], dict]:
         if t1 - t0 > MAX_SPAN_S:
             dropped.append({"id": m["id"], "why": f"longer than {MAX_SPAN_S} s"})
             continue
-        if any(a < t1 and t0 < b for a, b in slides):
-            dropped.append({"id": m["id"], "why": "it falls on a slide"})
+        hit = next((lay for a, b, lay in off_face if a < t1 and t0 < b), None)
+        if hit:
+            dropped.append({"id": m["id"], "why": f"it falls on a {hit} layout (no face below)"})
             continue
         region = band_region(track, t0, t1, size)
         if region[3] - region[1] < MIN_BAND_SHARE * size[1]:
@@ -462,6 +468,7 @@ def _sha(path: Path) -> str | None:
 def code_sha() -> str:
     h = hashlib.sha256()
     files = [RENDERER / c for c in CODE] + sorted((RENDERER / "motion").glob("*.js"))
+    files.append(RENDERER / "package-lock.json")  # pinned anime.js / three: a bump re-renders
     for f in files:
         h.update(f.name.encode() + b"\0" + (_sha(f) or "-").encode())
     return h.hexdigest()
@@ -534,7 +541,11 @@ def renderer_cmd() -> list[str]:
 
 def _run_renderer(argv: list[str], job: Path) -> dict:
     env = {**tool_env(), "VIDEOCUT_JOB_DIR": str(job)}
-    r = subprocess.run(renderer_cmd() + argv, capture_output=True, text=True, env=env, cwd=job)
+    try:
+        r = subprocess.run(renderer_cmd() + argv, capture_output=True, text=True, env=env,
+                           cwd=job, timeout=RENDER_TIMEOUT_S)  # fmt: skip
+    except subprocess.TimeoutExpired:
+        raise ToolError(f"motion renderer did not finish in {RENDER_TIMEOUT_S} s") from None
     lines = r.stdout.strip().splitlines()
     try:
         res = json.loads(lines[-1]) if lines else {}

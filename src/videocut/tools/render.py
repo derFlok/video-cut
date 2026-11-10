@@ -442,7 +442,7 @@ def render(args) -> dict:
         if mres:
             warnings += [f"motion {d['id']} dropped: {d['why']}" for d in mres["dropped"]]
             warnings += [f"motion {i}: no scene yet" for i in mres["no_scene"]]
-    sfx_use = _sfx_prepare(job, plan.duration, warnings)
+    sfx_use = _sfx_prepare(job, plan.duration, warnings, _sounding(mres))
     mixed = bool(sfx_use and sfx_use["mixed"])
     graph = plan_mod.graph(plan, measured, video_in, audio_in, to_sdr(info), video, a_off,
                            "vo_voice" if mixed else "a")  # fmt: skip
@@ -641,27 +641,35 @@ def render(args) -> dict:
 # ------------------------------------------------------------------ sound effects
 
 
-def _sfx_prepare(job: Path, duration: float, warnings: list[str]) -> dict | None:
+def _sounding(mres: dict | None) -> set[str]:
+    """Span ids whose sounds may play: only the clips ensure_clips composites (record-
+    checked); a failed render, a span without scene or motion switched off plays nothing."""
+    return {c["id"] for c in mres["clips"]} if mres else set()
+
+
+def _sfx_prepare(job: Path, duration: float, warnings: list[str],
+                 shown: set[str]) -> dict | None:  # fmt: skip
     """What render does with sound effects: None when the job has no motion events,
     {"level": "off", "mixed": False} when they are switched off, else the level, its gain
     and work/sfx.json (built again by `sfx build` when the events changed). An invalid
     job.json "sfx" refuses the render (ToolError, fail closed)."""
     lvl = sfx_mod.level(read_job(job))
-    if not sfx_mod.event_files(job):
+    if not shown or not sfx_mod.event_files(job, shown):
         return None
     if lvl == "off":
         return {"level": "off", "mixed": False}
     doc = sfx_mod.read(job)
     if (
-        not sfx_mod.is_current(job)
+        not sfx_mod.is_current(job, shown)
         or doc is None
         or abs(float(doc.get("duration_s") or 0) - duration) > 0.5
     ):
-        doc = sfx_mod.build(job)
+        doc = sfx_mod.build(job, only=shown)
     if not doc["hits"]:
         return {"level": lvl, "mixed": False, "hits": 0}
     warnings += [f"sfx: {w}" for w in doc.get("warnings", [])]
-    return {"level": lvl, "mixed": True, "gain_db": _sfx_mix.LEVEL_DB[lvl], "doc": doc}
+    return {"level": lvl, "mixed": True, "gain_db": _sfx_mix.LEVEL_DB[lvl], "doc": doc,
+            "only": shown}
 
 
 def _sfx_report(job: Path, use: dict, plan, measured, audio_in: str, a_off: float,
@@ -712,7 +720,7 @@ def _sfx_fit(job: Path, use: dict, plan, measured, audio_in: str, a_off: float,
         for m in masked:
             key = sfx_mod.hit_key(m)
             fit[key] = fit.get(key, 0.0) - (_sfx_mix.FIT_TO_DB - m["margin_db"])
-        use["doc"] = sfx_mod.build(job, fit=fit)
+        use["doc"] = sfx_mod.build(job, fit=fit, only=use.get("only"))
         report = _sfx_report(job, use, plan, measured, audio_in, a_off, inputs)
     report["fitted"] = len(use["doc"].get("fit") or {})
     return report

@@ -220,7 +220,9 @@ async function main() {
   const served = { runtime: 0, job: 0 };
   const summary = { tool: TOOL, ok: true, size: spec.size, fps: spec.fps, duration: spec.duration, beats };
   const tStart = process.hrtime.bigint();
-  const browser = await chromium.launch({ args: ["--host-resolver-rules=MAP * ~NOTFOUND", "--disable-background-networking", ...GPU_ARGS[args.gpu]] });
+  const browser = await chromium.launch({ args: ["--host-resolver-rules=MAP * ~NOTFOUND", "--disable-background-networking",
+    // WebRTC UDP bypasses the request filter and CSP: no non-proxied UDP at all
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--webrtc-ip-handling-policy=disable_non_proxied_udp", ...GPU_ARGS[args.gpu]] });
   summary.gpu = args.gpu;
   let ff = null;
   try {

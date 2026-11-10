@@ -927,7 +927,7 @@ through the EDL like the captions, and per moment (in output order) keeps its ow
 0.45 s (never after the next moment's start − 0.15 s, nor the reel's end). The region is
 `[side, top safe zone, w − side, min over the span of (face top + 18 % of the face height)]` (the eye line, 26 % of the landmark box, measured, and 8 % of the face
 height above it stay free), from the same face track overlays use (a third of the height without a face). Dropped,
-with the reason: words cut, shorter than 1.5 s, longer than 60 s, on a slide layout, band
+with the reason: words cut, shorter than 1.5 s, longer than 60 s, on a layout without the face (slide, screen, pip, split, b-roll), band
 lower than 12 % of the frame, a beat not spoken. `work/motion/spans.json` = `[{id, t0, t1,
 region, scene, beats}]`; per span `motion.json` = the renderer spec with `offset` = t0, the
 stage = the band minus the renderer's capture margin (6 % of the unit) at the bottom, so

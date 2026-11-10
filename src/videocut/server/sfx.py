@@ -24,6 +24,7 @@ import shutil
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from .. import settings
 from ..tools import _sfx_library as lib
@@ -80,7 +81,8 @@ async def upload(kind: str, request: Request) -> dict:
         if src is None or len(form.files.get("sound") or []) != 1:
             raise HTTPException(400, "send exactly one file (field sound)")
         try:
-            added = lib.add_upload(kind, src, form.fields.get("title"))
+            # ffmpeg decode + trim: off the event loop, the API keeps answering meanwhile
+            added = await run_in_threadpool(lib.add_upload, kind, src, form.fields.get("title"))
         except ToolError as e:
             raise HTTPException(415, str(e)) from None
     finally:

@@ -39,6 +39,22 @@ def _job(capsys, clip, job_id) -> Path:
     return job
 
 
+@pytest.fixture(autouse=True)
+def composited(request, monkeypatch):
+    """These tests are about the mix: span m1 counts as composited (its clip is not)."""
+    from videocut.tools import render
+
+    if "orphan" not in request.node.name:
+        monkeypatch.setattr(render, "_sounding", lambda mres: {"m1"})
+
+
+def test_orphan_events_without_a_composited_clip_play_nothing(capsys, portrait_clip):
+    job = _job(capsys, portrait_clip, "sfx-orphan")
+    code, s, _ = run_tool(capsys, "render", "--job", str(job), "--preview")
+    assert code == 0, s
+    assert s["sfx"] is None and not (job / "work" / "sfx.wav").exists()
+
+
 def test_render_mixes_sound_effects_and_verify_checks_them(capsys, portrait_clip):
     job = _job(capsys, portrait_clip, "sfx-render")
     code, s, _ = run_tool(capsys, "render", "--job", str(job))
