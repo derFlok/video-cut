@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { MaterialSettingsPanel } from "../components/Material";
+import { SfxSettingsPanel } from "../components/Sfx";
 import { ApiError, api } from "../api/client";
 import type { AuthMode, BrandSummary, SetupStatus, SetupTest } from "../api/types";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -311,6 +312,7 @@ export function Settings({ onSaved }: { onSaved?: () => void }) {
       )}
       <BrandLook />
       <MaterialSettingsPanel />
+      <SfxSettingsPanel />
       <AiLabels />
       {version && <p className="muted">{t("settings.version", { v: version })}</p>}
     </div>

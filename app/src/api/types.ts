@@ -605,11 +605,25 @@ export type DisclosureStock = {
   source_url: string | null;
 };
 export type DisclosurePlatform = { id: string; label: string; status: "required" | "not needed"; why: string };
+export type DisclosureSound = {
+  kind: SfxKind;
+  id: string;
+  origin: SfxOrigin;
+  title?: string | null;
+  author?: string | null;
+  licence?: string | null;
+  licence_url?: string | null;
+  source_url?: string | null;
+  attribution?: string | null;
+};
+
 export type Disclosure = {
   ready: boolean;
   lang?: string;
   ai?: DisclosureAi[];
   stock?: DisclosureStock[];
+  /** The sound effects mixed in (tools/_disclosure.py "sounds"). */
+  sounds?: DisclosureSound[];
   platforms?: DisclosurePlatform[];
   snippet?: string;
   comment?: string | null;
