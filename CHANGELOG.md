@@ -46,6 +46,9 @@
 - Job level `sfx: off|subtle|normal` (`job sfx`, `PUT /api/jobs/{id}/sfx`, default from
   settings `sfx_default`, subtle); a changed level makes the reel stale. Settings API for
   the library (list, upload, remove, fetch, preview audio); i18n keys `sfx.*`, `flag.sfx_*`.
+- App: sound-effect level on the job page (shown for jobs with motion; "cut again" when
+  the reel was mixed at another level), Settings → Sound effects (default level, per kind
+  which sound is used, play / upload / remove, Openverse fetch), Publish lists the sources.
 
 ### Added — Spike: Claude-authored motion scenes (branch only, see docs/spikes/motion.md)
 - `renderer/motion.js`: renders a scene module written per span (HTML/SVG/CSS on an
