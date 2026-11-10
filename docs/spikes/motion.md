@@ -246,3 +246,72 @@ tested for determinism separately before it is used.
 - **Fonts:** a brand without font files falls back to the system UI font in the page.
 - **Reference content:** the techniques came from third-party reels. Nothing from them
   (design, text, assets) is in the code or the demo.
+
+## Motion design (branch `derFlok/motion-design`)
+
+The spike's verdict was "too plain, too little motion". This step builds the look from
+the brand profile and a component set at the reference level (techniques only).
+
+**Brand → motion style.** The profile's `motion` section gains `theme`, `depth`, `radius`,
+`energy` and `type_scale` (`brand.py` validates them and derives missing ones:
+`motion_style()`). The page runtime resolves them into `vc.style` and `--vc-*` properties.
+A dark theme on a light brand uses `colors.dark`/`dark_text`, or text and surface swapped;
+glow is the accent in layered shadows; a contrast guard moves any colour that misses its
+minimum (ink 7:1, accent text and text on the accent 4.5:1, muted 3:1) toward black or white.
+Energy scales durations (calm 1.2x, punchy 0.8x), spring overshoot and the micro-event beat
+(0.5 / 0.4 / 0.3 s). `brand sheet` appends a motion row so the person sees their style.
+
+**Components.** 23 in `renderer/motion/CATALOGUE.md`. Shared vocabulary: entrance with blur +
+scale + spring, hand-over morph (`after`: the old element flies into the new one's box and
+dissolves), micro-events in every gap longer than one beat (bump on an item already on screen,
+sheen over the card), fit-to-band slots (components have base sizes; the slot scales them to
+the band), heavy brand weights and big numbers. 3D: Three.js 0.186.1 (MIT) point field and
+extruded number (the brand font drawn into a mask, stacked into a solid), rendered in `onSeek`.
+The tilted UI plane uses CSS 3D instead of a WebGL texture: the text stays sharp, and DOM
+content cannot be a WebGL texture without rasterising it first.
+
+**Cues.** `vc.cue(kind, t, {component, strength})`; `motion.js --events <file>` writes them
+sorted, in output seconds (`offset` in motion.json). The demo span gives 34 cues.
+
+**Demo.** One scene, three looks (`_example`, a synthetic dark brand, a local copy of a real
+brand), on a copy of the spike job: place card with a 3D point field behind it, chips with
+icons per spoken item, a count to the spoken number, a comparison that is decided on a word,
+two steps, the place card returning. Nothing repeats the caption words. Three render-inspect
+rounds: (1) everything too small for the band, a beat on the wrong word occurrence; (2) a
+button over the title at a fixed card width, steps showing only lit nodes; (3) clean.
+Freezedetect on the motion clip: no still stretch ≥ 0.4 s at −60 dB (spike: 1.07 s), longest
+0.6 s at −50 dB (spike: 1.63 s).
+
+**Numbers** (Apple M3 Pro, 1080×1920, 30 fps, 20.7 s = 621 frames, `--region-only`
+1080×536, two runs each, peak memory = RSS of the whole process tree sampled every 0.1 s):
+
+| Scene | WebGL | Render | ms / frame | Peak memory |
+|---|---|---|---|---|
+| 2D (demo without the field) | SwiftShader | 44.6–45.6 s | 70–72 | 0.75–0.84 GB |
+| 2D | Metal | 52.7–54.8 s | 84–85 | 0.67–0.71 GB |
+| 3D (point field over the whole span) | SwiftShader | 63.1–79.1 s | 100–125 | 0.86–0.96 GB |
+| 3D | Metal | 50.7–53.9 s | 80–84 | 0.66–0.81 GB |
+
+2D costs twice the spike's frame (35 ms): the glow and soft shadows are large blurred layers
+that are rastered again every frame while the drift scales them. Trying to hide transparent
+elements and drop settled `blur(0px)` filters gave no gain.
+
+**Determinism.** The DOM state is a pure function of t (hash of the stage per frame:
+identical in two runs). The pixels are no longer bit-identical in long glow-heavy spans:
+
+| Path | Frames that differ between two runs | Lowest PSNR |
+|---|---|---|
+| 2D SwiftShader | 50 / 621 | 46.7 dB |
+| 3D SwiftShader | 103 / 621 | 57.5 dB |
+| 2D Metal | 96 / 621 | 26.8 dB |
+| 3D Metal | 112 / 621 | 30.3 dB |
+
+The differences sit in entrance frames of glowing cards (big blurred shadows mid-blur). They
+stay with `--run-all-compositor-stages-before-draw`, one raster thread, partial raster off and
+with software compositing (`--disable-gpu`), so they come from Chromium's raster of large blur
+layers, not from scene state. The short gallery and 3D tests are still bit-identical.
+**Default: SwiftShader** — the same path on every machine and in CI, differences far below
+visibility (≥ 46 dB), and faster for 2D; Metal is faster only while 3D runs, and its
+differences can reach visible levels (27 dB). Verify should compare motion clips as "visually
+identical" (PSNR ≥ 40 dB), not by hash; frame-exact output would need
+`HeadlessExperimental.beginFrame` (deterministic begin-frame control), which is not built.

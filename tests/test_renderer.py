@@ -292,7 +292,9 @@ def test_brand_sheet_shows_every_scene(tmp_path, capsys):
     assert s["skipped_scenes"] == [] and s["no_sample"] == []
     st = probe_image(out)
     rows = -(-len(scenes) // 3)
-    assert (st["width"], st["height"]) == (1080, rows * 640)
+    # the scene grid, then the motion row (motion-scene stills in the brand's motion style)
+    assert st["width"] == 1080 and rows * 640 + 100 < st["height"] < rows * 640 + 400
+    assert s["motion"]["theme"] == "auto" and s["motion"]["depth"] == "soft"
 
 
 def probe_image(path: Path) -> dict:
